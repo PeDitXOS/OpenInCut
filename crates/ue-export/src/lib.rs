@@ -46,6 +46,8 @@ pub struct ExportSettings {
     pub audio_bitrate_k: u32,
     /// Normalización de sonoridad R128 (loudnorm -14 LUFS) al final del máster.
     pub loudnorm: bool,
+    /// Exportar solo [in, out) del timeline (µs). None = todo.
+    pub range: Option<(ue_core::TimeUs, ue_core::TimeUs)>,
     /// Packs de efectos de usuario (se fusionan sobre los core).
     pub extra_packs: Vec<ue_render::EffectDef>,
 }
@@ -58,6 +60,7 @@ impl Default for ExportSettings {
             preset: "veryfast".into(),
             audio_bitrate_k: 256,
             loudnorm: false,
+            range: None,
             extra_packs: vec![],
         }
     }

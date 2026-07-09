@@ -72,6 +72,7 @@ function drawRuler(
   w: number,
   view: View,
   project: Project,
+  range: [number | null, number | null],
 ) {
   ctx.fillStyle = "#161412";
   ctx.fillRect(0, 0, w, RULER_H);
@@ -101,6 +102,18 @@ function drawRuler(
       ctx.textAlign = "left";
       ctx.fillText(usToDuration(s * 1e6), x + 4, 9);
     }
+  }
+
+  // banda del rango de trabajo I-O
+  const [rin, rout] = range;
+  if (rin != null || rout != null) {
+    const a = usToX(rin ?? view.viewStartUs);
+    const b = usToX(rout ?? view.viewStartUs + (w / view.pxPerSec) * 1e6);
+    ctx.fillStyle = "rgba(255, 178, 36, 0.16)";
+    ctx.fillRect(a, 0, Math.max(2, b - a), RULER_H - 1);
+    ctx.fillStyle = COLORS.accent;
+    if (rin != null) ctx.fillRect(a, 0, 2, RULER_H - 1);
+    if (rout != null) ctx.fillRect(b - 2, 0, 2, RULER_H - 1);
   }
 
   // marcadores de secuencia
@@ -275,6 +288,7 @@ function drawTimeline(
   selection: string[],
   playheadUs: number,
   ghost: DragGhost | null,
+  range: [number | null, number | null],
 ) {
   ctx.clearRect(0, 0, w, h);
   ctx.fillStyle = COLORS.bg;
@@ -295,7 +309,7 @@ function drawTimeline(
     }
   });
 
-  drawRuler(ctx, w, view, project);
+  drawRuler(ctx, w, view, project, range);
 
   // clips
   tracks.forEach((t, i) => {
@@ -462,6 +476,8 @@ export function Timeline() {
   const addTextClip = useStore((s) => s.addTextClip);
   const generateVertical = useStore((s) => s.generateVertical);
   const setActiveSequence = useStore((s) => s.setActiveSequence);
+  const rangeInUs = useStore((s) => s.rangeInUs);
+  const rangeOutUs = useStore((s) => s.rangeOutUs);
 
   // seguir el playhead durante la reproducción
   useEffect(() => {
@@ -503,8 +519,9 @@ export function Timeline() {
       selection,
       playheadUs,
       ghost,
+      [rangeInUs, rangeOutUs],
     );
-  }, [project, version, selection, playheadUs, viewStartUs, pxPerSec, size, ghost]);
+  }, [project, version, selection, playheadUs, viewStartUs, pxPerSec, size, ghost, rangeInUs, rangeOutUs]);
 
   const xToUs = useCallback(
     (x: number) => viewStartUs + (x / pxPerSec) * 1e6,

@@ -134,5 +134,23 @@ const vertRes = await page.getByText("1080×1920").count();
 if (vertRes === 0) throw new Error("la secuencia vertical no está activa (no se ve 1080×1920)");
 await shot("09-modo-vertical");
 
+// 10. Rango I-O + diálogo de export: marcar rango con I/O y abrir el diálogo
+await page.getByTitle(/secuencia activa/i).selectOption({ index: 0 }).catch(() => {});
+await page.locator("header").click();
+await page.keyboard.press("Home");
+await page.keyboard.press("i");
+for (let k = 0; k < 5; k++) await page.keyboard.press("Shift+ArrowRight");
+await page.keyboard.press("o");
+await page.getByRole("button", { name: /Exportar/ }).click();
+await page.waitForTimeout(200);
+if ((await page.getByText("YouTube 1080p").count()) === 0)
+  throw new Error("el diálogo de export no muestra los presets");
+const rangeRadio = page.locator("label", { hasText: "Rango I–O" }).locator('input[type="radio"]');
+if (await rangeRadio.isDisabled())
+  throw new Error("el rango I–O marcado con teclas no llegó al diálogo (radio deshabilitado)");
+await rangeRadio.check();
+await shot("10-dialogo-export");
+await page.getByRole("button", { name: "Cancelar" }).click();
+
 await browser.close();
 console.log(`\nScreenshots en ${outDir}`);

@@ -7,7 +7,7 @@ export function Header() {
   const canRedo = useStore((s) => s.canRedo);
   const undo = useStore((s) => s.undo);
   const redo = useStore((s) => s.redo);
-  const exportVideo = useStore((s) => s.exportVideo);
+  const setShowExportDialog = useStore((s) => s.setShowExportDialog);
   const exporting = useStore((s) => s.exporting);
   const saveProject = useStore((s) => s.saveProject);
   const openProject = useStore((s) => s.openProject);
@@ -107,7 +107,7 @@ export function Header() {
       )}
       <button
         className="focus-ring relative overflow-hidden rounded-md bg-accent px-3.5 py-1.5 text-[12px] font-semibold text-bg0 enabled:hover:bg-accent-deep disabled:opacity-80"
-        onClick={() => void exportVideo()}
+        onClick={() => setShowExportDialog(true)}
         disabled={exporting}
         title="Exportar la secuencia a MP4"
       >

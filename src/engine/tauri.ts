@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
-import type { EngineClient } from "./client";
+import type { EngineClient, ExportUiSettings } from "./client";
 import type {
   AudioProps,
   EffectDef,
@@ -95,8 +95,17 @@ export class TauriEngine implements EngineClient {
     });
   }
 
-  exportVideo(path: string): Promise<string> {
-    return invoke("export_video", { path, maxHeight: null });
+  exportVideo(path: string, settings?: ExportUiSettings): Promise<string> {
+    return invoke("export_video", {
+      path,
+      maxHeight: settings?.maxHeight ?? null,
+      crf: settings?.crf ?? null,
+      preset: settings?.preset ?? null,
+      audioBitrateK: settings?.audioBitrateK ?? null,
+      loudnorm: settings?.loudnorm ?? null,
+      rangeInUs: settings?.rangeInUs ?? null,
+      rangeOutUs: settings?.rangeOutUs ?? null,
+    });
   }
 
   playbackPlay(fromUs: TimeUs): Promise<void> {

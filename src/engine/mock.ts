@@ -264,7 +264,7 @@ export class MockEngine implements EngineClient {
     return null; // solo escritorio
   }
 
-  async exportVideo(): Promise<string> {
+  async exportVideo(_path?: string, _settings?: unknown): Promise<string> {
     throw new Error("Exportar requiere la app de escritorio (npx tauri dev)");
   }
 

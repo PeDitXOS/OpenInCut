@@ -331,6 +331,20 @@ fn audio_pan_and_gain_curve_apply_in_export() {
     );
 }
 
+/// range=[1s,3s) recorta el máster ya compuesto: dura ≈2 s.
+#[test]
+fn range_export_trims_master() {
+    let Some(dir) = media_dir() else { return };
+    let (store, seq_id) = simple_store(dir); // clip de 4 s
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-range.mp4");
+    let settings = ExportSettings { range: Some((1 * SEC, 3 * SEC)), ..Default::default() };
+    export_sequence(&store.project, seq_id, dir, &out, &settings).unwrap();
+    let meta = ffprobe_json(&out);
+    let dur: f64 = meta["format"]["duration"].as_str().unwrap().parse().unwrap();
+    assert!((1.9..=2.2).contains(&dur), "rango de 2 s, fue {dur}");
+    assert!(meta["streams"].as_array().unwrap().iter().any(|s| s["codec_type"] == "audio"));
+}
+
 #[test]
 fn loudnorm_flag_appends_master_filter() {
     let Some(dir) = media_dir() else { return };

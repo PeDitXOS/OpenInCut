@@ -15,6 +15,18 @@ import type {
  * - TauriEngine: la app de escritorio real (ue-core vía IPC).
  * - MockEngine: navegador, para desarrollo de UI y pruebas visuales.
  */
+/** Opciones de export elegidas en el diálogo (subset de ExportSettings). */
+export interface ExportUiSettings {
+  maxHeight: number | null;
+  crf: number;
+  preset: string;
+  audioBitrateK: number;
+  loudnorm: boolean;
+  /** Rango I-O en µs, o null para exportar todo. */
+  rangeInUs: number | null;
+  rangeOutUs: number | null;
+}
+
 export interface EngineClient {
   readonly kind: "tauri" | "mock";
 
@@ -45,7 +57,7 @@ export interface EngineClient {
   /** Diálogo nativo "guardar como" (null si el usuario cancela o no hay soporte). */
   pickSavePath(defaultName: string): Promise<string | null>;
   /** Exporta la secuencia activa a MP4. Devuelve la ruta escrita. */
-  exportVideo(path: string): Promise<string>;
+  exportVideo(path: string, settings?: ExportUiSettings): Promise<string>;
 
   // -- transporte con el audio como reloj maestro (solo escritorio) --
   /** Arranca la reproducción de audio desde `fromUs`. Rechaza si no hay dispositivo. */

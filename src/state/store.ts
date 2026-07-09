@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import type { EngineClient } from "../engine/client";
+import type { EngineClient, ExportUiSettings } from "../engine/client";
 import { MockEngine, demoProject } from "../engine/mock";
 import { TauriEngine, isTauri } from "../engine/tauri";
 import type {
@@ -50,8 +50,15 @@ export interface UiState {
   importMedia: () => Promise<void>;
   addClipFromAsset: (assetId: Id) => Promise<void>;
   exporting: boolean;
+  /** Rango de trabajo I-O en µs (para export por rango). */
+  rangeInUs: number | null;
+  rangeOutUs: number | null;
+  setRangeIn: (us: number | null) => void;
+  setRangeOut: (us: number | null) => void;
+  showExportDialog: boolean;
+  setShowExportDialog: (v: boolean) => void;
   exportProgress: number | null;
-  exportVideo: () => Promise<void>;
+  exportVideo: (settings?: ExportUiSettings) => Promise<void>;
   cancelExport: () => Promise<void>;
   saveProject: () => Promise<void>;
   openProject: () => Promise<void>;
@@ -282,8 +289,14 @@ export const useStore = create<UiState>((set, get) => {
       run("Añadir clip", () => engine.addClip(assetId, get().playheadUs)),
 
     exporting: false,
+    rangeInUs: null,
+    rangeOutUs: null,
+    setRangeIn: (us) => set({ rangeInUs: us }),
+    setRangeOut: (us) => set({ rangeOutUs: us }),
+    showExportDialog: false,
+    setShowExportDialog: (v) => set({ showExportDialog: v }),
     exportProgress: null,
-    exportVideo: async () => {
+    exportVideo: async (settings) => {
       try {
         const name = `${get().project.name.replace(/[^\p{L}\p{N} _-]/gu, "").trim() || "export"}.mp4`;
         const path = await engine.pickSavePath(name);
@@ -292,12 +305,23 @@ export const useStore = create<UiState>((set, get) => {
             set({ lastActionLabel: "⚠ Exportar requiere la app de escritorio (npx tauri dev)" });
           return;
         }
-        set({ exporting: true, exportProgress: 0, lastActionLabel: "Exportando…" });
-        const written = await engine.exportVideo(path);
+        set({
+          exporting: true,
+          exportProgress: 0,
+          showExportDialog: false,
+          lastActionLabel: "Exportando…",
+        });
+        const written = await engine.exportVideo(path, settings);
         set({ exporting: false, exportProgress: null, lastActionLabel: `Exportado a ${written}` });
       } catch (e) {
         set({
           exporting: false,
+    rangeInUs: null,
+    rangeOutUs: null,
+    setRangeIn: (us) => set({ rangeInUs: us }),
+    setRangeOut: (us) => set({ rangeOutUs: us }),
+    showExportDialog: false,
+    setShowExportDialog: (v) => set({ showExportDialog: v }),
           exportProgress: null,
           lastActionLabel: `⚠ ${e instanceof Error ? e.message : String(e)}`,
         });

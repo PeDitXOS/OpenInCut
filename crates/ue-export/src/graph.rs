@@ -628,6 +628,32 @@ pub fn build_ffmpeg_args(
         ));
     }
 
+    // ---- rango I-O: recortar el máster ya compuesto ----
+    let mut vlabel = "[vout]".to_string();
+    let mut alabel = "[aout]".to_string();
+    let mut duration_us = total_us;
+    if let Some((r_in, r_out)) = settings.range {
+        let a = r_in.clamp(0, total_us);
+        let b = r_out.clamp(a, total_us);
+        if b > a {
+            fc.push(format!(
+                "[vout]trim=start={}:end={},setpts=PTS-STARTPTS[voutr]",
+                secs(a),
+                secs(b)
+            ));
+            vlabel = "[voutr]".into();
+            if has_audio {
+                fc.push(format!(
+                    "[aout]atrim=start={}:end={},asetpts=PTS-STARTPTS[aoutr]",
+                    secs(a),
+                    secs(b)
+                ));
+                alabel = "[aoutr]".into();
+            }
+            duration_us = b - a;
+        }
+    }
+
     // ---- línea de comandos ----
     let mut args: Vec<String> = vec!["-y".into(), "-v".into(), "error".into()];
     for input in &inputs {
@@ -636,9 +662,9 @@ pub fn build_ffmpeg_args(
     }
     args.push("-filter_complex".into());
     args.push(fc.join(";"));
-    args.extend(["-map".into(), "[vout]".into()]);
+    args.extend(["-map".into(), vlabel]);
     if has_audio {
-        args.extend(["-map".into(), "[aout]".into()]);
+        args.extend(["-map".into(), alabel]);
         args.extend([
             "-c:a".into(),
             "aac".into(),
@@ -660,5 +686,5 @@ pub fn build_ffmpeg_args(
     ]);
     args.push(output.to_string_lossy().into_owned());
 
-    Ok(FfmpegPlan { args, duration_us: total_us })
+    Ok(FfmpegPlan { args, duration_us })
 }

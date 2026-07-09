@@ -1203,11 +1203,18 @@ fn cancel_export(state: State<AppState>) -> Res<()> {
 /// Exporta la secuencia activa a MP4 (bloqueante en un hilo aparte).
 /// Emite eventos `export-progress` (0..1); `cancel_export` la aborta.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn export_video(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     path: String,
     max_height: Option<u32>,
+    crf: Option<u8>,
+    preset: Option<String>,
+    audio_bitrate_k: Option<u32>,
+    loudnorm: Option<bool>,
+    range_in_us: Option<i64>,
+    range_out_us: Option<i64>,
 ) -> Res<String> {
     let (project, seq_id, base_dir) = {
         let store = state.store.lock().unwrap();
@@ -1224,7 +1231,20 @@ async fn export_video(
     cancel.store(false, Ordering::SeqCst);
     let out = PathBuf::from(&path);
     let extra_packs = state.user_packs.lock().unwrap().clone();
-    let settings = ue_export::ExportSettings { max_height, extra_packs, ..Default::default() };
+    let defaults = ue_export::ExportSettings::default();
+    let range = match (range_in_us, range_out_us) {
+        (Some(a), Some(b)) if b > a => Some((a.max(0), b)),
+        _ => None,
+    };
+    let settings = ue_export::ExportSettings {
+        max_height,
+        crf: crf.map(|c| c.clamp(10, 40)).unwrap_or(defaults.crf),
+        preset: preset.unwrap_or(defaults.preset),
+        audio_bitrate_k: audio_bitrate_k.unwrap_or(defaults.audio_bitrate_k),
+        loudnorm: loudnorm.unwrap_or(false),
+        range,
+        extra_packs,
+    };
     tauri::async_runtime::spawn_blocking(move || {
         ue_export::export_sequence_with_progress(
             &project,

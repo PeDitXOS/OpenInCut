@@ -9,6 +9,7 @@ import { Preview } from "./Preview";
 import { Inspector } from "./Inspector";
 import { Timeline } from "./Timeline";
 import { StatusBar } from "./StatusBar";
+import { ExportDialog } from "./ExportDialog";
 import { TranscriptPanel } from "./TranscriptPanel";
 
 function useKeyboard() {
@@ -47,6 +48,13 @@ function useKeyboard() {
         const fps = activeSequence(s.project).fps;
         const step = frameToUs(1, fps) * (e.shiftKey ? 10 : 1);
         s.seek(s.playheadUs + (e.key === "ArrowLeft" ? -step : step));
+      } else if (e.key.toLowerCase() === "i" && !mod) {
+        s.setRangeIn(Math.round(s.playheadUs));
+      } else if (e.key.toLowerCase() === "o" && !mod) {
+        s.setRangeOut(Math.round(s.playheadUs));
+      } else if (e.key.toLowerCase() === "x" && e.shiftKey) {
+        s.setRangeIn(null);
+        s.setRangeOut(null);
       } else if (e.key === "Home") {
         s.seek(0);
       }
@@ -183,6 +191,7 @@ export function App() {
         <Timeline />
       </section>
       <StatusBar />
+      <ExportDialog />
     </div>
   );
 }
