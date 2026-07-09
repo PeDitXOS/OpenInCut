@@ -83,6 +83,11 @@ export interface EngineClient {
     style: TextStyle,
     mode: "phrase" | "word" | "karaoke",
   ): Promise<StateSnapshot>;
+  /** Fuentes del sistema (familia, ruta) para el selector de texto. */
+  listFonts(): Promise<[string, string][]>;
+  listTextTemplates(): Promise<Record<string, TextStyle>>;
+  saveTextTemplate(name: string, style: TextStyle): Promise<Record<string, TextStyle>>;
+
   /** Relocaliza un medio offline con una ruta nueva. */
   relinkAsset(assetId: Id, newPath: string): Promise<StateSnapshot>;
   /** Crea un proyecto vacío nuevo. */

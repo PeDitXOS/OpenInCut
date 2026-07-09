@@ -95,6 +95,7 @@ export interface TextStyle {
   stroke_color: string | null;
   stroke_width: number;
   highlight_color: string | null;
+  x_offset: number;
   y_offset: number;
   align: TextAlign;
 }
@@ -107,6 +108,7 @@ export const DEFAULT_TEXT_STYLE: TextStyle = {
   stroke_color: null,
   stroke_width: 0,
   highlight_color: null,
+  x_offset: 0,
   y_offset: 0,
   align: "center",
 };

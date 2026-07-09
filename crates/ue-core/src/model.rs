@@ -410,6 +410,8 @@ pub struct TextStyle {
     #[serde(default)]
     pub highlight_color: Option<String>,
     #[serde(default)]
+    pub x_offset: f32,
+    #[serde(default)]
     pub y_offset: f32,
     #[serde(default)]
     pub align: TextAlign,
@@ -435,6 +437,7 @@ impl Default for TextStyle {
             stroke_color: None,
             stroke_width: 0.0,
             highlight_color: None,
+            x_offset: 0.0,
             y_offset: 0.0,
             align: TextAlign::Center,
         }

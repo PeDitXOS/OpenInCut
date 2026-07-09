@@ -308,6 +308,9 @@ function ClipInspector({ clip }: { clip: Clip }) {
 
 function TextPanel({ clip }: { clip: Clip }) {
   const setClipText = useStore((s) => s.setClipText);
+  const fonts = useStore((s) => s.fonts);
+  const textTemplates = useStore((s) => s.textTemplates);
+  const saveTextTemplate = useStore((s) => s.saveTextTemplate);
   if (clip.payload.type !== "text") return null;
   const { content, style } = clip.payload;
 
@@ -320,6 +323,47 @@ function TextPanel({ clip }: { clip: Clip }) {
         onChange={(e) => void setClipText(clip.id, e.target.value, style)}
         placeholder="Escribe el título…"
       />
+      <Row label="Fuente">
+        <select
+          className="focus-ring min-w-0 flex-1 cursor-pointer rounded-md border border-line bg-bg2 px-2 py-1 text-[12px] text-ink"
+          value={style.font}
+          onChange={(e) => void setClipText(clip.id, content, { ...style, font: e.target.value })}
+          style={{ fontFamily: style.font }}
+        >
+          <option value="sans-serif">Por defecto</option>
+          {fonts.map(([family]) => (
+            <option key={family} value={family} style={{ fontFamily: family }}>
+              {family}
+            </option>
+          ))}
+        </select>
+      </Row>
+      <Row label="Alineación">
+        <select
+          className="focus-ring min-w-0 flex-1 cursor-pointer rounded-md border border-line bg-bg2 px-2 py-1 text-[12px] text-ink"
+          value={style.align}
+          onChange={(e) =>
+            void setClipText(clip.id, content, {
+              ...style,
+              align: e.target.value as "left" | "center" | "right",
+            })
+          }
+        >
+          <option value="left">Izquierda</option>
+          <option value="center">Centro</option>
+          <option value="right">Derecha</option>
+        </select>
+      </Row>
+      <Row label="Posición X">
+        <Slider
+          value={style.x_offset}
+          min={-800}
+          max={800}
+          step={5}
+          unit=" px"
+          onChange={(v) => void setClipText(clip.id, content, { ...style, x_offset: v })}
+        />
+      </Row>
       <Row label="Tamaño">
         <Slider
           value={style.size}
@@ -352,8 +396,36 @@ function TextPanel({ clip }: { clip: Clip }) {
         />
       </Row>
       <p className="mt-1 text-[10px] leading-snug text-ink-faint">
-        Tamaño y altura referidos a 1080p; se escalan al exportar.
+        Tamaño y posiciones referidos a 1080p; se escalan al exportar.
       </p>
+      <div className="mt-2 flex gap-1.5">
+        <select
+          className="focus-ring min-w-0 flex-1 cursor-pointer rounded-md border border-line bg-bg2 px-2 py-1 text-[11px] text-ink-dim"
+          value=""
+          onChange={(e) => {
+            const tpl = textTemplates[e.target.value];
+            if (tpl) void setClipText(clip.id, content, tpl);
+          }}
+          title="Aplicar una plantilla guardada"
+        >
+          <option value="">Plantillas…</option>
+          {Object.keys(textTemplates).map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <button
+          className="focus-ring shrink-0 rounded-md border border-line px-2 py-1 text-[11px] text-ink-dim hover:text-ink"
+          onClick={() => {
+            const name = window.prompt("Nombre de la plantilla:");
+            if (name?.trim()) void saveTextTemplate(name.trim(), style);
+          }}
+          title="Guarda el estilo actual como plantilla"
+        >
+          Guardar
+        </button>
+      </div>
     </Section>
   );
 }

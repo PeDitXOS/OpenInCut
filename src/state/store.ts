@@ -58,6 +58,9 @@ export interface UiState {
   newProject: () => Promise<void>;
   relinkAsset: (assetId: Id) => Promise<void>;
   mcpPort: number | null;
+  fonts: [string, string][];
+  textTemplates: Record<string, TextStyle>;
+  saveTextTemplate: (name: string, style: TextStyle) => Promise<void>;
   effectsCatalog: EffectDef[];
   setClipEffects: (clipId: Id, effects: EffectInstance[]) => Promise<void>;
   setClipTransition: (clipId: Id, transition: TransitionRef | null) => Promise<void>;
@@ -159,6 +162,14 @@ export const useStore = create<UiState>((set, get) => {
         set({ mcpPort: await engine.mcpStatus() });
       } catch {
         /* sin MCP */
+      }
+      try {
+        set({
+          fonts: await engine.listFonts(),
+          textTemplates: await engine.listTextTemplates(),
+        });
+      } catch {
+        /* sin fuentes/plantillas */
       }
     },
 
@@ -292,6 +303,16 @@ export const useStore = create<UiState>((set, get) => {
     },
 
     mcpPort: null,
+    fonts: [],
+    textTemplates: {},
+    saveTextTemplate: async (name, style) => {
+      try {
+        set({ textTemplates: await engine.saveTextTemplate(name, style) });
+        set({ lastActionLabel: `Plantilla «${name}» guardada` });
+      } catch (e) {
+        set({ lastActionLabel: `⚠ ${e instanceof Error ? e.message : String(e)}` });
+      }
+    },
     effectsCatalog: [],
     setClipEffects: (clipId, effects) =>
       run("Editar efectos", () => engine.setClipEffects(clipId, effects)),

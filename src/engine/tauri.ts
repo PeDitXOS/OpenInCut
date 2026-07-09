@@ -169,6 +169,16 @@ export class TauriEngine implements EngineClient {
   ): Promise<StateSnapshot> {
     return invoke("set_subtitles_props", { clipId, style, mode });
   }
+  listFonts(): Promise<[string, string][]> {
+    return invoke("list_fonts");
+  }
+  listTextTemplates(): Promise<Record<string, TextStyle>> {
+    return invoke("list_text_templates");
+  }
+  saveTextTemplate(name: string, style: TextStyle): Promise<Record<string, TextStyle>> {
+    return invoke("save_text_template", { name, style });
+  }
+
   relinkAsset(assetId: Id, newPath: string): Promise<StateSnapshot> {
     return invoke("relink_asset", { assetId, newPath });
   }

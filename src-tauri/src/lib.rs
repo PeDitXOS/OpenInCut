@@ -324,6 +324,45 @@ fn cut_ranges(
     Ok(snapshot(&store))
 }
 
+/// Fuentes del sistema (familia, ruta) para el selector de texto.
+#[tauri::command]
+fn list_fonts() -> Vec<(String, String)> {
+    ue_export::graph::list_system_fonts()
+}
+
+fn templates_path(state: &AppState) -> Option<PathBuf> {
+    state.effects_dir.lock().unwrap().as_ref().map(|d| {
+        d.parent().unwrap_or(d).join("text_templates.json")
+    })
+}
+
+/// Plantillas de título guardadas (nombre → estilo).
+#[tauri::command]
+fn list_text_templates(state: State<AppState>) -> Res<serde_json::Value> {
+    let Some(path) = templates_path(&state) else { return Ok(serde_json::json!({})) };
+    match std::fs::read_to_string(path) {
+        Ok(s) => serde_json::from_str(&s).map_err(|e| e.to_string()),
+        Err(_) => Ok(serde_json::json!({})),
+    }
+}
+
+#[tauri::command]
+fn save_text_template(
+    state: State<AppState>,
+    name: String,
+    style: ue_core::model::TextStyle,
+) -> Res<serde_json::Value> {
+    let Some(path) = templates_path(&state) else { return Err("sin carpeta de config".into()) };
+    let mut all: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    all.insert(name, serde_json::to_value(style).map_err(|e| e.to_string())?);
+    std::fs::write(&path, serde_json::to_string_pretty(&all).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::Value::Object(all))
+}
+
 /// Rompe el enlace video↔audio de un clip (todo su grupo, 1 undo).
 #[tauri::command]
 fn unlink_clip(state: State<AppState>, clip_id: String) -> Res<StateSnapshot> {
@@ -1303,6 +1342,9 @@ pub fn run() {
             set_clip_speed,
             set_subtitles_props,
             unlink_clip,
+            list_fonts,
+            list_text_templates,
+            save_text_template,
             undo,
             redo,
             set_clip_audio,

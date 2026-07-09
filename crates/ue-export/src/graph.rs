@@ -96,6 +96,45 @@ fn escape_drawtext(text: &str) -> String {
         .replace('%', "\\%")
 }
 
+/// Base de datos de fuentes del sistema (se carga una vez).
+fn font_db() -> &'static fontdb::Database {
+    static DB: std::sync::OnceLock<fontdb::Database> = std::sync::OnceLock::new();
+    DB.get_or_init(|| {
+        let mut db = fontdb::Database::new();
+        db.load_system_fonts();
+        db
+    })
+}
+
+/// Fuentes del sistema disponibles: (familia, ruta) únicas y ordenadas.
+pub fn list_system_fonts() -> Vec<(String, String)> {
+    let mut out: std::collections::BTreeMap<String, String> = Default::default();
+    let db = font_db();
+    for face in db.faces() {
+        let Some((family, _)) = face.families.first() else { continue };
+        if let fontdb::Source::File(path) = &face.source {
+            out.entry(family.clone())
+                .or_insert_with(|| path.to_string_lossy().into_owned());
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// Resuelve una familia a su fontfile; None si no está.
+pub fn resolve_font_family(family: &str) -> Option<String> {
+    let db = font_db();
+    let query = fontdb::Query {
+        families: &[fontdb::Family::Name(family)],
+        ..Default::default()
+    };
+    let id = db.query(&query)?;
+    let (source, _) = db.face_source(id)?;
+    match source {
+        fontdb::Source::File(path) => Some(path.to_string_lossy().into_owned()),
+        _ => None,
+    }
+}
+
 /// Primera fuente del sistema disponible para drawtext (fontfile);
 /// si no hay ninguna, se confía en fontconfig (font=sans).
 pub fn find_font() -> Option<&'static str> {

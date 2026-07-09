@@ -481,6 +481,23 @@ export class MockEngine implements EngineClient {
     });
   }
 
+  async listFonts(): Promise<[string, string][]> {
+    return [
+      ["Arial", ""],
+      ["Helvetica", ""],
+      ["Georgia", ""],
+      ["Courier New", ""],
+    ];
+  }
+  private templates: Record<string, TextStyle> = {};
+  async listTextTemplates(): Promise<Record<string, TextStyle>> {
+    return { ...this.templates };
+  }
+  async saveTextTemplate(name: string, style: TextStyle): Promise<Record<string, TextStyle>> {
+    this.templates[name] = style;
+    return { ...this.templates };
+  }
+
   async relinkAsset(): Promise<StateSnapshot> {
     throw new Error("Relocalizar requiere la app de escritorio");
   }

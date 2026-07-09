@@ -10,6 +10,7 @@ thiserror.workspace = true
 ue-core = { path = "../ue-core" }
 ue-media = { path = "../ue-media" }
 ue-render = { path = "../ue-render" }
+fontdb = "0.16"
 
 [dev-dependencies]
 serde_json.workspace = true

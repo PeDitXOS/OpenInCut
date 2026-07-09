@@ -1026,3 +1026,22 @@ fn word_mode_subtitles_burn_per_word() {
     assert!(bright_at(1.7) >= 2, "DOS visible en t=1.7 ({})", bright_at(1.7));
     assert_eq!(bright_at(2.4), 0, "las palabras rechazadas no se queman");
 }
+
+/// Enumeración de fuentes del sistema y resolución de familia → fontfile.
+#[test]
+fn system_fonts_enumerate_and_resolve() {
+    let fonts = ue_export::graph::list_system_fonts();
+    eprintln!("fuentes encontradas: {}", fonts.len());
+    if fonts.is_empty() {
+        eprintln!("AVISO: sin fuentes del sistema (¿CI sin fuentes?); test laxo");
+        return;
+    }
+    assert!(fonts.len() > 5, "un sistema de escritorio tiene fuentes");
+    // resolver la primera familia listada debe dar una ruta existente
+    let (family, path) = &fonts[0];
+    let resolved = ue_export::graph::resolve_font_family(family);
+    assert!(resolved.is_some(), "familia {family} resoluble");
+    assert!(std::path::Path::new(path).exists(), "la ruta existe: {path}");
+    // una familia inexistente cae a None (y drawtext usará la default)
+    assert!(ue_export::graph::resolve_font_family("NoExisteEstaFuente9999").is_none());
+}
