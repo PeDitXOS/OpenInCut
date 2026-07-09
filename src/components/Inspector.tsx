@@ -1,6 +1,7 @@
 import { useState } from "react";
 
-import type { Clip, EffectDef, EffectInstance } from "../engine/types";
+import type { Clip, EffectDef, EffectInstance, Param } from "../engine/types";
+import { hasKeyAt, removeKeyAt, withKeyAt } from "../engine/types";
 import {
   activeSequence,
   assetName,
@@ -58,6 +59,37 @@ function Slider({
   );
 }
 
+/** Botón de keyframe: ◆ si hay key en el playhead, ◇ si la propiedad anima. */
+function KeyBtn({
+  param,
+  at,
+  onChange,
+}: {
+  param: Param;
+  at: number;
+  onChange: (p: Param) => void;
+}) {
+  const keyed = hasKeyAt(param, at);
+  const animated = isCurve(param);
+  return (
+    <button
+      className={`focus-ring h-5 w-4 shrink-0 rounded text-[11px] leading-none hover:bg-bg3 ${
+        keyed ? "text-accent" : animated ? "text-accent/50" : "text-ink-faint"
+      }`}
+      title={
+        keyed
+          ? "Quitar el keyframe del playhead"
+          : "Añadir keyframe en el playhead (anima esta propiedad)"
+      }
+      onClick={() =>
+        onChange(keyed ? removeKeyAt(param, at) : withKeyAt(param, at, paramValue(param, at)))
+      }
+    >
+      {keyed ? "◆" : "◇"}
+    </button>
+  );
+}
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="border-b border-line-soft px-3 py-3">
@@ -86,10 +118,14 @@ function ClipInspector({ clip }: { clip: Clip }) {
       ? project.assets.find((a) => a.id === (clip.payload as { asset_id: string }).asset_id)
       : undefined;
 
-  const opacity = paramValue(clip.transform.opacity);
-  const scale = paramValue(clip.transform.scale[0]);
-  const rotation = paramValue(clip.transform.rotation);
-  const gain = paramValue(clip.audio.gain_db);
+  const playheadUs = useStore((s) => s.playheadUs);
+  const relUs = Math.max(0, Math.min(Math.round(playheadUs - clip.start), clip.duration));
+  const opacity = paramValue(clip.transform.opacity, relUs);
+  const scale = paramValue(clip.transform.scale[0], relUs);
+  const rotation = paramValue(clip.transform.rotation, relUs);
+  const gain = paramValue(clip.audio.gain_db, relUs);
+  /** Escribe un valor: keyframe en el playhead si la propiedad anima. */
+  const drive = (p: Param, v: number): Param => (isCurve(p) ? withKeyAt(p, relUs, v) : v);
 
   return (
     <>
@@ -106,32 +142,50 @@ function ClipInspector({ clip }: { clip: Clip }) {
       <Section title="Transformación">
         <Row label="Posición X">
           <Slider
-            value={paramValue(clip.transform.position[0])}
+            value={paramValue(clip.transform.position[0], relUs)}
             min={-960}
             max={960}
             step={2}
             unit=" px"
-            disabled={isCurve(clip.transform.position[0])}
             onChange={(v) =>
               void setClipTransform(clip.id, {
                 ...clip.transform,
-                position: [v, clip.transform.position[1]],
+                position: [drive(clip.transform.position[0], v), clip.transform.position[1]],
+              })
+            }
+          />
+          <KeyBtn
+            param={clip.transform.position[0]}
+            at={relUs}
+            onChange={(p) =>
+              void setClipTransform(clip.id, {
+                ...clip.transform,
+                position: [p, clip.transform.position[1]],
               })
             }
           />
         </Row>
         <Row label="Posición Y">
           <Slider
-            value={paramValue(clip.transform.position[1])}
+            value={paramValue(clip.transform.position[1], relUs)}
             min={-540}
             max={540}
             step={2}
             unit=" px"
-            disabled={isCurve(clip.transform.position[1])}
             onChange={(v) =>
               void setClipTransform(clip.id, {
                 ...clip.transform,
-                position: [clip.transform.position[0], v],
+                position: [clip.transform.position[0], drive(clip.transform.position[1], v)],
+              })
+            }
+          />
+          <KeyBtn
+            param={clip.transform.position[1]}
+            at={relUs}
+            onChange={(p) =>
+              void setClipTransform(clip.id, {
+                ...clip.transform,
+                position: [clip.transform.position[0], p],
               })
             }
           />
@@ -142,8 +196,17 @@ function ClipInspector({ clip }: { clip: Clip }) {
             min={0}
             max={1}
             step={0.01}
-            disabled={isCurve(clip.transform.opacity)}
-            onChange={(v) => void setClipTransform(clip.id, { ...clip.transform, opacity: v })}
+            onChange={(v) =>
+              void setClipTransform(clip.id, {
+                ...clip.transform,
+                opacity: drive(clip.transform.opacity, v),
+              })
+            }
+          />
+          <KeyBtn
+            param={clip.transform.opacity}
+            at={relUs}
+            onChange={(p) => void setClipTransform(clip.id, { ...clip.transform, opacity: p })}
           />
         </Row>
         <Row label="Escala">
@@ -152,8 +215,15 @@ function ClipInspector({ clip }: { clip: Clip }) {
             min={0.1}
             max={4}
             step={0.01}
-            disabled={isCurve(clip.transform.scale[0])}
-            onChange={(v) => void setClipTransform(clip.id, { ...clip.transform, scale: [v, v] })}
+            onChange={(v) => {
+              const p = drive(clip.transform.scale[0], v);
+              void setClipTransform(clip.id, { ...clip.transform, scale: [p, p] });
+            }}
+          />
+          <KeyBtn
+            param={clip.transform.scale[0]}
+            at={relUs}
+            onChange={(p) => void setClipTransform(clip.id, { ...clip.transform, scale: [p, p] })}
           />
         </Row>
         <Row label="Rotación">
@@ -163,8 +233,17 @@ function ClipInspector({ clip }: { clip: Clip }) {
             max={180}
             step={1}
             unit="°"
-            disabled={isCurve(clip.transform.rotation)}
-            onChange={(v) => void setClipTransform(clip.id, { ...clip.transform, rotation: v })}
+            onChange={(v) =>
+              void setClipTransform(clip.id, {
+                ...clip.transform,
+                rotation: drive(clip.transform.rotation, v),
+              })
+            }
+          />
+          <KeyBtn
+            param={clip.transform.rotation}
+            at={relUs}
+            onChange={(p) => void setClipTransform(clip.id, { ...clip.transform, rotation: p })}
           />
         </Row>
       </Section>
@@ -177,8 +256,14 @@ function ClipInspector({ clip }: { clip: Clip }) {
             max={12}
             step={0.5}
             unit=" dB"
-            disabled={isCurve(clip.audio.gain_db)}
-            onChange={(v) => void setClipAudio(clip.id, { ...clip.audio, gain_db: v })}
+            onChange={(v) =>
+              void setClipAudio(clip.id, { ...clip.audio, gain_db: drive(clip.audio.gain_db, v) })
+            }
+          />
+          <KeyBtn
+            param={clip.audio.gain_db}
+            at={relUs}
+            onChange={(p) => void setClipAudio(clip.id, { ...clip.audio, gain_db: p })}
           />
         </Row>
         <Row label="Pan">

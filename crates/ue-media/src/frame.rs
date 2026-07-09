@@ -15,6 +15,8 @@ use crate::{ffmpeg_bin, MediaError, MediaResult};
 pub struct ResolvedFrame {
     pub asset_path: String,
     pub src_t_us: TimeUs,
+    /// Tiempo relativo al inicio del clip (µs de timeline): evalúa curvas.
+    pub clip_rel_us: TimeUs,
     /// Efectos y transform del clip resuelto (la capa superior decide la cadena).
     pub effects: Vec<EffectInstance>,
     pub transform: Transform2D,
@@ -45,6 +47,7 @@ pub fn resolve_top_video(project: &Project, sequence_id: Id, t_us: TimeUs) -> Op
                     return Some(ResolvedFrame {
                         asset_path: path,
                         src_t_us: src_t,
+                        clip_rel_us: t_us - clip.start,
                         effects: clip.effects.clone(),
                         transform: clip.transform.clone(),
                     });

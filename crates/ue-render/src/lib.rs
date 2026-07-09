@@ -192,6 +192,36 @@ pub fn catalog_json(registry: &[EffectDef]) -> serde_json::Value {
 /// posición (orden del PLAN §6.8). La posición compone sobre un lienzo del
 /// tamaño de la secuencia (color+overlay, requiere `canvas`). Opacidad llega
 /// con wgpu. Curvas: se evalúan en t=0.
+/// Expresión ffmpeg de un Param animado en función de `t` (segundos desde el
+/// inicio del clip): tramos Hold/Linear exactos, Smooth linealizado. Para un
+/// Const devuelve el número plano.
+pub fn param_expr(p: &ue_core::keyframe::Param, t0_us: i64) -> String {
+    use ue_core::keyframe::{Interp, Param};
+    let curve = match p {
+        Param::Const(v) => return format_float(*v),
+        Param::Curve(c) if c.keys.is_empty() => return "0".into(),
+        Param::Curve(c) => c,
+    };
+    let ts = |us: i64| format!("{:.6}", (us + t0_us) as f64 / 1_000_000.0);
+    let keys = &curve.keys;
+    let mut expr = format_float(keys[keys.len() - 1].value);
+    for i in (0..keys.len().saturating_sub(1)).rev() {
+        let (k0, k1) = (&keys[i], &keys[i + 1]);
+        let seg = match k0.interp {
+            Interp::Hold => format_float(k0.value),
+            _ => format!(
+                "({}+({})*(t-{})/({:.6}))",
+                format_float(k0.value),
+                format_float(k1.value - k0.value),
+                ts(k0.t),
+                ((k1.t - k0.t).max(1)) as f64 / 1_000_000.0,
+            ),
+        };
+        expr = format!("if(lt(t,{}),{seg},{expr})", ts(k1.t));
+    }
+    format!("if(lt(t,{}),{},{expr})", ts(keys[0].t), format_float(keys[0].value))
+}
+
 pub fn transform_vf(
     t: &ue_core::model::Transform2D,
     canvas: Option<(u32, u32)>,
@@ -201,11 +231,14 @@ pub fn transform_vf(
 
 /// Como `transform_vf`; con `transparent` el lienzo de posición y el relleno
 /// de rotación llevan alpha 0 (para componer la capa sobre otras en export).
+/// Posición y rotación con curvas emiten EXPRESIONES en t (animan en export);
+/// escala/crop/opacidad evalúan en t=0 (v0).
 pub fn transform_vf_ex(
     t: &ue_core::model::Transform2D,
     canvas: Option<(u32, u32)>,
     transparent: bool,
 ) -> Option<String> {
+    use ue_core::keyframe::Param;
     let mut parts: Vec<String> = vec![];
 
     let (l, top, r, b) = (
@@ -233,14 +266,23 @@ pub fn transform_vf_ex(
         ));
     }
 
+    let rot_animated = matches!(&t.rotation, Param::Curve(c) if c.keys.len() > 1);
     let deg = t.rotation.eval(0);
-    if deg.abs() > 1e-4 {
-        let rad = format_float(deg.to_radians());
+    if rot_animated || deg.abs() > 1e-4 {
         let fill = if transparent { "black@0.0" } else { "black" };
         if transparent {
             parts.push("format=rgba".into());
         }
-        parts.push(format!("rotate={rad}:ow=rotw({rad}):oh=roth({rad}):c={fill}"));
+        if rot_animated {
+            // ángulo animado: expresión en t; lienzo de salida = diagonal máx.
+            let expr = param_expr(&t.rotation, 0);
+            parts.push(format!(
+                "rotate=a='({expr})*PI/180':ow=hypot(iw\\,ih):oh=ow:c={fill}"
+            ));
+        } else {
+            let rad = format_float(deg.to_radians());
+            parts.push(format!("rotate={rad}:ow=rotw({rad}):oh=roth({rad}):c={fill}"));
+        }
     }
 
     if t.flip_h {
@@ -251,14 +293,24 @@ pub fn transform_vf_ex(
     }
 
     // posición: componer sobre un lienzo del tamaño de la secuencia
+    let pos_animated = matches!(&t.position.0, Param::Curve(c) if c.keys.len() > 1)
+        || matches!(&t.position.1, Param::Curve(c) if c.keys.len() > 1);
     let (px, py) = (t.position.0.eval(0).round() as i64, t.position.1.eval(0).round() as i64);
-    if let Some((cw, ch)) = canvas.filter(|_| px != 0 || py != 0) {
+    if let Some((cw, ch)) = canvas.filter(|_| pos_animated || px != 0 || py != 0) {
         static POS_UNIQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = POS_UNIQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let bg = if transparent { "black@0.0" } else { "black" };
         let bg_fmt = if transparent { ",format=rgba" } else { "" };
+        let (xe, ye) = if pos_animated {
+            (
+                format!("'(W-w)/2+({})'", param_expr(&t.position.0, 0)),
+                format!("'(H-h)/2+({})'", param_expr(&t.position.1, 0)),
+            )
+        } else {
+            (format!("(W-w)/2+{px}"), format!("(H-h)/2+{py}"))
+        };
         parts.push(format!(
-            "null[p{n}fg];color=c={bg}:s={cw}x{ch}{bg_fmt}[p{n}bg];[p{n}bg][p{n}fg]overlay=x=(W-w)/2+{px}:y=(H-h)/2+{py}:shortest=1"
+            "null[p{n}fg];color=c={bg}:s={cw}x{ch}{bg_fmt}[p{n}bg];[p{n}bg][p{n}fg]overlay=x={xe}:y={ye}:shortest=1"
         ));
     }
 

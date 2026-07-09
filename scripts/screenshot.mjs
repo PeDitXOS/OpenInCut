@@ -164,5 +164,15 @@ const multiSel = await page.getByText(/clips seleccionados/).count();
 if (multiSel === 0)
   throw new Error("la selección por marco no seleccionó varios clips (StatusBar)");
 
+// 12. Keyframes: añadir un key de Posición X en el playhead desde el Inspector
+await page.mouse.click(xForSec(4), box.y + 26 + 2 + 54 + 26); // seleccionar clip V1
+await page.waitForTimeout(200);
+const addKey = page.getByTitle(/Añadir keyframe en el playhead/).first();
+await addKey.click();
+await page.waitForTimeout(200);
+if ((await page.getByTitle(/Quitar el keyframe del playhead/).count()) === 0)
+  throw new Error("el keyframe no se creó (no hay ◆ en el playhead)");
+await shot("12-keyframe-creado");
+
 await browser.close();
 console.log(`\nScreenshots en ${outDir}`);

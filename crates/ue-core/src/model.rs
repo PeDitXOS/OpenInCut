@@ -478,6 +478,23 @@ pub struct Transform2D {
     pub flip_v: bool,
 }
 
+impl Transform2D {
+    /// Instantánea con todas las curvas evaluadas en `at` (µs relativos al
+    /// clip). Para el preview al hacer scrub.
+    pub fn sampled(&self, at: TimeUs) -> Transform2D {
+        let ev = |p: &Param| Param::Const(p.eval(at));
+        Transform2D {
+            position: (ev(&self.position.0), ev(&self.position.1)),
+            scale: (ev(&self.scale.0), ev(&self.scale.1)),
+            rotation: ev(&self.rotation),
+            crop: (ev(&self.crop.0), ev(&self.crop.1), ev(&self.crop.2), ev(&self.crop.3)),
+            opacity: ev(&self.opacity),
+            flip_h: self.flip_h,
+            flip_v: self.flip_v,
+        }
+    }
+}
+
 impl Default for Transform2D {
     fn default() -> Self {
         Self {

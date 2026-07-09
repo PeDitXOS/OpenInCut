@@ -342,6 +342,59 @@ fn multilayer_overlay_blends_with_opacity() {
     assert!(r > 200 && b < 60, "3.5s: rojo otra vez, fue ({r},{b})");
 }
 
+/// Posición animada por keyframes: el bloque rojo viaja de izquierda a derecha.
+#[test]
+fn animated_position_moves_in_export() {
+    use ue_core::keyframe::{Interp, Keyframe, KeyframeCurve, Param};
+    let Some(dir) = media_dir() else { return };
+    let src = dir.join("solid_red.mp4");
+    if !src.exists() {
+        let st = Command::new(ue_media::ffmpeg_bin())
+            .args([
+                "-y", "-v", "error", "-f", "lavfi", "-i",
+                "color=red:size=640x360:rate=30:duration=4",
+                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            ])
+            .arg(&src)
+            .status()
+            .unwrap();
+        assert!(st.success());
+    }
+    let mut project = Project::new("anim-pos");
+    let seq_id = project.active_sequence;
+    let asset = ue_media::import_file(&src).unwrap();
+    let aid = asset.id;
+    project.assets.push(asset);
+    let v1 = project
+        .sequence(seq_id)
+        .unwrap()
+        .tracks
+        .iter()
+        .find(|t| t.kind == TrackKind::Video)
+        .unwrap()
+        .id;
+    let mut store = ProjectStore::new(project);
+    let mut clip = Clip::new_media(aid, 0, 4 * SEC, 0);
+    clip.transform.position.0 = Param::Curve(KeyframeCurve::new(vec![
+        Keyframe { t: 0, value: -600.0, interp: Interp::Linear },
+        Keyframe { t: 4 * SEC, value: 600.0, interp: Interp::Linear },
+    ]));
+    store.insert_clip(v1, clip, InsertMode::Strict).unwrap();
+
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-anim-pos.mp4");
+    export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+
+    // temprano: bloque a la izquierda; tarde: a la derecha
+    let (r, _g, _b) = pixel_at(&out, 0.3, 300, 540);
+    assert!(r > 180, "t=0.3: rojo a la izquierda, fue r={r}");
+    let (r, _g, _b) = pixel_at(&out, 0.3, 1600, 540);
+    assert!(r < 60, "t=0.3: derecha vacía, fue r={r}");
+    let (r, _g, _b) = pixel_at(&out, 3.7, 1600, 540);
+    assert!(r > 180, "t=3.7: rojo a la derecha, fue r={r}");
+    let (r, _g, _b) = pixel_at(&out, 3.7, 300, 540);
+    assert!(r < 60, "t=3.7: izquierda vacía, fue r={r}");
+}
+
 // ---------------------------------------------------------------------------
 // Audio: pan, curvas de ganancia y loudnorm
 // ---------------------------------------------------------------------------

@@ -47,6 +47,50 @@ export function isCurve(p: Param): boolean {
   return typeof p !== "number";
 }
 
+/** ¿Hay un keyframe a ±eps de tUs? */
+export function hasKeyAt(p: Param, tUs: TimeUs, epsUs = 20_000): boolean {
+  if (typeof p === "number") return false;
+  return p.keys.some((k) => Math.abs(k.t - tUs) <= epsUs);
+}
+
+/** Añade (o actualiza) un keyframe en tUs. Un Const se convierte en curva. */
+export function withKeyAt(p: Param, tUs: TimeUs, value: number, epsUs = 20_000): Param {
+  const keys = typeof p === "number" ? [] : [...p.keys];
+  const idx = keys.findIndex((k) => Math.abs(k.t - tUs) <= epsUs);
+  const key = { t: Math.max(0, Math.round(tUs)), value, interp: { kind: "linear" as const } };
+  if (idx >= 0) keys[idx] = { ...keys[idx], value };
+  else {
+    keys.push(key);
+    keys.sort((a, b) => a.t - b.t);
+  }
+  return { keys };
+}
+
+/** Quita el keyframe a ±eps de tUs; si queda ≤1, vuelve a Const. */
+export function removeKeyAt(p: Param, tUs: TimeUs, epsUs = 20_000): Param {
+  if (typeof p === "number") return p;
+  const keys = p.keys.filter((k) => Math.abs(k.t - tUs) > epsUs);
+  if (keys.length === 0) return paramValue(p, tUs);
+  if (keys.length === 1) return keys[0].value;
+  return { keys };
+}
+
+/** Tiempos (µs relativos al clip) de todos los keyframes de un clip. */
+export function clipKeyframeTimes(clip: Clip): TimeUs[] {
+  const times: TimeUs[] = [];
+  const collect = (p: Param) => {
+    if (typeof p !== "number") for (const k of p.keys) times.push(k.t);
+  };
+  const t = clip.transform;
+  [t.position[0], t.position[1], t.scale[0], t.scale[1], t.rotation, t.opacity, ...t.crop].forEach(
+    collect,
+  );
+  collect(clip.audio.gain_db);
+  collect(clip.audio.pan);
+  for (const fx of clip.effects) Object.values(fx.params).forEach(collect);
+  return [...new Set(times)].sort((a, b) => a - b);
+}
+
 // -- media -------------------------------------------------------------------
 
 export type MediaKind = "video" | "audio" | "image";

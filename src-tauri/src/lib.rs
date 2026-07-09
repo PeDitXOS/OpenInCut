@@ -924,8 +924,11 @@ fn render_frame(
     }; // soltar el lock antes de invocar ffmpeg
     let reg = state.registry.lock().unwrap().clone();
     let canvas = project.sequence(seq_id).map(|s| s.resolution);
+    // scrub animado: evaluar las curvas del transform en el tiempo del clip
     let mut vf = ue_media::frame::resolve_top_video(&project, seq_id, t_us)
-        .and_then(|r| ue_render::clip_vf(&reg, &r.effects, &r.transform, canvas));
+        .and_then(|r| {
+            ue_render::clip_vf(&reg, &r.effects, &r.transform.sampled(r.clip_rel_us), canvas)
+        });
     // avatar sobre el frame pausado (grafo movie+overlay en el mismo -vf)
     if let Some(suffix) = avatar_vf_suffix(&project, seq_id, t_us, max_width) {
         vf = Some(format!("{}{}", vf.unwrap_or_else(|| "null".into()), suffix));

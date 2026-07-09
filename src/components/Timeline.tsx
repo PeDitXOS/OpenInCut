@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Clip, Project, Track } from "../engine/types";
 import { activeSequence, clipDisplayName } from "../engine/types";
 import { hash32, mulberry32, usToDuration } from "../lib/time";
+import { clipKeyframeTimes } from "../engine/types";
 import { assetVisuals, requestVisuals, PEAKS_PER_SEC } from "../state/visuals";
 import { useStore } from "../state/store";
 
@@ -324,6 +325,25 @@ function drawClip(
       ctx.fillStyle = "rgba(233,228,219,0.85)";
       ctx.font = '500 10px "Inter", sans-serif';
       ctx.fillText(clip.payload.content.slice(0, 28), x + 20, y + (h - 14) / 2 + 1, w - 28);
+    }
+  }
+
+  // rombos de keyframes (solo en el clip seleccionado)
+  if (selected && w > 20) {
+    const times = clipKeyframeTimes(clip);
+    if (times.length) {
+      ctx.fillStyle = "#e9e4db";
+      for (const kt of times) {
+        const kx = x + (kt / clip.duration) * w;
+        if (kx < x + 2 || kx > x + w - 2) continue;
+        ctx.beginPath();
+        ctx.moveTo(kx, y + h - 10);
+        ctx.lineTo(kx + 3, y + h - 7);
+        ctx.lineTo(kx, y + h - 4);
+        ctx.lineTo(kx - 3, y + h - 7);
+        ctx.closePath();
+        ctx.fill();
+      }
     }
   }
 
