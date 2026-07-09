@@ -308,6 +308,10 @@ export class MockEngine implements EngineClient {
     return manifests.map((m) => m.default as unknown as EffectDef);
   }
 
+  async reloadEffectPacks(): Promise<{ catalog: EffectDef[]; errors: string[]; dir: string | null }> {
+    return { catalog: await this.getEffectsCatalog(), errors: [], dir: null };
+  }
+
   async setClipEffects(clipId: Id, effects: EffectInstance[]): Promise<StateSnapshot> {
     return this.transaction("Editar efectos", () => {
       const found = this.locate(clipId);

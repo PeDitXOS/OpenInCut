@@ -23,11 +23,24 @@ pub struct AppState {
     pub player: Mutex<Option<Player>>,
     pub frames: Mutex<Option<FrameService>>,
     pub export_cancel: Arc<AtomicBool>,
+    /// Registro efectivo (core + packs de usuario) y packs de usuario crudos.
+    pub registry: Mutex<Arc<Vec<ue_render::EffectDef>>>,
+    pub user_packs: Mutex<Vec<ue_render::EffectDef>>,
+    pub effects_dir: Mutex<Option<PathBuf>>,
 }
 
-fn effects_registry() -> &'static Vec<ue_render::EffectDef> {
-    static REG: std::sync::OnceLock<Vec<ue_render::EffectDef>> = std::sync::OnceLock::new();
-    REG.get_or_init(ue_render::core_registry)
+/// Recarga los packs de usuario desde disco y reconstruye el registro.
+/// Devuelve los errores de manifests inválidos (no rompen nada).
+fn reload_packs(state: &AppState) -> Vec<String> {
+    let dir = state.effects_dir.lock().unwrap().clone();
+    let (user, errors) = match dir {
+        Some(d) => ue_render::load_packs_from_dir(&d),
+        None => (vec![], vec![]),
+    };
+    let merged = ue_render::merge_registries(ue_render::core_registry(), user.clone());
+    *state.user_packs.lock().unwrap() = user;
+    *state.registry.lock().unwrap() = Arc::new(merged);
+    errors
 }
 
 /// Servicio de frames de reproducción: un hilo sigue al reloj de audio con una
@@ -71,7 +84,8 @@ fn frame_service_loop(app: tauri::AppHandle, latest: Arc<Mutex<Vec<u8>>>, runnin
         };
         let path = PathBuf::from(&r.asset_path);
         let src_t = r.src_t_us;
-        let vf = ue_render::clip_vf(effects_registry(), &r.effects, &r.transform);
+        let reg = state.registry.lock().unwrap().clone();
+        let vf = ue_render::clip_vf(&reg, &r.effects, &r.transform);
 
         // ¿sirve la sesión actual? (mismo archivo, misma cadena de efectos,
         // posición alcanzable hacia delante)
@@ -460,8 +474,9 @@ fn render_frame(
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
         (store.project.clone(), store.project.active_sequence, base)
     }; // soltar el lock antes de invocar ffmpeg
+    let reg = state.registry.lock().unwrap().clone();
     let vf = ue_media::frame::resolve_top_video(&project, seq_id, t_us)
-        .and_then(|r| ue_render::clip_vf(effects_registry(), &r.effects, &r.transform));
+        .and_then(|r| ue_render::clip_vf(&reg, &r.effects, &r.transform));
     let bytes =
         ue_media::frame::render_frame(&project, seq_id, t_us, max_width, &base_dir, vf.as_deref())
             .map_err(|e| e.to_string())?
@@ -471,8 +486,19 @@ fn render_frame(
 
 /// Catálogo de efectos disponibles (para la UI y MCP).
 #[tauri::command]
-fn get_effects_catalog() -> serde_json::Value {
-    ue_render::catalog_json(effects_registry())
+fn get_effects_catalog(state: State<AppState>) -> serde_json::Value {
+    ue_render::catalog_json(&state.registry.lock().unwrap())
+}
+
+/// Recarga los packs de usuario desde disco (carpeta effects/ de la config).
+#[tauri::command]
+fn reload_effect_packs(state: State<AppState>) -> Res<serde_json::Value> {
+    let errors = reload_packs(&state);
+    Ok(serde_json::json!({
+        "catalog": ue_render::catalog_json(&state.registry.lock().unwrap()),
+        "errors": errors,
+        "dir": state.effects_dir.lock().unwrap().as_ref().map(|d| d.display().to_string()),
+    }))
 }
 
 #[tauri::command]
@@ -538,7 +564,8 @@ async fn export_video(
     let cancel = state.export_cancel.clone();
     cancel.store(false, Ordering::SeqCst);
     let out = PathBuf::from(&path);
-    let settings = ue_export::ExportSettings { max_height, ..Default::default() };
+    let extra_packs = state.user_packs.lock().unwrap().clone();
+    let settings = ue_export::ExportSettings { max_height, extra_packs, ..Default::default() };
     tauri::async_runtime::spawn_blocking(move || {
         ue_export::export_sequence_with_progress(
             &project,
@@ -606,6 +633,9 @@ pub fn run() {
         player: Mutex::new(None),
         frames: Mutex::new(None),
         export_cancel: Arc::new(AtomicBool::new(false)),
+        registry: Mutex::new(Arc::new(ue_render::core_registry())),
+        user_packs: Mutex::new(vec![]),
+        effects_dir: Mutex::new(None),
     };
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -615,6 +645,15 @@ pub fn run() {
             if let Ok(dir) = app.path().app_cache_dir() {
                 let _ = std::fs::create_dir_all(&dir);
                 *state.cache_dir.lock().unwrap() = Some(dir);
+            }
+            if let Ok(dir) = app.path().app_config_dir() {
+                let effects = dir.join("effects");
+                let _ = std::fs::create_dir_all(&effects);
+                *state.effects_dir.lock().unwrap() = Some(effects);
+                let errors = reload_packs(&state);
+                for e in errors {
+                    eprintln!("[packs] manifest inválido: {e}");
+                }
             }
             Ok(())
         })
@@ -633,6 +672,7 @@ pub fn run() {
             add_clip,
             render_frame,
             get_effects_catalog,
+            reload_effect_packs,
             set_clip_effects,
             set_clip_transition,
             export_video,

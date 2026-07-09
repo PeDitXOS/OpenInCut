@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use ue_core::model::{ClipPayload, Id, Project};
 use ue_core::TimeUs;
 
-use crate::edl::{build_video_edl, edl_duration, Segment};
+use crate::edl::{build_video_edl_with, edl_duration, Segment};
 use crate::{ExportError, ExportResult, ExportSettings};
 
 pub struct FfmpegPlan {
@@ -77,7 +77,7 @@ pub fn build_ffmpeg_args(
     let seq = project
         .sequence(sequence_id)
         .ok_or(ExportError::NoSequence(sequence_id))?;
-    let edl = build_video_edl(project, sequence_id)?;
+    let edl = build_video_edl_with(project, sequence_id, &settings.extra_packs)?;
     let total_us = edl_duration(&edl);
     let audio_items = collect_audio(project, sequence_id);
 

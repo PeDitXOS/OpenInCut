@@ -32,14 +32,18 @@ impl Segment {
     }
 }
 
-/// Registro de efectos usado por la EDL (core embebido).
-fn effects_registry() -> Vec<ue_render::EffectDef> {
-    ue_render::core_registry()
+/// Construye la EDL con solo los packs core (atajo para tests y usos simples).
+pub fn build_video_edl(project: &Project, sequence_id: Id) -> ExportResult<Vec<Segment>> {
+    build_video_edl_with(project, sequence_id, &[])
 }
 
-/// Construye la EDL de video de la secuencia. Error si hay speed != 1 en un
-/// clip visible o si el timeline está vacío.
-pub fn build_video_edl(project: &Project, sequence_id: Id) -> ExportResult<Vec<Segment>> {
+/// Construye la EDL de video de la secuencia (packs core + `extra_packs`).
+/// Error si hay speed != 1 en un clip visible o si el timeline está vacío.
+pub fn build_video_edl_with(
+    project: &Project,
+    sequence_id: Id,
+    extra_packs: &[ue_render::EffectDef],
+) -> ExportResult<Vec<Segment>> {
     let seq = project
         .sequence(sequence_id)
         .ok_or(ExportError::NoSequence(sequence_id))?;
@@ -64,7 +68,7 @@ pub fn build_video_edl(project: &Project, sequence_id: Id) -> ExportResult<Vec<S
     }
 
     // por tramo, resolver el clip visible (pista superior gana)
-    let registry = effects_registry();
+    let registry = ue_render::merge_registries(ue_render::core_registry(), extra_packs.to_vec());
     let mut segments: Vec<Segment> = vec![];
     for w in cuts.windows(2) {
         let (a, b) = (w[0], w[1]);

@@ -304,6 +304,7 @@ function EffectRow({
 function EffectsPanel({ clip }: { clip: Clip }) {
   const catalog = useStore((s) => s.effectsCatalog);
   const setClipEffects = useStore((s) => s.setClipEffects);
+  const reloadEffectPacks = useStore((s) => s.reloadEffectPacks);
 
   const update = (i: number, next: EffectInstance) => {
     const effects = clip.effects.map((e, k) => (k === i ? next : e));
@@ -319,7 +320,17 @@ function EffectsPanel({ clip }: { clip: Clip }) {
   };
 
   return (
-    <Section title="Efectos">
+    <section className="border-b border-line-soft px-3 py-3">
+      <div className="mb-2 flex items-center justify-between">
+        <h3 className="panel-eyebrow">Efectos</h3>
+        <button
+          className="focus-ring rounded px-1.5 text-[11px] text-ink-faint hover:text-ink"
+          onClick={() => void reloadEffectPacks()}
+          title="Recargar packs de efectos desde disco"
+        >
+          ↻ packs
+        </button>
+      </div>
       <div className="space-y-1.5">
         {clip.effects.map((e, i) => (
           <EffectRow
@@ -344,7 +355,7 @@ function EffectsPanel({ clip }: { clip: Clip }) {
           ))}
         </select>
       </div>
-    </Section>
+    </section>
   );
 }
 

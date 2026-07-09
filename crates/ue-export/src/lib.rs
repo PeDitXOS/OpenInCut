@@ -46,11 +46,19 @@ pub struct ExportSettings {
     pub crf: u8,
     pub preset: String,
     pub audio_bitrate_k: u32,
+    /// Packs de efectos de usuario (se fusionan sobre los core).
+    pub extra_packs: Vec<ue_render::EffectDef>,
 }
 
 impl Default for ExportSettings {
     fn default() -> Self {
-        Self { max_height: None, crf: 18, preset: "veryfast".into(), audio_bitrate_k: 256 }
+        Self {
+            max_height: None,
+            crf: 18,
+            preset: "veryfast".into(),
+            audio_bitrate_k: 256,
+            extra_packs: vec![],
+        }
     }
 }
 

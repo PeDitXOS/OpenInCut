@@ -146,6 +146,9 @@ export class TauriEngine implements EngineClient {
   getEffectsCatalog(): Promise<EffectDef[]> {
     return invoke("get_effects_catalog");
   }
+  reloadEffectPacks(): Promise<{ catalog: EffectDef[]; errors: string[]; dir: string | null }> {
+    return invoke("reload_effect_packs");
+  }
   setClipEffects(clipId: Id, effects: EffectInstance[]): Promise<StateSnapshot> {
     return invoke("set_clip_effects", { clipId, effects });
   }

@@ -74,6 +74,44 @@ pub fn find_effect<'a>(registry: &'a [EffectDef], id: &str) -> Option<&'a Effect
     registry.iter().find(|d| d.id == id)
 }
 
+/// Carga packs de usuario: cada subcarpeta de `dir` con un manifest.json.
+/// Los manifests inválidos no rompen nada: se reportan como errores legibles.
+pub fn load_packs_from_dir(dir: &std::path::Path) -> (Vec<EffectDef>, Vec<String>) {
+    let mut defs = vec![];
+    let mut errors = vec![];
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return (defs, errors);
+    };
+    for entry in entries.flatten() {
+        let manifest = entry.path().join("manifest.json");
+        if !manifest.is_file() {
+            continue;
+        }
+        match std::fs::read_to_string(&manifest) {
+            Ok(s) => match serde_json::from_str::<EffectDef>(&s) {
+                Ok(d) => defs.push(d),
+                Err(e) => errors.push(format!("{}: {e}", manifest.display())),
+            },
+            Err(e) => errors.push(format!("{}: {e}", manifest.display())),
+        }
+    }
+    defs.sort_by(|a, b| a.id.cmp(&b.id));
+    (defs, errors)
+}
+
+/// core + usuario; en conflicto de id gana el pack de usuario.
+pub fn merge_registries(core: Vec<EffectDef>, user: Vec<EffectDef>) -> Vec<EffectDef> {
+    let mut out = core;
+    for u in user {
+        if let Some(slot) = out.iter_mut().find(|d| d.id == u.id) {
+            *slot = u;
+        } else {
+            out.push(u);
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Renderizado de la cadena ffmpeg (backend v0)
 // ---------------------------------------------------------------------------
@@ -260,6 +298,42 @@ mod tests {
         // color corrupto → default del manifest
         let bad = inst("core.chroma_key", &[], &[("key_color", "verde;rm -rf")]);
         assert!(render_effect(def, &bad).contains("color=0x00FF00"));
+    }
+
+    #[test]
+    fn user_packs_load_report_errors_and_override_core() {
+        let dir = std::env::temp_dir().join("ue-user-packs-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("vhs")).unwrap();
+        std::fs::create_dir_all(dir.join("roto")).unwrap();
+        std::fs::create_dir_all(dir.join("override")).unwrap();
+        std::fs::write(
+            dir.join("vhs/manifest.json"),
+            r#"{"id":"user.vhs","name":"VHS","ffmpeg":"noise=alls=20","params":[]}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("roto/manifest.json"), "{esto no es json").unwrap();
+        std::fs::write(
+            dir.join("override/manifest.json"),
+            r#"{"id":"core.gaussian_blur","name":"Blur custom","ffmpeg":"gblur=sigma=99","params":[]}"#,
+        )
+        .unwrap();
+
+        let (packs, errors) = load_packs_from_dir(&dir);
+        assert_eq!(packs.len(), 2);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("roto"));
+
+        let merged = merge_registries(core_registry(), packs);
+        assert!(find_effect(&merged, "user.vhs").is_some());
+        assert_eq!(
+            find_effect(&merged, "core.gaussian_blur").unwrap().name,
+            "Blur custom",
+            "el pack de usuario sobreescribe al core"
+        );
+        // dir inexistente → vacío sin error
+        let (empty, errs) = load_packs_from_dir(std::path::Path::new("/no/existe"));
+        assert!(empty.is_empty() && errs.is_empty());
     }
 
     #[test]

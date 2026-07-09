@@ -57,6 +57,7 @@ export interface UiState {
   effectsCatalog: EffectDef[];
   setClipEffects: (clipId: Id, effects: EffectInstance[]) => Promise<void>;
   setClipTransition: (clipId: Id, transition: TransitionRef | null) => Promise<void>;
+  reloadEffectPacks: () => Promise<void>;
   toggleTrack: (trackId: Id, prop: "muted" | "solo" | "locked") => Promise<void>;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
@@ -269,6 +270,20 @@ export const useStore = create<UiState>((set, get) => {
       run("Editar efectos", () => engine.setClipEffects(clipId, effects)),
     setClipTransition: (clipId, transition) =>
       run("Editar transición", () => engine.setClipTransition(clipId, transition)),
+
+    reloadEffectPacks: async () => {
+      try {
+        const r = await engine.reloadEffectPacks();
+        set({
+          effectsCatalog: r.catalog,
+          lastActionLabel: r.errors.length
+            ? `⚠ packs con errores: ${r.errors.join("; ")}`
+            : `Packs recargados (${r.catalog.length})${r.dir ? ` desde ${r.dir}` : ""}`,
+        });
+      } catch (e) {
+        set({ lastActionLabel: `⚠ ${e instanceof Error ? e.message : String(e)}` });
+      }
+    },
 
     toggleTrack: async (trackId, prop) => {
       // v0: solo el mock lo implementa; el backend real llegará con SetTrackProp

@@ -70,6 +70,8 @@ export interface EngineClient {
 
   // -- efectos modulares --
   getEffectsCatalog(): Promise<EffectDef[]>;
+  /** Recarga packs de usuario desde disco; devuelve el catálogo actualizado. */
+  reloadEffectPacks(): Promise<{ catalog: EffectDef[]; errors: string[]; dir: string | null }>;
   setClipEffects(clipId: Id, effects: EffectInstance[]): Promise<StateSnapshot>;
   setClipTransition(clipId: Id, transition: TransitionRef | null): Promise<StateSnapshot>;
 
