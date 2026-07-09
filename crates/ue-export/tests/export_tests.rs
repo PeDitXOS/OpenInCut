@@ -793,3 +793,98 @@ fn vertical_fill_export_has_blurred_background() {
     let (r, g, b) = pixel_at_w(&out, 1.0, 540, 960, 1080);
     assert!(r as u32 + g as u32 + b as u32 > 120, "centro con contenido: rgb({r},{g},{b})");
 }
+
+// ---------------------------------------------------------------------------
+// Avatar reactivo (movie+overlay por segmento)
+// ---------------------------------------------------------------------------
+
+/// Avatar con dos emociones (calm=azul, angry=rojo) sobre el video: la esquina
+/// inferior derecha muestra azul durante el segmento calm y rojo durante angry;
+/// el resto del frame sigue siendo el video base.
+#[test]
+fn avatar_overlay_switches_emotion_per_segment() {
+    let Some(dir) = media_dir() else { return };
+    for (name, color) in [("avatar_calm.mp4", "blue"), ("avatar_angry.mp4", "red")] {
+        let st = Command::new(ue_media::ffmpeg_bin())
+            .args(["-y", "-v", "error", "-f", "lavfi", "-i"])
+            .arg(format!("color=c={color}:s=160x120:d=2:r=24"))
+            .args(["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"])
+            .arg(dir.join(name))
+            .status()
+            .unwrap();
+        assert!(st.success());
+    }
+
+    let mut project = Project::new("avatar-test");
+    let seq_id = project.active_sequence;
+    let asset = ue_media::import_file(&dir.join("counter.mp4")).unwrap();
+    let aid = asset.id;
+    project.assets.push(asset);
+    // transcript con emociones ya clasificadas
+    project.transcripts.push(TranscriptDoc {
+        id: Id::new(),
+        asset_id: aid,
+        language: "es".into(),
+        model: "t".into(),
+        words: vec![],
+        segments: vec![
+            ue_core::model::Segment {
+                text: "tranquilo".into(),
+                start_us: 200_000,
+                end_us: 1_800_000,
+                word_range: (0, 0),
+                emotion: Some("calm".into()),
+                volume_rms: 1.0,
+            },
+            ue_core::model::Segment {
+                text: "enfadado".into(),
+                start_us: 2_200_000,
+                end_us: 3_800_000,
+                word_range: (0, 0),
+                emotion: Some("angry".into()),
+                volume_rms: 1.5,
+            },
+        ],
+        global_avg_volume: 1.2,
+    });
+    let seq = project.sequence_mut(seq_id).unwrap();
+    seq.tracks.push(Track::new(TrackKind::Video, "V2"));
+    let v2 = seq.tracks.last().unwrap().id;
+    let v1 = seq
+        .tracks
+        .iter()
+        .find(|t| t.kind == TrackKind::Video && t.name == "V1")
+        .unwrap()
+        .id;
+    let mut store = ProjectStore::new(project);
+    store.insert_clip(v1, Clip::new_media(aid, 0, 4 * SEC, 0), InsertMode::Strict).unwrap();
+    let mut avatars = std::collections::BTreeMap::new();
+    avatars.insert("calm".to_string(), dir.join("avatar_calm.mp4").to_string_lossy().into_owned());
+    avatars.insert("angry".to_string(), dir.join("avatar_angry.mp4").to_string_lossy().into_owned());
+    let avatar = Clip {
+        id: Id::new(),
+        payload: ClipPayload::Avatar { driver_asset: aid, avatars, shake_factor: 1.0, scale: 0.3 },
+        start: 0,
+        duration: 4 * SEC,
+        speed: 1.0,
+        effects: vec![],
+        transform: Default::default(),
+        audio: Default::default(),
+        transition_in: None,
+        label_color: None,
+    };
+    store.insert_clip(v2, avatar, InsertMode::Strict).unwrap();
+
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-avatar-out.mp4");
+    export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+
+    // avatar: aw=576, x∈[1320,1896], alto=432 → y∈[624,1056]; muestrear el centro
+    let sample = |t: f64| pixel_at(&out, t, 1600, 850);
+    let (r, g, b) = sample(1.0); // calm → azul
+    assert!(b > 120 && r < 90, "calm=azul en t=1: rgb({r},{g},{b})");
+    let (r, g, b) = sample(3.0); // angry → rojo
+    assert!(r > 120 && b < 90, "angry=rojo en t=3: rgb({r},{g},{b})");
+    // fuera del avatar el video base sigue visible (testsrc: no negro)
+    let (r, g, b) = pixel_at(&out, 1.0, 400, 300);
+    assert!(r as u32 + g as u32 + b as u32 > 100, "el video base sigue debajo");
+}

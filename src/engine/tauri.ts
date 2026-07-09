@@ -178,6 +178,18 @@ export class TauriEngine implements EngineClient {
     return invoke("cut_ranges", { sequenceId, ranges, ripple });
   }
 
+  addAvatarClip(clipId: Id, configPath: string): Promise<StateSnapshot> {
+    return invoke("add_avatar_clip", { clipId, configPath });
+  }
+  async pickAvatarConfig(): Promise<string | null> {
+    const picked = await open({
+      title: "Config de avatares (config.json del toolkit)",
+      multiple: false,
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    return typeof picked === "string" ? picked : null;
+  }
+
   generateVertical(): Promise<StateSnapshot> {
     return invoke("generate_vertical");
   }

@@ -70,6 +70,7 @@ function ClipInspector({ clip }: { clip: Clip }) {
   const setClipTransform = useStore((s) => s.setClipTransform);
   const removeSilences = useStore((s) => s.removeSilences);
   const addSubtitlesClip = useStore((s) => s.addSubtitlesClip);
+  const addAvatarClip = useStore((s) => s.addAvatarClip);
   const fps = activeSequence(project).fps;
 
   const asset =
@@ -192,13 +193,22 @@ function ClipInspector({ clip }: { clip: Clip }) {
             🔇 Eliminar silencios del clip
           </button>
           {asset.transcript && (
-            <button
-              className="focus-ring mt-1.5 w-full rounded-md border border-line bg-bg2 px-2.5 py-2 text-[12px] text-ink hover:bg-bg3"
-              onClick={() => void addSubtitlesClip(clip.id)}
-              title="Crea un clip de subtítulos automáticos (por frases) sobre este clip"
-            >
-              💬 Subtítulos automáticos
-            </button>
+            <>
+              <button
+                className="focus-ring mt-1.5 w-full rounded-md border border-line bg-bg2 px-2.5 py-2 text-[12px] text-ink hover:bg-bg3"
+                onClick={() => void addSubtitlesClip(clip.id)}
+                title="Crea un clip de subtítulos automáticos (por frases) sobre este clip"
+              >
+                💬 Subtítulos automáticos
+              </button>
+              <button
+                className="focus-ring mt-1.5 w-full rounded-md border border-line bg-bg2 px-2.5 py-2 text-[12px] text-ink hover:bg-bg3"
+                onClick={() => void addAvatarClip(clip.id)}
+                title="Avatar reactivo por emociones (elige el config.json de tus avatares, compatible con el toolkit)"
+              >
+                🧑‍🎤 Avatar reactivo…
+              </button>
+            </>
           )}
         </Section>
       )}

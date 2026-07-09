@@ -147,7 +147,7 @@ function drawClip(
   selected: boolean,
   ghost: boolean,
 ) {
-  const isText = clip.payload.type === "text" || clip.payload.type === "subtitles";
+  const isText = ["text", "subtitles", "avatar"].includes(clip.payload.type);
   const isAudio = track.kind === "audio";
   const base = isText ? COLORS.clipText : isAudio ? COLORS.clipAudio : COLORS.clipVideo;
   const hi = isText ? COLORS.clipTextHi : isAudio ? COLORS.clipAudioHi : COLORS.clipVideoHi;

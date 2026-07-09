@@ -91,6 +91,10 @@ export interface EngineClient {
     ripple: boolean,
   ): Promise<StateSnapshot>;
 
+  /** Crea un clip de Avatar sobre un clip transcrito, desde un config.json del toolkit. */
+  addAvatarClip(clipId: Id, configPath: string): Promise<StateSnapshot>;
+  pickAvatarConfig(): Promise<string | null>;
+
   /** Genera la secuencia vertical 1080x1920 (fondo desenfocado) y la activa. */
   generateVertical(): Promise<StateSnapshot>;
   setActiveSequence(sequenceId: Id): Promise<StateSnapshot>;

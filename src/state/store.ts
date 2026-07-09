@@ -65,6 +65,7 @@ export interface UiState {
   transcribeAsset: (assetId: Id) => Promise<void>;
   addSubtitlesClip: (clipId: Id) => Promise<void>;
   generateVertical: () => Promise<void>;
+  addAvatarClip: (clipId: Id) => Promise<void>;
   setActiveSequence: (sequenceId: Id) => Promise<void>;
   cutTimelineRanges: (ranges: [TimeUs, TimeUs][]) => Promise<void>;
   setClipText: (clipId: Id, content: string, style: TextStyle) => Promise<void>;
@@ -296,6 +297,16 @@ export const useStore = create<UiState>((set, get) => {
     },
 
     generateVertical: () => run("Generar vertical", () => engine.generateVertical()),
+
+    addAvatarClip: async (clipId) => {
+      const path = await engine.pickAvatarConfig();
+      if (!path) {
+        if (engine.kind === "mock")
+          set({ lastActionLabel: "⚠ El avatar requiere la app de escritorio (npx tauri dev)" });
+        return;
+      }
+      await run("Añadir avatar", () => engine.addAvatarClip(clipId, path));
+    },
     setActiveSequence: (sequenceId) =>
       run("Cambiar secuencia", () => engine.setActiveSequence(sequenceId)),
 

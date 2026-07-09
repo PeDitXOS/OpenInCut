@@ -663,6 +663,98 @@ fn add_subtitles_clip(state: State<AppState>, clip_id: String) -> Res<StateSnaps
     Ok(snapshot(&store))
 }
 
+/// Crea un clip de Avatar sobre un clip de media transcrito, a partir de un
+/// config.json compatible con el avatar_config del Youtubers-toolkit.
+/// Clasifica emociones (API OpenAI-compatible si hay OPENAI_API_KEY, si no
+/// heurística offline) y mide volúmenes por segmento.
+#[tauri::command]
+fn add_avatar_clip(state: State<AppState>, clip_id: String, config_path: String) -> Res<StateSnapshot> {
+    use ue_core::model::ClipPayload;
+    let id = parse_id(&clip_id)?;
+
+    // 1. parsear config del toolkit
+    let raw = std::fs::read_to_string(&config_path).map_err(|e| e.to_string())?;
+    let cfg: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    let base = Path::new(&config_path).parent().unwrap_or(Path::new("."));
+    let mut avatars = std::collections::BTreeMap::new();
+    for (emotion, p) in cfg
+        .get("avatars")
+        .and_then(|v| v.as_object())
+        .ok_or("config sin mapa 'avatars'")?
+    {
+        let path = p.as_str().ok_or("ruta de avatar inválida")?;
+        let abs = {
+            let pp = Path::new(path);
+            if pp.is_absolute() { pp.to_path_buf() } else { base.join(pp.file_name().unwrap_or_default()) }
+        };
+        // el config del toolkit usa rutas tipo "avatar_config/x.mp4": probar tal cual y por basename
+        let candidate = if abs.exists() { abs } else { base.join(path) };
+        if candidate.exists() {
+            avatars.insert(emotion.clone(), candidate.to_string_lossy().into_owned());
+        }
+    }
+    if avatars.is_empty() {
+        return Err("ningún archivo de avatar del config existe en disco".into());
+    }
+    let shake_factor = cfg.get("shake_factor").and_then(|v| v.as_f64()).unwrap_or(1.0);
+
+    let mut store = state.store.lock().unwrap();
+    let media = store.project.clip(id).ok_or("clip no encontrado")?.clone();
+    let ClipPayload::Media { asset_id, .. } = media.payload else {
+        return Err("el clip no es de media".into());
+    };
+    let conform = store
+        .project
+        .asset(asset_id)
+        .and_then(|a| a.audio_conform.clone())
+        .ok_or("el audio aún se está preparando (conformado)")?;
+
+    // 2. análisis: volúmenes + emociones sobre el transcript existente
+    {
+        let doc = store
+            .project
+            .transcripts
+            .iter_mut()
+            .find(|t| t.asset_id == asset_id)
+            .ok_or("el medio no tiene transcripción; transcríbelo primero (botón T)")?;
+        let wav = ue_audio::wav::WavMap::open(Path::new(&conform)).map_err(|e| e.to_string())?;
+        ue_ai::emotion::measure_volumes(doc, &wav);
+        let api = ue_ai::emotion::ApiConfig::from_env();
+        ue_ai::emotion::classify_segments(doc, &avatars, api.as_ref());
+        store.version += 1;
+    }
+
+    // 3. clip Avatar en la pista superior
+    let seq_id = store.project.active_sequence;
+    let seq = store.project.sequence(seq_id).ok_or("sin secuencia")?;
+    let track = seq
+        .tracks
+        .iter()
+        .rev()
+        .find(|t| t.kind == TrackKind::Video && !t.locked && !t.collides(media.start, media.duration, None))
+        .ok_or("no hay pista de video libre en ese rango (añade una pista)")?;
+    let track_id = track.id;
+    let clip = Clip {
+        id: Id::new(),
+        payload: ClipPayload::Avatar {
+            driver_asset: asset_id,
+            avatars,
+            shake_factor,
+            scale: 0.3,
+        },
+        start: media.start,
+        duration: media.duration,
+        speed: 1.0,
+        effects: vec![],
+        transform: Default::default(),
+        audio: Default::default(),
+        transition_in: None,
+        label_color: None,
+    };
+    store.insert_clip(track_id, clip, InsertMode::Strict).map_err(|e| e.to_string())?;
+    Ok(snapshot(&store))
+}
+
 /// Transcribe un asset con Whisper (word-level) en segundo plano.
 /// Descarga el modelo ggml si hace falta. Al terminar emite state-changed.
 #[tauri::command]
@@ -986,6 +1078,7 @@ pub fn run() {
             add_subtitles_clip,
             generate_vertical,
             set_active_sequence,
+            add_avatar_clip,
             export_video,
             cancel_export,
             playback_play,

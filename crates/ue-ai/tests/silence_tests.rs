@@ -104,3 +104,54 @@ fn maps_to_timeline_with_clip_offsets() {
     assert!((10 * SEC..=10 * SEC + 400_000).contains(&s), "inicio en timeline: {s}");
     assert!((10_800_000..=11_300_000).contains(&e), "fin en timeline: {e}");
 }
+
+// ---------------------------------------------------------------------------
+// Emociones (avatar)
+// ---------------------------------------------------------------------------
+
+use ue_ai::emotion::{classify_heuristic, measure_volumes};
+
+#[test]
+fn volumes_measured_per_segment_and_heuristic_classifies() {
+    // WAV: 1s fuerte + 1s flojo
+    let path = write_pattern("emovol.wav", &[(1000, 0.6), (1000, 0.05)]);
+    let wav = WavMap::open(&path).unwrap();
+    let mut doc = ue_core::model::TranscriptDoc {
+        id: ue_core::model::Id::new(),
+        asset_id: ue_core::model::Id::new(),
+        language: "es".into(),
+        model: "t".into(),
+        words: vec![],
+        segments: vec![
+            ue_core::model::Segment {
+                text: "GRITO".into(),
+                start_us: 0,
+                end_us: 900_000,
+                word_range: (0, 1),
+                emotion: None,
+                volume_rms: 0.0,
+            },
+            ue_core::model::Segment {
+                text: "susurro".into(),
+                start_us: 1_100_000,
+                end_us: 1_900_000,
+                word_range: (1, 2),
+                emotion: None,
+                volume_rms: 0.0,
+            },
+        ],
+        global_avg_volume: 0.0,
+    };
+    measure_volumes(&mut doc, &wav);
+    assert!(doc.segments[0].volume_rms > doc.segments[1].volume_rms * 3.0,
+        "el grito suena mucho más: {} vs {}", doc.segments[0].volume_rms, doc.segments[1].volume_rms);
+    assert!(doc.global_avg_volume > 0.0);
+
+    let labels = vec!["calm".to_string(), "angry".to_string(), "sad".to_string()];
+    let avg = doc.global_avg_volume;
+    assert_eq!(classify_heuristic(doc.segments[0].volume_rms, avg, 2.0, &labels), "angry");
+    assert_eq!(classify_heuristic(doc.segments[1].volume_rms, avg, 2.0, &labels), "sad");
+    // sin coincidencias esperadas → cae a la primera disponible
+    let weird = vec!["zorro".to_string()];
+    assert_eq!(classify_heuristic(1.0, 1.0, 2.0, &weird), "zorro");
+}

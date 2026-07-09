@@ -366,6 +366,17 @@ pub enum ClipPayload {
     Solid {
         color: [f32; 4],
     },
+    /// Avatar reactivo (PLAN §7.E.1): clips en loop por emoción, guiados por
+    /// el transcript del asset conductor. Config compatible con el
+    /// avatar_config/config.json del Youtubers-toolkit.
+    Avatar {
+        driver_asset: Id,
+        /// emoción → ruta del video del avatar (la primera es la default)
+        avatars: std::collections::BTreeMap<String, String>,
+        shake_factor: f64,
+        /// escala del avatar relativa al ancho de la secuencia (0..1)
+        scale: f64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

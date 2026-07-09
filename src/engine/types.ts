@@ -115,7 +115,14 @@ export type ClipPayload =
   | { type: "media"; asset_id: Id; src_in: TimeUs; src_out: TimeUs }
   | { type: "text"; content: string; style: TextStyle }
   | { type: "subtitles"; transcript_id: Id; style: TextStyle; mode: SubtitleMode }
-  | { type: "solid"; color: [number, number, number, number] };
+  | { type: "solid"; color: [number, number, number, number] }
+  | {
+      type: "avatar";
+      driver_asset: Id;
+      avatars: Record<string, string>;
+      shake_factor: number;
+      scale: number;
+    };
 
 export interface Transform2D {
   position: [Param, Param];
@@ -354,6 +361,8 @@ export function clipDisplayName(clip: Clip, project: Project): string {
       return "Subtítulos";
     case "solid":
       return "Color";
+    case "avatar":
+      return "Avatar";
   }
 }
 

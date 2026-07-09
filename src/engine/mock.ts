@@ -333,6 +333,13 @@ export class MockEngine implements EngineClient {
     throw new Error("La edición por texto requiere la app de escritorio (npx tauri dev)");
   }
 
+  async addAvatarClip(): Promise<StateSnapshot> {
+    throw new Error("El avatar requiere la app de escritorio (npx tauri dev)");
+  }
+  async pickAvatarConfig(): Promise<string | null> {
+    return null;
+  }
+
   async generateVertical(): Promise<StateSnapshot> {
     return this.transaction("Generar vertical", () => {
       const src = this.sequence;
