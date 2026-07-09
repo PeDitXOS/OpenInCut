@@ -35,8 +35,15 @@ pub fn resolve_top_video(project: &Project, sequence_id: Id, t_us: TimeUs) -> Op
                     let asset = project.asset(*asset_id)?;
                     let src_t = *src_in
                         + ((t_us - clip.start) as f64 * clip.speed).round() as TimeUs;
+                    // preview: preferir el proxy (más ligero de decodificar);
+                    // el export usa siempre el original
+                    let path = asset
+                        .proxy
+                        .clone()
+                        .filter(|p| Path::new(p).exists())
+                        .unwrap_or_else(|| asset.path.clone());
                     return Some(ResolvedFrame {
-                        asset_path: asset.path.clone(),
+                        asset_path: path,
                         src_t_us: src_t,
                         effects: clip.effects.clone(),
                         transform: clip.transform.clone(),

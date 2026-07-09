@@ -237,3 +237,44 @@ fn thumb_strip_generates_tiled_jpeg() {
     let m2 = std::fs::metadata(&again.path).unwrap().modified().unwrap();
     assert_eq!(m1, m2, "no regenera si ya existe");
 }
+
+#[test]
+fn proxy_generates_light_h264_and_preview_prefers_it() {
+    let Some(dir) = demo_dir() else { return };
+    let cache = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-proxy-cache");
+    let src = dir.join("video_a.mp4");
+    let proxy = ue_media::proxy::generate_proxy(&src, &cache, "hash-proxy-test").unwrap();
+    assert!(proxy.exists());
+    let (kind, info) = ue_media::probe::probe(&proxy).unwrap();
+    assert_eq!(kind, MediaKind::Video);
+    assert!(info.width <= ue_media::proxy::PROXY_MAX_W, "ancho {} ≤ 960", info.width);
+    assert_eq!(info.audio_channels, 0, "el proxy va sin audio");
+
+    // resolve_top_video prefiere el proxy cuando existe
+    let mut project = Project::new("proxy-test");
+    let seq_id = project.active_sequence;
+    let mut asset = import_file(&src).unwrap();
+    asset.proxy = Some(proxy.to_string_lossy().into_owned());
+    let asset_id = asset.id;
+    project.assets.push(asset);
+    let v1 = project
+        .sequence(seq_id)
+        .unwrap()
+        .tracks
+        .iter()
+        .find(|t| t.kind == TrackKind::Video)
+        .unwrap()
+        .id;
+    let mut store = ProjectStore::new(project);
+    store
+        .insert_clip(v1, Clip::new_media(asset_id, 0, 4 * SEC, 0), InsertMode::Strict)
+        .unwrap();
+    let resolved = resolve_top_video(&store.project, seq_id, 1 * SEC).unwrap();
+    assert_eq!(resolved.asset_path, proxy.to_string_lossy(), "preview usa el proxy");
+    // si el proxy no existe en disco, cae al original
+    let seq = store.project.sequences.first().unwrap().id;
+    let mut p2 = store.project.clone();
+    p2.assets[0].proxy = Some("/no/existe.mp4".into());
+    let r2 = resolve_top_video(&p2, seq, 1 * SEC).unwrap();
+    assert_eq!(r2.asset_path, src.to_string_lossy(), "proxy roto → original");
+}

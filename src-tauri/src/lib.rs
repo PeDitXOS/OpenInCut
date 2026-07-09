@@ -505,10 +505,11 @@ fn import_media(
             Ok(asset) => {
                 // re-import del mismo contenido → no duplicar
                 if !store.project.assets.iter().any(|a| a.content_hash == asset.content_hash) {
-                    if asset.probe.audio_channels > 0 {
-                        if let Some(cache) = &cache_dir {
+                    if let Some(cache) = &cache_dir {
+                        if asset.probe.audio_channels > 0 {
                             spawn_conform_job(&app, &asset, cache);
                         }
+                        spawn_proxy_job(&app, &asset, cache);
                     }
                     store.project.assets.push(asset);
                 }
@@ -546,6 +547,38 @@ fn spawn_conform_job(app: &tauri::AppHandle, asset: &ue_core::model::MediaAsset,
                 let _ = app.emit("state-changed", ());
             }
             Err(e) => eprintln!("[conform] {src:?}: {e}"),
+        }
+    });
+}
+
+/// Genera el proxy de preview en segundo plano para videos grandes.
+fn spawn_proxy_job(app: &tauri::AppHandle, asset: &ue_core::model::MediaAsset, cache: &Path) {
+    // solo vale la pena si el original es más ancho que el proxy
+    if asset.kind != ue_core::model::MediaKind::Video
+        || asset.probe.width <= ue_media::proxy::PROXY_MAX_W
+    {
+        return;
+    }
+    let app = app.clone();
+    let asset_id = asset.id;
+    let src = PathBuf::from(&asset.path);
+    let cache = cache.to_path_buf();
+    let hash = asset.content_hash.clone();
+    std::thread::spawn(move || {
+        match ue_media::proxy::generate_proxy(&src, &cache, &hash) {
+            Ok(out) => {
+                let state = app.state::<AppState>();
+                {
+                    let mut store = state.store.lock().unwrap();
+                    if let Some(a) = store.project.assets.iter_mut().find(|a| a.id == asset_id) {
+                        a.proxy = Some(out.to_string_lossy().into_owned());
+                    }
+                    store.version += 1;
+                }
+                // el FrameService detecta el cambio de ruta y reabre la sesión
+                let _ = app.emit("state-changed", ());
+            }
+            Err(e) => eprintln!("[proxy] {src:?}: {e}"),
         }
     });
 }
@@ -1402,6 +1435,12 @@ fn open_project(
             } else if !asset.offline && asset.probe.audio_channels > 0 {
                 spawn_conform_job(&app, asset, cache);
             }
+            let proxy = cache.join(format!("{}.proxy.mp4", asset.content_hash));
+            if proxy.exists() {
+                asset.proxy = Some(proxy.to_string_lossy().into_owned());
+            } else if !asset.offline {
+                spawn_proxy_job(&app, asset, cache);
+            }
         }
     }
     let mut store = state.store.lock().unwrap();
@@ -1433,11 +1472,13 @@ fn relink_asset(
     asset.probe = fresh.probe;
     asset.offline = false;
     asset.audio_conform = None;
+    asset.proxy = None;
     let asset_snapshot = asset.clone();
-    if asset_snapshot.probe.audio_channels > 0 {
-        if let Some(cache) = &cache_dir {
+    if let Some(cache) = &cache_dir {
+        if asset_snapshot.probe.audio_channels > 0 {
             spawn_conform_job(&app, &asset_snapshot, cache);
         }
+        spawn_proxy_job(&app, &asset_snapshot, cache);
     }
     store.version += 1;
     store.dirty = true;
