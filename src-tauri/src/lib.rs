@@ -22,6 +22,12 @@ pub struct AppState {
     pub cache_dir: Mutex<Option<PathBuf>>,
     pub player: Mutex<Option<Player>>,
     pub frames: Mutex<Option<FrameService>>,
+    pub export_cancel: Arc<AtomicBool>,
+}
+
+fn effects_registry() -> &'static Vec<ue_render::EffectDef> {
+    static REG: std::sync::OnceLock<Vec<ue_render::EffectDef>> = std::sync::OnceLock::new();
+    REG.get_or_init(ue_render::core_registry)
 }
 
 /// Servicio de frames de reproducción: un hilo sigue al reloj de audio con una
@@ -36,6 +42,7 @@ const PLAYBACK_MAX_W: u32 = 960;
 
 fn frame_service_loop(app: tauri::AppHandle, latest: Arc<Mutex<Vec<u8>>>, running: Arc<AtomicBool>) {
     let mut session: Option<MjpegSession> = None;
+    let mut session_vf: Option<String> = None;
     while running.load(Ordering::SeqCst) {
         let state = app.state::<AppState>();
         let (t, playing) = {
@@ -64,15 +71,20 @@ fn frame_service_loop(app: tauri::AppHandle, latest: Arc<Mutex<Vec<u8>>>, runnin
         };
         let path = PathBuf::from(&r.asset_path);
         let src_t = r.src_t_us;
+        let vf = ue_render::render_chain(effects_registry(), &r.effects);
 
-        // ¿sirve la sesión actual? (mismo archivo, posición alcanzable hacia delante)
+        // ¿sirve la sesión actual? (mismo archivo, misma cadena de efectos,
+        // posición alcanzable hacia delante)
         let reusable = session.as_ref().is_some_and(|s| {
             s.asset_path == path
+                && session_vf == vf
                 && src_t >= s.next_src_us() - 1_000_000 / PLAYBACK_FPS as i64
                 && src_t <= s.next_src_us() + 1_500_000
         });
         if !reusable {
-            session = MjpegSession::open(&path, src_t, PLAYBACK_MAX_W, PLAYBACK_FPS).ok();
+            session =
+                MjpegSession::open(&path, src_t, PLAYBACK_MAX_W, PLAYBACK_FPS, vf.as_deref()).ok();
+            session_vf = vf;
         }
         if let Some(s) = session.as_mut() {
             let mut newest: Option<Vec<u8>> = None;
@@ -448,15 +460,49 @@ fn render_frame(
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
         (store.project.clone(), store.project.active_sequence, base)
     }; // soltar el lock antes de invocar ffmpeg
-    let bytes = ue_media::frame::render_frame(&project, seq_id, t_us, max_width, &base_dir)
-        .map_err(|e| e.to_string())?
-        .unwrap_or_default();
+    let vf = ue_media::frame::resolve_top_video(&project, seq_id, t_us)
+        .and_then(|r| ue_render::render_chain(effects_registry(), &r.effects));
+    let bytes =
+        ue_media::frame::render_frame(&project, seq_id, t_us, max_width, &base_dir, vf.as_deref())
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default();
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+/// Catálogo de efectos disponibles (para la UI y MCP).
+#[tauri::command]
+fn get_effects_catalog() -> serde_json::Value {
+    ue_render::catalog_json(effects_registry())
+}
+
+#[tauri::command]
+fn set_clip_effects(
+    state: State<AppState>,
+    clip_id: String,
+    effects: Vec<ue_core::model::EffectInstance>,
+) -> Res<StateSnapshot> {
+    let mut store = state.store.lock().unwrap();
+    let id = parse_id(&clip_id)?;
+    store
+        .dispatch(
+            "Editar efectos",
+            vec![ue_core::Action::SetClipEffects { clip_id: id, effects }],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(snapshot(&store))
+}
+
+#[tauri::command]
+fn cancel_export(state: State<AppState>) -> Res<()> {
+    state.export_cancel.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
 /// Exporta la secuencia activa a MP4 (bloqueante en un hilo aparte).
+/// Emite eventos `export-progress` (0..1); `cancel_export` la aborta.
 #[tauri::command]
 async fn export_video(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     path: String,
     max_height: Option<u32>,
@@ -472,11 +518,23 @@ async fn export_video(
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
         (store.project.clone(), store.project.active_sequence, base)
     };
+    let cancel = state.export_cancel.clone();
+    cancel.store(false, Ordering::SeqCst);
     let out = PathBuf::from(&path);
     let settings = ue_export::ExportSettings { max_height, ..Default::default() };
     tauri::async_runtime::spawn_blocking(move || {
-        ue_export::export_sequence(&project, seq_id, &base_dir, &out, &settings)
-            .map_err(|e| e.to_string())
+        ue_export::export_sequence_with_progress(
+            &project,
+            seq_id,
+            &base_dir,
+            &out,
+            &settings,
+            |p| {
+                let _ = app.emit("export-progress", p);
+            },
+            &cancel,
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -530,6 +588,7 @@ pub fn run() {
         cache_dir: Mutex::new(None),
         player: Mutex::new(None),
         frames: Mutex::new(None),
+        export_cancel: Arc::new(AtomicBool::new(false)),
     };
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -556,7 +615,10 @@ pub fn run() {
             import_media,
             add_clip,
             render_frame,
+            get_effects_catalog,
+            set_clip_effects,
             export_video,
+            cancel_export,
             playback_play,
             playback_pause,
             playback_seek,

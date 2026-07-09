@@ -493,6 +493,9 @@ pub struct EffectInstance {
     pub enabled: bool,
     #[serde(default)]
     pub params: std::collections::BTreeMap<String, Param>,
+    /// Parámetros de color ("#rrggbb"), separados de los numéricos/curvas.
+    #[serde(default)]
+    pub color_params: std::collections::BTreeMap<String, String>,
 }
 
 fn default_true() -> bool {

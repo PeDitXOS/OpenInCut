@@ -1,0 +1,13 @@
+{
+  "id": "core.chroma_key",
+  "name": "Chroma Key",
+  "category": "keying",
+  "params": [
+    { "key": "key_color", "label": "Color clave", "type": "color", "default": "#00ff00" },
+    { "key": "similarity", "label": "Similitud", "type": "float", "default": 0.3, "min": 0.01, "max": 1.0 },
+    { "key": "blend", "label": "Suavizado", "type": "float", "default": 0.1, "min": 0.0, "max": 0.5 },
+    { "key": "despill", "label": "Anti-spill", "type": "float", "default": 0.6, "min": 0.0, "max": 1.0 }
+  ],
+  "ffmpeg": "chromakey=color={key_color}:similarity={similarity}:blend={blend},format=yuva444p,despill=type=green:mix={despill},premultiply=inplace=1",
+  "notes": "v0: la zona keyeada se compone sobre negro (premultiply). La composición real con la pista inferior llega con el motor wgpu."
+}

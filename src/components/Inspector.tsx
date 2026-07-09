@@ -1,5 +1,11 @@
-import type { Clip } from "../engine/types";
-import { activeSequence, assetName, isCurve, paramValue } from "../engine/types";
+import type { Clip, EffectDef, EffectInstance } from "../engine/types";
+import {
+  activeSequence,
+  assetName,
+  instantiateEffect,
+  isCurve,
+  paramValue,
+} from "../engine/types";
 import { usToDuration, usToTimecode } from "../lib/time";
 import { useStore } from "../state/store";
 
@@ -166,22 +172,131 @@ function ClipInspector({ clip }: { clip: Clip }) {
         </Section>
       )}
 
-      <Section title="Efectos">
-        {clip.effects.length === 0 ? (
-          <div className="rounded-md border border-dashed border-line px-2.5 py-3 text-center text-[11px] text-ink-faint">
-            Sin efectos. El sistema de packs llega en la Fase 2.
-          </div>
-        ) : (
-          <ul className="space-y-1 text-[12px]">
-            {clip.effects.map((e, i) => (
-              <li key={i} className="rounded bg-bg2 px-2 py-1">
-                {e.effect_id}
-              </li>
-            ))}
-          </ul>
-        )}
-      </Section>
+      <EffectsPanel clip={clip} />
     </>
+  );
+}
+
+function EffectRow({
+  inst,
+  def,
+  onChange,
+  onRemove,
+}: {
+  inst: EffectInstance;
+  def: EffectDef | undefined;
+  onChange: (next: EffectInstance) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-line bg-bg2 p-2">
+      <div className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          className="accent-(--color-accent)"
+          checked={inst.enabled}
+          onChange={(e) => onChange({ ...inst, enabled: e.target.checked })}
+          title="Activar/desactivar efecto"
+        />
+        <span className="flex-1 truncate text-[12px] font-medium text-ink">
+          {def?.name ?? inst.effect_id}
+        </span>
+        <button
+          className="focus-ring rounded px-1.5 text-[12px] text-ink-faint hover:text-danger"
+          onClick={onRemove}
+          title="Quitar efecto"
+        >
+          ✕
+        </button>
+      </div>
+      {def && (
+        <div className="mt-1.5 space-y-0.5">
+          {def.params.map((p) =>
+            p.type === "float" ? (
+              <Row key={p.key} label={p.label ?? p.key}>
+                <Slider
+                  value={
+                    inst.params[p.key] !== undefined
+                      ? paramValue(inst.params[p.key])
+                      : (p.default as number)
+                  }
+                  min={p.min ?? 0}
+                  max={p.max ?? 1}
+                  step={((p.max ?? 1) - (p.min ?? 0)) / 100}
+                  onChange={(v) =>
+                    onChange({ ...inst, params: { ...inst.params, [p.key]: v } })
+                  }
+                />
+              </Row>
+            ) : (
+              <Row key={p.key} label={p.label ?? p.key}>
+                <input
+                  type="color"
+                  className="h-6 w-10 cursor-pointer rounded border border-line bg-transparent"
+                  value={inst.color_params[p.key] ?? (p.default as string)}
+                  onChange={(e) =>
+                    onChange({
+                      ...inst,
+                      color_params: { ...inst.color_params, [p.key]: e.target.value },
+                    })
+                  }
+                />
+                <span className="font-[var(--font-mono)] text-[10px] text-ink-faint">
+                  {inst.color_params[p.key] ?? p.default}
+                </span>
+              </Row>
+            ),
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EffectsPanel({ clip }: { clip: Clip }) {
+  const catalog = useStore((s) => s.effectsCatalog);
+  const setClipEffects = useStore((s) => s.setClipEffects);
+
+  const update = (i: number, next: EffectInstance) => {
+    const effects = clip.effects.map((e, k) => (k === i ? next : e));
+    void setClipEffects(clip.id, effects);
+  };
+  const remove = (i: number) => {
+    void setClipEffects(clip.id, clip.effects.filter((_, k) => k !== i));
+  };
+  const add = (id: string) => {
+    const def = catalog.find((d) => d.id === id);
+    if (!def) return;
+    void setClipEffects(clip.id, [...clip.effects, instantiateEffect(def)]);
+  };
+
+  return (
+    <Section title="Efectos">
+      <div className="space-y-1.5">
+        {clip.effects.map((e, i) => (
+          <EffectRow
+            key={`${e.effect_id}-${i}`}
+            inst={e}
+            def={catalog.find((d) => d.id === e.effect_id)}
+            onChange={(next) => update(i, next)}
+            onRemove={() => remove(i)}
+          />
+        ))}
+        <select
+          className="focus-ring w-full cursor-pointer rounded-md border border-line bg-bg2 px-2 py-1.5 text-[12px] text-ink-dim"
+          value=""
+          onChange={(e) => e.target.value && add(e.target.value)}
+          title="Añadir un efecto al clip"
+        >
+          <option value="">+ Añadir efecto…</option>
+          {catalog.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.name}
+            </option>
+          ))}
+        </select>
+      </div>
+    </Section>
   );
 }
 

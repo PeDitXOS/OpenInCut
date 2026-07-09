@@ -10,6 +10,8 @@ import type { EngineClient } from "./client";
 import type {
   AudioProps,
   Clip,
+  EffectDef,
+  EffectInstance,
   Id,
   MediaAsset,
   Project,
@@ -293,6 +295,29 @@ export class MockEngine implements EngineClient {
   }
   async playbackFrame(): Promise<Uint8Array | null> {
     return null;
+  }
+
+  async getEffectsCatalog(): Promise<EffectDef[]> {
+    // los mismos manifests que embebe el backend (fuente única de verdad)
+    const manifests = await Promise.all([
+      import("../../effects/core/color_correct/manifest.json"),
+      import("../../effects/core/chroma_key/manifest.json"),
+      import("../../effects/core/gaussian_blur/manifest.json"),
+    ]);
+    return manifests.map((m) => m.default as unknown as EffectDef);
+  }
+
+  async setClipEffects(clipId: Id, effects: EffectInstance[]): Promise<StateSnapshot> {
+    return this.transaction("Editar efectos", () => {
+      const found = this.locate(clipId);
+      if (!found) throw new Error("clip no encontrado");
+      found.clip.effects = effects;
+    });
+  }
+
+  async cancelExport(): Promise<void> {}
+  async onExportProgress(): Promise<() => void> {
+    return () => {};
   }
 
   /** Ayuda para tests/pruebas: alterna props de pista. */

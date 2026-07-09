@@ -11,6 +11,8 @@ export function Header() {
   const exporting = useStore((s) => s.exporting);
   const saveProject = useStore((s) => s.saveProject);
   const openProject = useStore((s) => s.openProject);
+  const exportProgress = useStore((s) => s.exportProgress);
+  const cancelExport = useStore((s) => s.cancelExport);
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-3 border-b border-line bg-bg1 px-3">
@@ -76,13 +78,30 @@ export function Header() {
         MCP inactivo
       </span>
 
+      {exporting && (
+        <button
+          className="focus-ring rounded-md border border-line px-2 py-1.5 text-[12px] text-ink-dim hover:text-danger"
+          onClick={() => void cancelExport()}
+          title="Cancelar la exportación"
+        >
+          Cancelar
+        </button>
+      )}
       <button
-        className="focus-ring rounded-md bg-accent px-3.5 py-1.5 text-[12px] font-semibold text-bg0 enabled:hover:bg-accent-deep disabled:opacity-60"
+        className="focus-ring relative overflow-hidden rounded-md bg-accent px-3.5 py-1.5 text-[12px] font-semibold text-bg0 enabled:hover:bg-accent-deep disabled:opacity-80"
         onClick={() => void exportVideo()}
         disabled={exporting}
         title="Exportar la secuencia a MP4"
       >
-        {exporting ? "Exportando…" : "Exportar…"}
+        {exporting && (
+          <span
+            className="absolute inset-y-0 left-0 bg-accent-deep"
+            style={{ width: `${Math.round((exportProgress ?? 0) * 100)}%` }}
+          />
+        )}
+        <span className="relative">
+          {exporting ? `Exportando ${Math.round((exportProgress ?? 0) * 100)}%` : "Exportar…"}
+        </span>
       </button>
     </header>
   );

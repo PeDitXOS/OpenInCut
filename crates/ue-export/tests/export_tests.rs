@@ -5,11 +5,15 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use ue_core::model::*;
 use ue_core::ops::InsertMode;
 use ue_core::ProjectStore;
 use ue_export::edl::{build_video_edl, edl_duration, Segment};
-use ue_export::{export_sequence, ExportError, ExportSettings};
+use ue_export::{
+    export_sequence, export_sequence_with_progress, ExportError, ExportSettings,
+};
 
 const SEC: i64 = 1_000_000;
 
@@ -77,10 +81,10 @@ fn edl_with_gap_and_two_sources() {
     assert_eq!(
         edl,
         vec![
-            Segment::Source { asset_id: a, src_in: 1 * SEC, src_out: 3 * SEC },
-            Segment::Source { asset_id: b, src_in: 4 * SEC, src_out: 6 * SEC },
+            Segment::Source { asset_id: a, src_in: 1 * SEC, src_out: 3 * SEC, vf: None },
+            Segment::Source { asset_id: b, src_in: 4 * SEC, src_out: 6 * SEC, vf: None },
             Segment::Black { duration: 1 * SEC },
-            Segment::Source { asset_id: a, src_in: 8 * SEC, src_out: 9 * SEC },
+            Segment::Source { asset_id: a, src_in: 8 * SEC, src_out: 9 * SEC, vf: None },
         ]
     );
     assert_eq!(edl_duration(&edl), 6 * SEC);
@@ -97,9 +101,9 @@ fn edl_top_track_wins() {
     assert_eq!(
         edl,
         vec![
-            Segment::Source { asset_id: a, src_in: 0, src_out: 2 * SEC },
-            Segment::Source { asset_id: b, src_in: 0, src_out: 2 * SEC },
-            Segment::Source { asset_id: a, src_in: 4 * SEC, src_out: 6 * SEC },
+            Segment::Source { asset_id: a, src_in: 0, src_out: 2 * SEC, vf: None },
+            Segment::Source { asset_id: b, src_in: 0, src_out: 2 * SEC, vf: None },
+            Segment::Source { asset_id: a, src_in: 4 * SEC, src_out: 6 * SEC, vf: None },
         ]
     );
 }
@@ -113,7 +117,7 @@ fn edl_merges_contiguous_and_trims_trailing_black() {
     let edl = build_video_edl(&store.project, seq).unwrap();
     assert_eq!(
         edl,
-        vec![Segment::Source { asset_id: a, src_in: 1 * SEC, src_out: 5 * SEC }]
+        vec![Segment::Source { asset_id: a, src_in: 1 * SEC, src_out: 5 * SEC, vf: None }]
     );
 }
 
@@ -253,4 +257,184 @@ fn export_cut_and_reordered_timeline() {
         assert!(st.success());
     }
     eprintln!("export verificable en {} y frames en {}", out.display(), frames_dir.display());
+}
+
+// ---------------------------------------------------------------------------
+// Progreso, cancelación y efectos (chroma key de punta a punta)
+// ---------------------------------------------------------------------------
+
+/// Timeline mínimo listo para exportar sobre counter.mp4.
+fn simple_store(dir: &Path) -> (ProjectStore, Id) {
+    let mut project = Project::new("fx-test");
+    let seq_id = project.active_sequence;
+    let asset = ue_media::import_file(&dir.join("counter.mp4")).unwrap();
+    let asset_id = asset.id;
+    project.assets.push(asset);
+    let v1 = project
+        .sequence(seq_id)
+        .unwrap()
+        .tracks
+        .iter()
+        .find(|t| t.kind == TrackKind::Video)
+        .unwrap()
+        .id;
+    let mut store = ProjectStore::new(project);
+    store
+        .insert_clip(v1, Clip::new_media(asset_id, 0, 4 * SEC, 0), InsertMode::Strict)
+        .unwrap();
+    (store, seq_id)
+}
+
+#[test]
+fn export_reports_monotonic_progress() {
+    let Some(dir) = media_dir() else { return };
+    let (store, seq_id) = simple_store(dir);
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-progress-out.mp4");
+    let mut values: Vec<f32> = vec![];
+    let never = AtomicBool::new(false);
+    export_sequence_with_progress(
+        &store.project,
+        seq_id,
+        dir,
+        &out,
+        &ExportSettings::default(),
+        |p| values.push(p),
+        &never,
+    )
+    .unwrap();
+    assert!(!values.is_empty(), "hubo reportes de progreso");
+    assert!(values.windows(2).all(|w| w[0] <= w[1]), "monótono: {values:?}");
+    assert_eq!(*values.last().unwrap(), 1.0, "termina en 1.0");
+}
+
+#[test]
+fn export_cancellation_kills_and_cleans() {
+    let Some(dir) = media_dir() else { return };
+    let (store, seq_id) = simple_store(dir);
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-cancel-out.mp4");
+    let cancel = AtomicBool::new(true); // cancelado desde el arranque
+    let result = export_sequence_with_progress(
+        &store.project,
+        seq_id,
+        dir,
+        &out,
+        &ExportSettings::default(),
+        |_| {},
+        &cancel,
+    );
+    assert!(matches!(result, Err(ExportError::Cancelled)));
+    assert!(!out.exists(), "el parcial se borra al cancelar");
+}
+
+/// Lee el píxel RGB (x, y) del frame en `t` segundos de un video.
+fn pixel_at(video: &Path, t: f64, x: u32, y: u32) -> (u8, u8, u8) {
+    let out = Command::new(ue_media::ffmpeg_bin())
+        .args(["-v", "error", "-ss", &t.to_string(), "-i"])
+        .arg(video)
+        .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    // resolución de la secuencia por defecto: 1920x1080
+    let w = 1920usize;
+    let idx = (y as usize * w + x as usize) * 3;
+    (out.stdout[idx], out.stdout[idx + 1], out.stdout[idx + 2])
+}
+
+/// Chroma key de punta a punta: fondo verde con caja roja → export con el
+/// efecto → el verde desaparece (negro v0) y el rojo sobrevive.
+#[test]
+fn chroma_key_effect_applies_in_export() {
+    let Some(dir) = media_dir() else { return };
+    // fuente: fondo verde puro con caja roja centrada
+    let src = dir.join("greenscreen.mp4");
+    let st = Command::new(ue_media::ffmpeg_bin())
+        .args([
+            "-y", "-v", "error",
+            "-f", "lavfi", "-i",
+            "color=c=0x00FF00:s=640x360:d=2,drawbox=x=220:y=100:w=200:h=160:color=red:t=fill",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+        ])
+        .arg(&src)
+        .status()
+        .unwrap();
+    assert!(st.success());
+
+    let mut project = Project::new("chroma-test");
+    let seq_id = project.active_sequence;
+    let asset = ue_media::import_file(&src).unwrap();
+    let asset_id = asset.id;
+    project.assets.push(asset);
+    let v1 = project
+        .sequence(seq_id)
+        .unwrap()
+        .tracks
+        .iter()
+        .find(|t| t.kind == TrackKind::Video)
+        .unwrap()
+        .id;
+    let mut store = ProjectStore::new(project);
+    let mut clip = Clip::new_media(asset_id, 0, 2 * SEC, 0);
+    clip.effects.push(EffectInstance {
+        effect_id: "core.chroma_key".into(),
+        enabled: true,
+        params: [("similarity".to_string(), ue_core::keyframe::Param::Const(0.25))]
+            .into_iter()
+            .collect(),
+        color_params: [("key_color".to_string(), "#00ff00".to_string())]
+            .into_iter()
+            .collect(),
+    });
+    store.insert_clip(v1, clip, InsertMode::Strict).unwrap();
+
+    // la EDL lleva la cadena renderizada
+    let edl = build_video_edl(&store.project, seq_id).unwrap();
+    match &edl[0] {
+        Segment::Source { vf: Some(vf), .. } => {
+            assert!(vf.contains("chromakey=color=0x00FF00"), "cadena: {vf}");
+            assert!(vf.contains("despill"));
+        }
+        other => panic!("se esperaba Source con vf, fue {other:?}"),
+    }
+
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-chroma-out.mp4");
+    export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+
+    // El video fuente 640x360 se letterboxea a 1920x1080 (escala ×3):
+    // fondo verde en (100,540)→fuente(33,180); caja roja en (960,540)→fuente(320,180).
+    let (r, g, b) = pixel_at(&out, 1.0, 100, 540);
+    assert!(
+        r < 40 && g < 40 && b < 40,
+        "el fondo verde quedó keyeado (negro v0), fue rgb({r},{g},{b})"
+    );
+    let (r, g, b) = pixel_at(&out, 1.0, 960, 540);
+    assert!(
+        r > 150 && g < 90 && b < 90,
+        "la caja roja sobrevive al keying, fue rgb({r},{g},{b})"
+    );
+
+    // y sin el efecto, el fondo sigue verde (control)
+    let mut store2 = {
+        let mut project = Project::new("control");
+        let seq_id2 = project.active_sequence;
+        let asset = ue_media::import_file(&src).unwrap();
+        let aid = asset.id;
+        project.assets.push(asset);
+        let v1 = project
+            .sequence(seq_id2)
+            .unwrap()
+            .tracks
+            .iter()
+            .find(|t| t.kind == TrackKind::Video)
+            .unwrap()
+            .id;
+        let mut s = ProjectStore::new(project);
+        s.insert_clip(v1, Clip::new_media(aid, 0, 2 * SEC, 0), InsertMode::Strict).unwrap();
+        (s, seq_id2)
+    };
+    let out2 = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-chroma-control.mp4");
+    export_sequence(&store2.0.project, store2.1, dir, &out2, &ExportSettings::default()).unwrap();
+    let (r, g, _b) = pixel_at(&out2, 1.0, 100, 540);
+    assert!(g > 150 && r < 90, "control sin efecto: sigue verde");
+    let _ = &mut store2;
 }

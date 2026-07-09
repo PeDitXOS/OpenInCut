@@ -111,10 +111,14 @@ pub fn build_ffmpeg_args(
     for (k, seg) in edl.iter().enumerate() {
         let label = format!("v{k}");
         match seg {
-            Segment::Source { asset_id, src_in, src_out } => {
+            Segment::Source { asset_id, src_in, src_out, vf } => {
                 let idx = input_of(*asset_id, project);
+                let effects = match vf {
+                    Some(chain) => format!("{chain},"),
+                    None => String::new(),
+                };
                 fc.push(format!(
-                    "[{idx}:v]trim=start={}:end={},setpts=PTS-STARTPTS,{norm}[{label}]",
+                    "[{idx}:v]trim=start={}:end={},setpts=PTS-STARTPTS,{effects}{norm}[{label}]",
                     secs(*src_in),
                     secs(*src_out),
                 ));

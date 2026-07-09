@@ -5,7 +5,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use ue_core::model::{ClipPayload, Id, Project, TrackKind};
+use ue_core::model::{ClipPayload, EffectInstance, Id, Project, TrackKind};
 use ue_core::TimeUs;
 
 use crate::{ffmpeg_bin, MediaError, MediaResult};
@@ -15,6 +15,8 @@ use crate::{ffmpeg_bin, MediaError, MediaResult};
 pub struct ResolvedFrame {
     pub asset_path: String,
     pub src_t_us: TimeUs,
+    /// Efectos del clip resuelto (la capa superior decide qué cadena aplicar).
+    pub effects: Vec<EffectInstance>,
 }
 
 /// Resuelve qué asset y qué instante fuente corresponden al tiempo `t_us`
@@ -35,6 +37,7 @@ pub fn resolve_top_video(project: &Project, sequence_id: Id, t_us: TimeUs) -> Op
                     return Some(ResolvedFrame {
                         asset_path: asset.path.clone(),
                         src_t_us: src_t,
+                        effects: clip.effects.clone(),
                     });
                 }
             }
@@ -45,12 +48,14 @@ pub fn resolve_top_video(project: &Project, sequence_id: Id, t_us: TimeUs) -> Op
 
 /// Extrae un frame JPEG del tiempo `t_us` de la secuencia. `None` si no hay
 /// clip de video activo. `base_dir` resuelve rutas relativas de assets.
+/// `extra_vf` es la cadena de efectos del clip (se aplica antes del reescalado).
 pub fn render_frame(
     project: &Project,
     sequence_id: Id,
     t_us: TimeUs,
     max_width: u32,
     base_dir: &Path,
+    extra_vf: Option<&str>,
 ) -> MediaResult<Option<Vec<u8>>> {
     let Some(resolved) = resolve_top_video(project, sequence_id, t_us) else {
         return Ok(None);
@@ -60,7 +65,11 @@ pub fn render_frame(
         if p.is_absolute() { p.to_path_buf() } else { base_dir.join(p) }
     };
     let ss = format!("{:.6}", resolved.src_t_us as f64 / 1_000_000.0);
-    let vf = format!("scale='min({max_width},iw)':-2");
+    let scale = format!("scale='min({max_width},iw)':-2");
+    let vf = match extra_vf {
+        Some(chain) if !chain.is_empty() => format!("{chain},{scale}"),
+        _ => scale,
+    };
     let out = Command::new(ffmpeg_bin())
         .args(["-v", "error", "-ss", &ss, "-i"])
         .arg(&path)

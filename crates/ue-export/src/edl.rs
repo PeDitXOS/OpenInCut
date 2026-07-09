@@ -10,7 +10,13 @@ use crate::{ExportError, ExportResult};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Segment {
-    Source { asset_id: Id, src_in: TimeUs, src_out: TimeUs },
+    Source {
+        asset_id: Id,
+        src_in: TimeUs,
+        src_out: TimeUs,
+        /// Cadena de efectos del clip (ue-render), ya renderizada.
+        vf: Option<String>,
+    },
     Black { duration: TimeUs },
 }
 
@@ -21,6 +27,11 @@ impl Segment {
             Segment::Black { duration } => *duration,
         }
     }
+}
+
+/// Registro de efectos usado por la EDL (core embebido).
+fn effects_registry() -> Vec<ue_render::EffectDef> {
+    ue_render::core_registry()
 }
 
 /// Construye la EDL de video de la secuencia. Error si hay speed != 1 en un
@@ -50,6 +61,7 @@ pub fn build_video_edl(project: &Project, sequence_id: Id) -> ExportResult<Vec<S
     }
 
     // por tramo, resolver el clip visible (pista superior gana)
+    let registry = effects_registry();
     let mut segments: Vec<Segment> = vec![];
     for w in cuts.windows(2) {
         let (a, b) = (w[0], w[1]);
@@ -67,6 +79,7 @@ pub fn build_video_edl(project: &Project, sequence_id: Id) -> ExportResult<Vec<S
                             asset_id: *asset_id,
                             src_in: s_in,
                             src_out: s_in + (b - a),
+                            vf: ue_render::render_chain(&registry, &clip.effects),
                         });
                     }
                     break;
@@ -87,14 +100,14 @@ pub fn build_video_edl(project: &Project, sequence_id: Id) -> ExportResult<Vec<S
         return Err(ExportError::EmptyTimeline);
     }
 
-    // fusionar tramos contiguos del mismo asset con fuente continua
+    // fusionar tramos contiguos del mismo asset con fuente continua y mismos efectos
     let mut merged: Vec<Segment> = vec![];
     for seg in segments {
         match (merged.last_mut(), &seg) {
             (
-                Some(Segment::Source { asset_id: a1, src_out: o1, .. }),
-                Segment::Source { asset_id: a2, src_in: i2, src_out: o2 },
-            ) if a1 == a2 && o1 == i2 => *o1 = *o2,
+                Some(Segment::Source { asset_id: a1, src_out: o1, vf: v1, .. }),
+                Segment::Source { asset_id: a2, src_in: i2, src_out: o2, vf: v2 },
+            ) if a1 == a2 && o1 == i2 && v1 == v2 => *o1 = *o2,
             (Some(Segment::Black { duration: d1 }), Segment::Black { duration: d2 }) => {
                 *d1 += *d2;
             }

@@ -21,10 +21,21 @@ pub struct MjpegSession {
 
 impl MjpegSession {
     /// Abre una sesión que decodifica `path` desde `start_src_us`, reescalada
-    /// a `max_width` y re-muestreada a `fps` constantes.
-    pub fn open(path: &Path, start_src_us: i64, max_width: u32, fps: u32) -> MediaResult<Self> {
+    /// a `max_width` y re-muestreada a `fps` constantes. `extra_vf` = cadena
+    /// de efectos del clip.
+    pub fn open(
+        path: &Path,
+        start_src_us: i64,
+        max_width: u32,
+        fps: u32,
+        extra_vf: Option<&str>,
+    ) -> MediaResult<Self> {
         let ss = format!("{:.6}", start_src_us as f64 / 1_000_000.0);
-        let vf = format!("fps={fps},scale='min({max_width},iw)':-2");
+        let base = format!("fps={fps},scale='min({max_width},iw)':-2");
+        let vf = match extra_vf {
+            Some(chain) if !chain.is_empty() => format!("{chain},{base}"),
+            _ => base,
+        };
         let mut child = Command::new(ffmpeg_bin())
             .args(["-v", "error", "-ss", &ss, "-i"])
             .arg(path)

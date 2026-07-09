@@ -1,4 +1,12 @@
-import type { AudioProps, Id, StateSnapshot, TimeUs, Transform2D } from "./types";
+import type {
+  AudioProps,
+  EffectDef,
+  EffectInstance,
+  Id,
+  StateSnapshot,
+  TimeUs,
+  Transform2D,
+} from "./types";
 
 /**
  * Contrato del motor de edición. Dos implementaciones:
@@ -58,4 +66,12 @@ export interface EngineClient {
 
   /** Último frame JPEG del stream de reproducción (vacío = sin señal). */
   playbackFrame(): Promise<Uint8Array | null>;
+
+  // -- efectos modulares --
+  getEffectsCatalog(): Promise<EffectDef[]>;
+  setClipEffects(clipId: Id, effects: EffectInstance[]): Promise<StateSnapshot>;
+
+  // -- progreso de export --
+  cancelExport(): Promise<void>;
+  onExportProgress(cb: (progress: number) => void): Promise<() => void>;
 }

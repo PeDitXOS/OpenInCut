@@ -77,5 +77,16 @@ if (tcBefore === tcAfter)
 console.log(`  reproducción: ${tcBefore} → ${tcAfter}`);
 await shot("06-tras-reproducir");
 
+// 7. Efectos modulares: seleccionar clip y añadir chroma key desde el Inspector
+await page.mouse.click(xForSec(4), box.y + 26 + 2 + 54 + 26);
+await page.waitForTimeout(200);
+const effectSelect = page.locator("select");
+await effectSelect.selectOption("core.chroma_key");
+await page.waitForTimeout(200);
+const chromaVisible = await page.getByText("Chroma Key").count();
+if (chromaVisible === 0) throw new Error("el efecto Chroma Key no apareció en el Inspector");
+await effectSelect.selectOption("core.color_correct");
+await shot("07-panel-de-efectos");
+
 await browser.close();
 console.log(`\nScreenshots en ${outDir}`);

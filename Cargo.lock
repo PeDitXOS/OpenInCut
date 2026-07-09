@@ -3882,6 +3882,7 @@ dependencies = [
  "thiserror 2.0.18",
  "ue-core",
  "ue-media",
+ "ue-render",
 ]
 
 [[package]]
@@ -3897,6 +3898,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ue-render"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "ue-core",
+]
+
+[[package]]
 name = "ue-tauri"
 version = "0.1.0"
 dependencies = [
@@ -3909,6 +3920,7 @@ dependencies = [
  "ue-core",
  "ue-export",
  "ue-media",
+ "ue-render",
  "ulid",
 ]
 

@@ -3,7 +3,15 @@ import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
 import type { EngineClient } from "./client";
-import type { AudioProps, Id, StateSnapshot, TimeUs, Transform2D } from "./types";
+import type {
+  AudioProps,
+  EffectDef,
+  EffectInstance,
+  Id,
+  StateSnapshot,
+  TimeUs,
+  Transform2D,
+} from "./types";
 
 export function isTauri(): boolean {
   return "__TAURI_INTERNALS__" in window;
@@ -132,5 +140,19 @@ export class TauriEngine implements EngineClient {
     const buf = await invoke<ArrayBuffer>("playback_frame");
     const bytes = new Uint8Array(buf);
     return bytes.length > 0 ? bytes : null;
+  }
+
+  getEffectsCatalog(): Promise<EffectDef[]> {
+    return invoke("get_effects_catalog");
+  }
+  setClipEffects(clipId: Id, effects: EffectInstance[]): Promise<StateSnapshot> {
+    return invoke("set_clip_effects", { clipId, effects });
+  }
+
+  cancelExport(): Promise<void> {
+    return invoke("cancel_export");
+  }
+  async onExportProgress(cb: (progress: number) => void): Promise<() => void> {
+    return listen<number>("export-progress", (e) => cb(e.payload));
   }
 }

@@ -5,6 +5,8 @@ import { MockEngine, demoProject } from "../engine/mock";
 import { TauriEngine, isTauri } from "../engine/tauri";
 import type {
   AudioProps,
+  EffectDef,
+  EffectInstance,
   Id,
   Project,
   StateSnapshot,
@@ -46,9 +48,13 @@ export interface UiState {
   importMedia: () => Promise<void>;
   addClipFromAsset: (assetId: Id) => Promise<void>;
   exporting: boolean;
+  exportProgress: number | null;
   exportVideo: () => Promise<void>;
+  cancelExport: () => Promise<void>;
   saveProject: () => Promise<void>;
   openProject: () => Promise<void>;
+  effectsCatalog: EffectDef[];
+  setClipEffects: (clipId: Id, effects: EffectInstance[]) => Promise<void>;
   toggleTrack: (trackId: Id, prop: "muted" | "solo" | "locked") => Promise<void>;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
@@ -119,6 +125,12 @@ export const useStore = create<UiState>((set, get) => {
       void engine.onStateChanged(async () => {
         applySnapshot(await engine.getState());
       });
+      void engine.onExportProgress((p) => set({ exportProgress: p }));
+      try {
+        set({ effectsCatalog: await engine.getEffectsCatalog() });
+      } catch {
+        /* sin catálogo: el panel de efectos queda vacío */
+      }
     },
 
     seek: (us) => {
@@ -220,6 +232,7 @@ export const useStore = create<UiState>((set, get) => {
       run("Añadir clip", () => engine.addClip(assetId, get().playheadUs)),
 
     exporting: false,
+    exportProgress: null,
     exportVideo: async () => {
       try {
         const name = `${get().project.name.replace(/[^\p{L}\p{N} _-]/gu, "").trim() || "export"}.mp4`;
@@ -229,16 +242,29 @@ export const useStore = create<UiState>((set, get) => {
             set({ lastActionLabel: "⚠ Exportar requiere la app de escritorio (npx tauri dev)" });
           return;
         }
-        set({ exporting: true, lastActionLabel: "Exportando…" });
+        set({ exporting: true, exportProgress: 0, lastActionLabel: "Exportando…" });
         const written = await engine.exportVideo(path);
-        set({ exporting: false, lastActionLabel: `Exportado a ${written}` });
+        set({ exporting: false, exportProgress: null, lastActionLabel: `Exportado a ${written}` });
       } catch (e) {
         set({
           exporting: false,
+          exportProgress: null,
           lastActionLabel: `⚠ ${e instanceof Error ? e.message : String(e)}`,
         });
       }
     },
+
+    cancelExport: async () => {
+      try {
+        await engine.cancelExport();
+      } catch {
+        /* sin export en curso */
+      }
+    },
+
+    effectsCatalog: [],
+    setClipEffects: (clipId, effects) =>
+      run("Editar efectos", () => engine.setClipEffects(clipId, effects)),
 
     toggleTrack: async (trackId, prop) => {
       // v0: solo el mock lo implementa; el backend real llegará con SetTrackProp

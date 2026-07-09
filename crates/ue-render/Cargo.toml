@@ -1,15 +1,11 @@
 [package]
-name = "ue-export"
+name = "ue-render"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 ue-core = { path = "../ue-core" }
-ue-media = { path = "../ue-media" }
-ue-render = { path = "../ue-render" }
-
-[dev-dependencies]
-serde_json.workspace = true

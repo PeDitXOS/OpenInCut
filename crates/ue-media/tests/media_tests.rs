@@ -154,7 +154,7 @@ fn resolve_maps_timeline_to_source_time() {
 fn mjpeg_session_reads_sequential_frames() {
     let dir = require_media!();
     let mut session =
-        ue_media::stream::MjpegSession::open(&dir.join("video_a.mp4"), 2_000_000, 480, 24)
+        ue_media::stream::MjpegSession::open(&dir.join("video_a.mp4"), 2_000_000, 480, 24, None)
             .unwrap();
     assert_eq!(session.next_src_us(), 2_000_000);
     let mut frames = 0;
@@ -201,7 +201,7 @@ fn render_frame_produces_jpegs_for_visual_check() {
     std::fs::create_dir_all(&out_dir).unwrap();
 
     for (name, t) in [("frame_0s", 0i64), ("frame_2s", 2 * SEC), ("frame_5s", 5 * SEC)] {
-        let jpeg = render_frame(&store.project, seq_id, t, 640, dir)
+        let jpeg = render_frame(&store.project, seq_id, t, 640, dir, None)
             .unwrap()
             .unwrap_or_else(|| panic!("frame en {name} debe existir"));
         assert!(jpeg.len() > 1000, "jpeg razonable en {name}");
@@ -209,7 +209,7 @@ fn render_frame_produces_jpegs_for_visual_check() {
         std::fs::write(out_dir.join(format!("{name}.jpg")), &jpeg).unwrap();
     }
     // sin clip activo → None
-    let none = render_frame(&store.project, seq_id, 30 * SEC, 640, dir).unwrap();
+    let none = render_frame(&store.project, seq_id, 30 * SEC, 640, dir, None).unwrap();
     assert!(none.is_none());
     eprintln!("frames de verificación visual en: {}", out_dir.display());
 }

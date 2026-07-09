@@ -157,6 +157,7 @@ export interface EffectInstance {
   effect_id: string;
   enabled: boolean;
   params: Record<string, Param>;
+  color_params: Record<string, string>;
 }
 
 export interface TransitionRef {
@@ -245,6 +246,37 @@ export function clipDisplayName(clip: Clip, project: Project): string {
     case "solid":
       return "Color";
   }
+}
+
+// -- catálogo de efectos (packs) ----------------------------------------------
+
+export interface EffectParamDef {
+  key: string;
+  label?: string | null;
+  type: "float" | "color";
+  default: number | string;
+  min?: number;
+  max?: number;
+}
+
+export interface EffectDef {
+  id: string;
+  name: string;
+  category: string;
+  params: EffectParamDef[];
+  ffmpeg: string;
+  notes?: string | null;
+}
+
+/** Instancia nueva de un efecto con los defaults del manifest. */
+export function instantiateEffect(def: EffectDef): EffectInstance {
+  const params: Record<string, Param> = {};
+  const color_params: Record<string, string> = {};
+  for (const p of def.params) {
+    if (p.type === "float") params[p.key] = p.default as number;
+    else color_params[p.key] = p.default as string;
+  }
+  return { effect_id: def.id, enabled: true, params, color_params };
 }
 
 // -- snapshot del engine -----------------------------------------------------

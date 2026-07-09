@@ -20,4 +20,5 @@ ulid.workspace = true
 ue-core = { path = "../crates/ue-core" }
 ue-media = { path = "../crates/ue-media" }
 ue-audio = { path = "../crates/ue-audio" }
+ue-render = { path = "../crates/ue-render" }
 ue-export = { path = "../crates/ue-export" }
