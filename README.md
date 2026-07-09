@@ -9,7 +9,7 @@ Editor de video de escritorio multiplataforma (Tauri 2 + Rust + React) con super
 | Fase | Estado |
 |---|---|
 | 0 — Fundaciones (`ue-core`) | ✅ modelo, acciones reversibles, historial transaccional, keyframes, 25 tests + proptest |
-| 1 — MVP editable | 🔨 UI completa (timeline canvas, preview, inspector, undo/redo) con doble motor: mock en navegador y **backend real en escritorio** (`ue-core` vía IPC). Media real: importación con ffprobe+hash, añadir clips al timeline y **frames reales del preview** extraídos con ffmpeg (`ue-media`, verificado con testsrc). Falta: audio, reproducción con decode continuo, export |
+| 1 — MVP editable | 🔨 UI completa (timeline canvas, preview, inspector, undo/redo) con doble motor: mock en navegador y **backend real en escritorio** (`ue-core` vía IPC). Media real: importación ffprobe+hash, clips al timeline, **frames reales del preview** y **exportación real a MP4** (`ue-export`: EDL multi-pista + filter_complex, audio mezclado con fades/ganancia — verificado con testsrc). Falta: audio en reproducción, decode continuo, progreso de export |
 | 2–6 | pendientes (ver PLAN.md §14) |
 
 ## Desarrollo
