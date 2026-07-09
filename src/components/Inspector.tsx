@@ -139,14 +139,28 @@ function ClipInspector({ clip }: { clip: Clip }) {
           />
         </Row>
         <Row label="Fade in">
-          <span className="font-[var(--font-mono)] text-[11px] text-ink">
-            {(clip.audio.fade_in_us / 1e6).toFixed(1)} s
-          </span>
+          <Slider
+            value={clip.audio.fade_in_us / 1e6}
+            min={0}
+            max={Math.min(5, clip.duration / 1e6)}
+            step={0.1}
+            unit=" s"
+            onChange={(v) =>
+              void setClipAudio(clip.id, { ...clip.audio, fade_in_us: Math.round(v * 1e6) })
+            }
+          />
         </Row>
         <Row label="Fade out">
-          <span className="font-[var(--font-mono)] text-[11px] text-ink">
-            {(clip.audio.fade_out_us / 1e6).toFixed(1)} s
-          </span>
+          <Slider
+            value={clip.audio.fade_out_us / 1e6}
+            min={0}
+            max={Math.min(5, clip.duration / 1e6)}
+            step={0.1}
+            unit=" s"
+            onChange={(v) =>
+              void setClipAudio(clip.id, { ...clip.audio, fade_out_us: Math.round(v * 1e6) })
+            }
+          />
         </Row>
       </Section>
 
@@ -164,17 +178,63 @@ function ClipInspector({ clip }: { clip: Clip }) {
         </Section>
       )}
 
-      {clip.payload.type === "text" && (
-        <Section title="Texto">
-          <div className="rounded-md border border-line bg-bg2 px-2.5 py-2 text-[12px] text-ink">
-            {clip.payload.content}
-          </div>
-        </Section>
-      )}
+      {clip.payload.type === "text" && <TextPanel clip={clip} />}
 
       {clip.payload.type === "media" && <TransitionPanel clip={clip} />}
       <EffectsPanel clip={clip} />
     </>
+  );
+}
+
+function TextPanel({ clip }: { clip: Clip }) {
+  const setClipText = useStore((s) => s.setClipText);
+  if (clip.payload.type !== "text") return null;
+  const { content, style } = clip.payload;
+
+  return (
+    <Section title="Texto">
+      <textarea
+        className="focus-ring w-full resize-y rounded-md border border-line bg-bg2 px-2.5 py-2 text-[12px] text-ink"
+        rows={2}
+        value={content}
+        onChange={(e) => void setClipText(clip.id, e.target.value, style)}
+        placeholder="Escribe el título…"
+      />
+      <Row label="Tamaño">
+        <Slider
+          value={style.size}
+          min={16}
+          max={200}
+          step={1}
+          unit=" px"
+          onChange={(v) => void setClipText(clip.id, content, { ...style, size: v })}
+        />
+      </Row>
+      <Row label="Color">
+        <input
+          type="color"
+          className="h-6 w-10 cursor-pointer rounded border border-line bg-transparent"
+          value={style.color}
+          onChange={(e) => void setClipText(clip.id, content, { ...style, color: e.target.value })}
+        />
+        <span className="font-[var(--font-mono)] text-[10px] text-ink-faint">{style.color}</span>
+      </Row>
+      <Row label="Altura">
+        <Slider
+          value={style.y_offset}
+          min={-500}
+          max={500}
+          step={5}
+          unit=" px"
+          onChange={(v) =>
+            void setClipText(clip.id, content, { ...style, y_offset: v })
+          }
+        />
+      </Row>
+      <p className="mt-1 text-[10px] leading-snug text-ink-faint">
+        Tamaño y altura referidos a 1080p; se escalan al exportar.
+      </p>
+    </Section>
   );
 }
 

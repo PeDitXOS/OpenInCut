@@ -4,6 +4,7 @@ import type {
   EffectInstance,
   Id,
   StateSnapshot,
+  TextStyle,
   TimeUs,
   Transform2D,
   TransitionRef,
@@ -74,6 +75,14 @@ export interface EngineClient {
   reloadEffectPacks(): Promise<{ catalog: EffectDef[]; errors: string[]; dir: string | null }>;
   setClipEffects(clipId: Id, effects: EffectInstance[]): Promise<StateSnapshot>;
   setClipTransition(clipId: Id, transition: TransitionRef | null): Promise<StateSnapshot>;
+  /** Añade un clip de título en la pista de video superior. */
+  addTextClip(content: string, atUs: TimeUs): Promise<StateSnapshot>;
+  setClipText(clipId: Id, content: string, style: TextStyle): Promise<StateSnapshot>;
+  setTrackProp(
+    trackId: Id,
+    prop: "muted" | "solo" | "locked",
+    value: boolean,
+  ): Promise<StateSnapshot>;
 
   /** Puerto del servidor MCP embebido (null si no está activo). */
   mcpStatus(): Promise<number | null>;

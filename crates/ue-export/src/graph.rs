@@ -67,6 +67,64 @@ fn collect_audio(project: &Project, sequence_id: Id) -> Vec<AudioItem> {
     items
 }
 
+/// Escapado para el valor text='…' de drawtext dentro de un filter_complex.
+fn escape_drawtext(text: &str) -> String {
+    text.replace('\\', "\\\\\\\\")
+        .replace('\'', "\u{2019}") // comilla tipográfica: evita el infierno de quoting
+        .replace(':', "\\:")
+        .replace('%', "\\%")
+}
+
+/// Primera fuente del sistema disponible para drawtext (fontfile);
+/// si no hay ninguna, se confía en fontconfig (font=sans).
+pub fn find_font() -> Option<&'static str> {
+    const CANDIDATES: &[&str] = &[
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf",
+    ];
+    CANDIDATES.iter().copied().find(|p| Path::new(p).exists())
+}
+
+/// Cadena drawtext para los clips de texto visibles de la secuencia.
+/// El tamaño/offset del estilo está referido a 1080p y se escala a `out_h`.
+fn build_text_overlays(seq: &ue_core::model::Sequence, out_h: u32) -> Option<String> {
+    use ue_core::model::{ClipPayload, TrackKind};
+    let scale = out_h as f64 / 1080.0;
+    let font_part = match find_font() {
+        Some(f) => format!("fontfile={f}"),
+        None => "font=sans".to_string(),
+    };
+    let mut parts: Vec<String> = vec![];
+    for track in seq.tracks.iter().filter(|t| t.kind == TrackKind::Video && !t.muted) {
+        for clip in &track.clips {
+            let ClipPayload::Text { content, style } = &clip.payload else { continue };
+            if content.trim().is_empty() {
+                continue;
+            }
+            let fontsize = ((style.size as f64) * scale).round().max(8.0) as u32;
+            let color = style.color.trim_start_matches('#');
+            let y_off = (style.y_offset as f64 * scale).round() as i64;
+            parts.push(format!(
+                "drawtext={font_part}:text='{}':fontsize={fontsize}:fontcolor=0x{color}:\
+                 borderw={}:bordercolor=black@0.6:x=(w-text_w)/2:y=(h-text_h)/2+{y_off}:\
+                 enable='between(t,{},{})'",
+                escape_drawtext(content),
+                (2.0 * scale).round().max(1.0) as u32,
+                secs(clip.start),
+                secs(clip.end()),
+            ));
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(","))
+    }
+}
+
 pub fn build_ffmpeg_args(
     project: &Project,
     sequence_id: Id,
@@ -159,8 +217,12 @@ pub fn build_ffmpeg_args(
         }
         current = out_label;
     }
-    // renombrar la última etiqueta a [vout] con un passthrough barato
-    fc.push(format!("[{current}]null[vout]"));
+    // quemar títulos (clips de texto de pistas de video) sobre el video combinado
+    let text_chain = build_text_overlays(seq, out_h);
+    match text_chain {
+        Some(chain) => fc.push(format!("[{current}]{chain}[vout]")),
+        None => fc.push(format!("[{current}]null[vout]")),
+    }
 
     // ---- cadenas de audio ----
     let mut alabels: Vec<String> = vec![];

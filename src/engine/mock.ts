@@ -18,6 +18,7 @@ import type {
   Sequence,
   StateSnapshot,
   TimeUs,
+  TextStyle,
   Track,
   Transform2D,
   TransitionRef,
@@ -337,12 +338,41 @@ export class MockEngine implements EngineClient {
     return () => {};
   }
 
-  /** Ayuda para tests/pruebas: alterna props de pista. */
-  async toggleTrack(trackId: Id, prop: "muted" | "solo" | "locked"): Promise<StateSnapshot> {
+  async addTextClip(content: string, atUs: TimeUs): Promise<StateSnapshot> {
+    return this.transaction("Añadir título", () => {
+      const track = [...this.sequence.tracks]
+        .reverse()
+        .find((t) => t.kind === "video" && !t.locked);
+      if (!track) throw new Error("no hay pista de video");
+      const duration = 4 * S;
+      let start = Math.max(0, quantizeToFrame(atUs, this.sequence.fps));
+      const collides = (st: number) =>
+        track.clips.some((c) => c.start < st + duration && st < c.start + c.duration);
+      if (collides(start)) start = Math.max(...track.clips.map((c) => c.start + c.duration), 0);
+      const clip = textClip(content, start / S, duration / S);
+      track.clips.push(clip);
+      track.clips.sort((a, b) => a.start - b.start);
+    });
+  }
+
+  async setClipText(clipId: Id, content: string, style: TextStyle): Promise<StateSnapshot> {
+    return this.transaction("Editar texto", () => {
+      const found = this.locate(clipId);
+      if (!found || found.clip.payload.type !== "text") throw new Error("no es un clip de texto");
+      found.clip.payload.content = content;
+      found.clip.payload.style = style;
+    });
+  }
+
+  async setTrackProp(
+    trackId: Id,
+    prop: "muted" | "solo" | "locked",
+    value: boolean,
+  ): Promise<StateSnapshot> {
     return this.transaction("Pista", () => {
       const track = this.sequence.tracks.find((t) => t.id === trackId);
       if (!track) throw new Error("pista no encontrada");
-      track[prop] = !track[prop];
+      track[prop] = value;
     });
   }
 }

@@ -3,11 +3,40 @@
  * interacciones y guarda screenshots numeradas en screenshots/<fecha>/.
  * Uso: node scripts/screenshot.mjs [url]
  */
+import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright";
 
 const url = process.argv[2] ?? "http://localhost:5175";
+
+// arrancar vite si no está corriendo (harness autosuficiente)
+let devServer = null;
+const reachable = async () => {
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(1500) });
+    return r.ok;
+  } catch {
+    return false;
+  }
+};
+if (!(await reachable())) {
+  console.log("dev server no responde: arrancando vite…");
+  devServer = spawn("npm", ["run", "dev"], { stdio: "ignore" });
+  for (let i = 0; i < 40 && !(await reachable()); i++) {
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  if (!(await reachable())) {
+    devServer.kill("SIGKILL");
+    throw new Error("no se pudo arrancar el dev server");
+  }
+}
+const cleanup = () => devServer?.kill("SIGKILL");
+process.on("exit", cleanup);
+process.on("uncaughtException", (e) => {
+  cleanup();
+  throw e;
+});
 const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
 const outDir = join("screenshots", stamp);
 mkdirSync(outDir, { recursive: true });

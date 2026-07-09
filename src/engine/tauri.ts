@@ -9,6 +9,7 @@ import type {
   EffectInstance,
   Id,
   StateSnapshot,
+  TextStyle,
   TimeUs,
   Transform2D,
   TransitionRef,
@@ -154,6 +155,19 @@ export class TauriEngine implements EngineClient {
   }
   setClipTransition(clipId: Id, transition: TransitionRef | null): Promise<StateSnapshot> {
     return invoke("set_clip_transition", { clipId, transition });
+  }
+  addTextClip(content: string, atUs: TimeUs): Promise<StateSnapshot> {
+    return invoke("add_text_clip", { content, atUs });
+  }
+  setClipText(clipId: Id, content: string, style: TextStyle): Promise<StateSnapshot> {
+    return invoke("set_clip_text", { clipId, content, style });
+  }
+  setTrackProp(
+    trackId: Id,
+    prop: "muted" | "solo" | "locked",
+    value: boolean,
+  ): Promise<StateSnapshot> {
+    return invoke("set_track_prop", { trackId, prop, value });
   }
 
   mcpStatus(): Promise<number | null> {

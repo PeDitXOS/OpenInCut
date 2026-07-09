@@ -541,6 +541,71 @@ fn set_clip_effects(
     Ok(snapshot(&store))
 }
 
+/// Añade un clip de texto (título) en la pista de video superior.
+#[tauri::command]
+fn add_text_clip(state: State<AppState>, content: String, at_us: TimeUs) -> Res<StateSnapshot> {
+    let mut store = state.store.lock().unwrap();
+    let seq_id = store.project.active_sequence;
+    let seq = store.project.sequence(seq_id).ok_or("sin secuencia activa")?;
+    let track = seq
+        .tracks
+        .iter()
+        .rev()
+        .find(|t| t.kind == TrackKind::Video && !t.locked)
+        .ok_or("no hay pista de video desbloqueada")?;
+    let track_id = track.id;
+    let duration = 4_000_000;
+    let at = at_us.max(0);
+    let start = if track.collides(at, duration, None) {
+        track.clips.iter().map(|c| c.end()).max().unwrap_or(0)
+    } else {
+        at
+    };
+    let clip = Clip::new_text(&content, start, duration);
+    store.insert_clip(track_id, clip, InsertMode::Strict).map_err(|e| e.to_string())?;
+    Ok(snapshot(&store))
+}
+
+#[tauri::command]
+fn set_clip_text(
+    state: State<AppState>,
+    clip_id: String,
+    content: String,
+    style: ue_core::model::TextStyle,
+) -> Res<StateSnapshot> {
+    let mut store = state.store.lock().unwrap();
+    let id = parse_id(&clip_id)?;
+    store
+        .dispatch(
+            "Editar texto",
+            vec![ue_core::Action::SetClipText { clip_id: id, content, style }],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(snapshot(&store))
+}
+
+#[tauri::command]
+fn set_track_prop(
+    state: State<AppState>,
+    track_id: String,
+    prop: String,
+    value: bool,
+) -> Res<StateSnapshot> {
+    use ue_core::action::TrackProp;
+    let mut store = state.store.lock().unwrap();
+    let id = parse_id(&track_id)?;
+    let prop = match prop.as_str() {
+        "muted" => TrackProp::Muted(value),
+        "solo" => TrackProp::Solo(value),
+        "locked" => TrackProp::Locked(value),
+        other => return Err(format!("propiedad desconocida: {other}")),
+    };
+    store
+        .dispatch("Pista", vec![ue_core::Action::SetTrackProp { track_id: id, prop }])
+        .map_err(|e| e.to_string())?;
+    Ok(snapshot(&store))
+}
+
 #[tauri::command]
 fn set_clip_transition(
     state: State<AppState>,
@@ -702,6 +767,9 @@ pub fn run() {
             mcp_status,
             set_clip_effects,
             set_clip_transition,
+            set_track_prop,
+            add_text_clip,
+            set_clip_text,
             export_video,
             cancel_export,
             playback_play,

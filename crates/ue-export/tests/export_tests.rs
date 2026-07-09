@@ -578,3 +578,62 @@ fn crossfade_export_blends_and_keeps_duration() {
         "mezcla en el centro del fundido, fue r={r} b={b}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Títulos quemados en el export (drawtext)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn text_clips_burn_into_export() {
+    let Some(dir) = media_dir() else { return };
+    // base: video negro de 3 s
+    let src = dir.join("black.mp4");
+    let st = Command::new(ue_media::ffmpeg_bin())
+        .args(["-y", "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=640x360:d=3:r=30"])
+        .args(["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"])
+        .arg(&src)
+        .status()
+        .unwrap();
+    assert!(st.success());
+
+    let mut project = Project::new("text-test");
+    let seq_id = project.active_sequence;
+    let asset = ue_media::import_file(&src).unwrap();
+    let aid = asset.id;
+    project.assets.push(asset);
+    // V2 encima para el título
+    let seq = project.sequence_mut(seq_id).unwrap();
+    seq.tracks.push(Track::new(TrackKind::Video, "V2"));
+    let v2 = seq.tracks.last().unwrap().id;
+    let v1 = seq
+        .tracks
+        .iter()
+        .find(|t| t.kind == TrackKind::Video && t.name == "V1")
+        .unwrap()
+        .id;
+    let mut store = ProjectStore::new(project);
+    store.insert_clip(v1, Clip::new_media(aid, 0, 3 * SEC, 0), InsertMode::Strict).unwrap();
+    // título centrado, blanco, tamaño 120 (grande para el muestreo), 1..3 s
+    let mut title = Clip::new_text("HOLA MUNDO", 1 * SEC, 2 * SEC);
+    if let ClipPayload::Text { style, .. } = &mut title.payload {
+        style.size = 120.0;
+    }
+    store.insert_clip(v2, title, InsertMode::Strict).unwrap();
+
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-text-out.mp4");
+    export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+
+    // muestrear una banda central en t=2 (título activo) buscando píxeles claros
+    let bright_at = |t: f64| -> usize {
+        let mut bright = 0;
+        for x in (600..1300).step_by(20) {
+            let (r, g, b) = pixel_at(&out, t, x, 540);
+            if r as u32 + g as u32 + b as u32 > 380 {
+                bright += 1;
+            }
+        }
+        bright
+    };
+    assert!(bright_at(2.0) >= 3, "el título es visible en t=2 ({} muestras claras)", bright_at(2.0));
+    assert_eq!(bright_at(0.5), 0, "antes del título todo es negro");
+}

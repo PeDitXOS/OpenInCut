@@ -36,6 +36,8 @@ pub enum Action {
     SetClipAudio { clip_id: Id, audio: AudioProps },
     SetClipEffects { clip_id: Id, effects: Vec<EffectInstance> },
     SetClipTransition { clip_id: Id, transition: Option<TransitionRef> },
+    /// Cambia contenido y estilo de un clip de texto (payload Text).
+    SetClipText { clip_id: Id, content: String, style: TextStyle },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -292,6 +294,21 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
             let clip = &mut project.sequences[si].tracks[ti].clips[ci];
             let old = std::mem::replace(&mut clip.effects, effects);
             Ok(Action::SetClipEffects { clip_id, effects: old })
+        }
+
+        Action::SetClipText { clip_id, content, style } => {
+            let (si, ti, ci) = project
+                .locate_clip(clip_id)
+                .ok_or_else(|| UeError::NotFound(format!("clip {clip_id}")))?;
+            let clip = &mut project.sequences[si].tracks[ti].clips[ci];
+            match &mut clip.payload {
+                ClipPayload::Text { content: c, style: st } => {
+                    let old_content = std::mem::replace(c, content);
+                    let old_style = std::mem::replace(st, style);
+                    Ok(Action::SetClipText { clip_id, content: old_content, style: old_style })
+                }
+                _ => Err(UeError::Invalid("el clip no es de texto".into())),
+            }
         }
 
         Action::SetClipTransition { clip_id, transition } => {

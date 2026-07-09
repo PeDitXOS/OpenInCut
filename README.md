@@ -8,9 +8,12 @@ Editor de video de escritorio multiplataforma (Tauri 2 + Rust + React) con super
 
 | Fase | Estado |
 |---|---|
-| 0 — Fundaciones (`ue-core`) | ✅ modelo, acciones reversibles, historial transaccional, keyframes, 25 tests + proptest |
-| 1 — MVP editable | 🔨 UI completa (timeline canvas, preview, inspector, undo/redo) con doble motor: mock en navegador y **backend real en escritorio** (`ue-core` vía IPC). Media real: importación ffprobe+hash, clips al timeline, **frames reales del preview** y **exportación real a MP4** (`ue-export`: EDL multi-pista + filter_complex, audio mezclado con fades/ganancia — verificado con testsrc). Falta: audio en reproducción, decode continuo, progreso de export |
-| 2–6 | pendientes (ver PLAN.md §14) |
+| 0 — Fundaciones (`ue-core`) | ✅ modelo, acciones reversibles, historial transaccional, keyframes, proptest |
+| 1 — MVP editable | ✅ importar (ffprobe+hash), timeline completo (split/trim por bordes/move/ripple), **reproducción con audio real** (cpal como reloj maestro + stream de video MJPEG 24fps), **export MP4** con progreso y cancelación, guardar/abrir `.uep`, títulos quemados (drawtext) |
+| 2 — Efectos y shaders | 🔨 sistema de **packs modulares** (manifest → misma cadena en preview y export), chroma key/color/blur core, **packs de usuario en disco** con recarga, transform real (crop/escala/rotación/flips), **transiciones crossfade** con handles. Falta: keyframes en UI, gizmo, motor wgpu |
+| 3 — IA (Whisper, silencios) | pendiente |
+| 4 — Servidor MCP | ✅ v0: `http://127.0.0.1:4599/mcp` con 10 herramientas (leer estado + editar con undo) |
+| 5–6 | pendientes (ver PLAN.md §14) |
 
 ## Desarrollo
 

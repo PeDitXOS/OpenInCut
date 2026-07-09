@@ -31,9 +31,14 @@ interface View {
   pxPerSec: number;
 }
 
+type DragMode = "move" | "trim-left" | "trim-right";
+
 interface DragGhost {
   clipId: string;
+  mode: DragMode;
   startUs: number;
+  /** para trim: posición actual del borde arrastrado (µs) */
+  edgeUs: number;
   trackIdx: number; // índice en displayTracks
   moved: boolean;
 }
@@ -301,7 +306,7 @@ function drawTimeline(
     }
   });
 
-  // fantasma de drag
+  // fantasma de drag (mover o recortar)
   if (ghost && ghost.moved) {
     const found = activeSequence(project)
       .tracks.flatMap((t) => t.clips.map((c) => ({ c, t })))
@@ -309,8 +314,21 @@ function drawTimeline(
     if (found) {
       const t = tracks[ghost.trackIdx] ?? found.t;
       const th = trackHeight(t);
-      const x = usToX(ghost.startUs);
-      const cw = (found.c.duration / 1e6) * view.pxPerSec;
+      let x: number;
+      let cw: number;
+      if (ghost.mode === "move") {
+        x = usToX(ghost.startUs);
+        cw = (found.c.duration / 1e6) * view.pxPerSec;
+      } else if (ghost.mode === "trim-left") {
+        const end = found.c.start + found.c.duration;
+        const edge = Math.min(ghost.edgeUs, end - 33_333);
+        x = usToX(edge);
+        cw = ((end - edge) / 1e6) * view.pxPerSec;
+      } else {
+        const edge = Math.max(ghost.edgeUs, found.c.start + 33_333);
+        x = usToX(found.c.start);
+        cw = ((edge - found.c.start) / 1e6) * view.pxPerSec;
+      }
       drawClip(
         ctx,
         found.c,
@@ -407,6 +425,7 @@ export function Timeline() {
   const [ghost, setGhost] = useState<DragGhost | null>(null);
   const dragRef = useRef<{
     clipId: string;
+    mode: DragMode;
     grabOffsetUs: number;
     startTrackIdx: number;
   } | null>(null);
@@ -423,8 +442,10 @@ export function Timeline() {
   const select = useStore((s) => s.select);
   const setView = useStore((s) => s.setView);
   const moveClip = useStore((s) => s.moveClip);
+  const trimClip = useStore((s) => s.trimClip);
   const splitAtPlayhead = useStore((s) => s.splitAtPlayhead);
   const deleteSelection = useStore((s) => s.deleteSelection);
+  const addTextClip = useStore((s) => s.addTextClip);
 
   // seguir el playhead durante la reproducción
   useEffect(() => {
@@ -505,12 +526,26 @@ export function Timeline() {
     const hit = hitTest(x, y);
     if (hit.clip) {
       select([hit.clip.id], e.shiftKey);
+      // ¿agarró un borde? → trim
+      const edgePx = 8;
+      const clipX1 = ((hit.clip.start - viewStartUs) / 1e6) * pxPerSec;
+      const clipX2 = clipX1 + (hit.clip.duration / 1e6) * pxPerSec;
+      const mode: DragMode =
+        x - clipX1 < edgePx ? "trim-left" : clipX2 - x < edgePx ? "trim-right" : "move";
       dragRef.current = {
         clipId: hit.clip.id,
+        mode,
         grabOffsetUs: hit.us - hit.clip.start,
         startTrackIdx: hit.trackIdx,
       };
-      setGhost({ clipId: hit.clip.id, startUs: hit.clip.start, trackIdx: hit.trackIdx, moved: false });
+      setGhost({
+        clipId: hit.clip.id,
+        mode,
+        startUs: hit.clip.start,
+        edgeUs: mode === "trim-right" ? hit.clip.start + hit.clip.duration : hit.clip.start,
+        trackIdx: hit.trackIdx,
+        moved: false,
+      });
     } else {
       select([]);
     }
@@ -529,6 +564,17 @@ export function Timeline() {
       }
       const drag = dragRef.current;
       if (drag) {
+        if (drag.mode !== "move") {
+          setGhost({
+            clipId: drag.clipId,
+            mode: drag.mode,
+            startUs: 0,
+            edgeUs: Math.max(0, xToUs(x)),
+            trackIdx: drag.startTrackIdx,
+            moved: true,
+          });
+          return;
+        }
         const tracks = displayTracks(project);
         const tops = trackTops(tracks);
         let trackIdx = drag.startTrackIdx;
@@ -540,7 +586,9 @@ export function Timeline() {
           trackIdx = drag.startTrackIdx;
         setGhost({
           clipId: drag.clipId,
+          mode: "move",
           startUs: Math.max(0, xToUs(x) - drag.grabOffsetUs),
+          edgeUs: 0,
           trackIdx,
           moved: true,
         });
@@ -552,8 +600,12 @@ export function Timeline() {
       dragRef.current = null;
       setGhost((g) => {
         if (drag && g && g.moved) {
-          const tracks = displayTracks(project);
-          void moveClip(drag.clipId, tracks[g.trackIdx].id, g.startUs);
+          if (drag.mode === "move") {
+            const tracks = displayTracks(project);
+            void moveClip(drag.clipId, tracks[g.trackIdx].id, g.startUs);
+          } else {
+            void trimClip(drag.clipId, drag.mode === "trim-left", g.edgeUs);
+          }
         }
         return null;
       });
@@ -612,6 +664,13 @@ export function Timeline() {
         >
           Eliminar y cerrar
         </button>
+        <button
+          className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
+          onClick={() => void addTextClip()}
+          title="Añadir un título en el playhead"
+        >
+          + Título
+        </button>
         <div className="flex-1" />
         <button
           className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
@@ -645,6 +704,21 @@ export function Timeline() {
             className="block cursor-default"
             onMouseDown={onMouseDown}
             onWheel={onWheel}
+            onMouseMove={(e) => {
+              if (dragRef.current || scrubRef.current) return;
+              const rect = canvasRef.current!.getBoundingClientRect();
+              const x = e.clientX - rect.left;
+              const y = e.clientY - rect.top;
+              const hit = hitTest(x, y);
+              let cursor = "default";
+              if (hit.clip) {
+                const clipX1 = ((hit.clip.start - viewStartUs) / 1e6) * pxPerSec;
+                const clipX2 = clipX1 + (hit.clip.duration / 1e6) * pxPerSec;
+                cursor =
+                  x - clipX1 < 8 || clipX2 - x < 8 ? "ew-resize" : "grab";
+              }
+              canvasRef.current!.style.cursor = cursor;
+            }}
           />
         </div>
       </div>

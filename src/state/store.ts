@@ -11,6 +11,7 @@ import type {
   Project,
   StateSnapshot,
   TimeUs,
+  TextStyle,
   Transform2D,
   TransitionRef,
 } from "../engine/types";
@@ -59,6 +60,8 @@ export interface UiState {
   setClipEffects: (clipId: Id, effects: EffectInstance[]) => Promise<void>;
   setClipTransition: (clipId: Id, transition: TransitionRef | null) => Promise<void>;
   reloadEffectPacks: () => Promise<void>;
+  addTextClip: () => Promise<void>;
+  setClipText: (clipId: Id, content: string, style: TextStyle) => Promise<void>;
   toggleTrack: (trackId: Id, prop: "muted" | "solo" | "locked") => Promise<void>;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
@@ -278,6 +281,12 @@ export const useStore = create<UiState>((set, get) => {
     setClipTransition: (clipId, transition) =>
       run("Editar transición", () => engine.setClipTransition(clipId, transition)),
 
+    addTextClip: async () => {
+      await run("Añadir título", () => engine.addTextClip("Título", get().playheadUs));
+    },
+    setClipText: (clipId, content, style) =>
+      run("Editar texto", () => engine.setClipText(clipId, content, style)),
+
     reloadEffectPacks: async () => {
       try {
         const r = await engine.reloadEffectPacks();
@@ -293,11 +302,9 @@ export const useStore = create<UiState>((set, get) => {
     },
 
     toggleTrack: async (trackId, prop) => {
-      // v0: solo el mock lo implementa; el backend real llegará con SetTrackProp
-      if (engine.kind === "mock") {
-        const snap = await (engine as MockEngine).toggleTrack(trackId, prop);
-        applySnapshot(snap, "Pista");
-      }
+      const track = activeSequence(get().project).tracks.find((t) => t.id === trackId);
+      if (!track) return;
+      await run("Pista", () => engine.setTrackProp(trackId, prop, !track[prop]));
     },
 
     saveProject: async () => {
