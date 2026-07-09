@@ -71,6 +71,20 @@ fn wav_roundtrip_and_bounds() {
     assert_eq!(wav.frame(1000), (0.0, 0.0), "fuera de rango → silencio");
 }
 
+#[test]
+fn compute_peaks_reflects_signal_shape() {
+    // 1 s de silencio + 1 s a plena escala → mitad de bins ~0, mitad ~1
+    let frames = 2 * RATE as i64;
+    let path = write_wav("peaks.wav", frames, |i| {
+        if i < RATE as i64 { (0, 0) } else { (32767, 32767) }
+    });
+    let wav = WavMap::open(&path).unwrap();
+    let peaks = ue_audio::wav::compute_peaks(&wav, 25);
+    assert_eq!(peaks.len(), 50, "2 s × 25 bins/s");
+    assert!(peaks[..25].iter().all(|p| *p < 0.01), "primera mitad silencio");
+    assert!(peaks[25..].iter().all(|p| *p > 0.9), "segunda mitad plena escala");
+}
+
 // ---------------------------------------------------------------------------
 // Mezclador
 // ---------------------------------------------------------------------------

@@ -213,3 +213,27 @@ fn render_frame_produces_jpegs_for_visual_check() {
     assert!(none.is_none());
     eprintln!("frames de verificación visual en: {}", out_dir.display());
 }
+
+#[test]
+fn thumb_strip_generates_tiled_jpeg() {
+    let Some(dir) = demo_dir() else { return };
+    let cache = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-thumbs-cache");
+    let src = dir.join("video_a.mp4");
+    let strip =
+        ue_media::thumbs::generate_thumb_strip(&src, 6_000_000, &cache, "hash-thumbs-test")
+            .unwrap();
+    assert!(strip.path.exists());
+    assert_eq!(strip.count, 6, "6 s → 6 tiles");
+    // dimensiones del JPEG = count*tile_w × tile_h
+    let (kind, info) = ue_media::probe::probe(&strip.path).unwrap();
+    assert_eq!(kind, MediaKind::Image);
+    assert_eq!(info.width, strip.tile_w * strip.count);
+    assert_eq!(info.height, strip.tile_h);
+    // segunda llamada: reutiliza el caché (mismo mtime)
+    let m1 = std::fs::metadata(&strip.path).unwrap().modified().unwrap();
+    let again =
+        ue_media::thumbs::generate_thumb_strip(&src, 6_000_000, &cache, "hash-thumbs-test")
+            .unwrap();
+    let m2 = std::fs::metadata(&again.path).unwrap().modified().unwrap();
+    assert_eq!(m1, m2, "no regenera si ya existe");
+}

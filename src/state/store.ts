@@ -69,6 +69,8 @@ export interface UiState {
   /** RMS 0..1 por canal del último buffer (solo motor tauri). */
   meterL: number;
   meterR: number;
+  /** Se incrementa cuando llegan waveforms/miniaturas nuevas (redibujar). */
+  visualsBump: number;
   setAiSettings: (lang: string, model: string) => Promise<void>;
   fonts: [string, string][];
   textTemplates: Record<string, TextStyle>;
@@ -340,6 +342,7 @@ export const useStore = create<UiState>((set, get) => {
     mcpToken: null,
     meterL: 0,
     meterR: 0,
+    visualsBump: 0,
     setAiSettings: (lang, model) =>
       run("Ajustes de IA", () => engine.setProjectSettings(lang, model)),
     fonts: [],

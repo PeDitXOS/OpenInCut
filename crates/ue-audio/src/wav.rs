@@ -89,3 +89,25 @@ impl WavMap {
         (l, r)
     }
 }
+
+/// Picos |amplitud| por bin (mezcla mono de L/R), `per_sec` bins por segundo.
+/// Para dibujar waveforms reales en el timeline.
+pub fn compute_peaks(wav: &WavMap, per_sec: u32) -> Vec<f32> {
+    let bin = (crate::RATE / per_sec.max(1)).max(1) as i64;
+    let frames = wav.frames();
+    let n_bins = (frames + bin - 1) / bin;
+    let mut peaks = Vec::with_capacity(n_bins as usize);
+    for b in 0..n_bins {
+        let mut peak = 0.0f32;
+        let end = ((b + 1) * bin).min(frames);
+        // paso 4: submuestreo dentro del bin (suficiente para picos visuales)
+        let mut i = b * bin;
+        while i < end {
+            let (l, r) = wav.frame(i);
+            peak = peak.max(((l + r) * 0.5).abs());
+            i += 4;
+        }
+        peaks.push(peak.min(1.0));
+    }
+    peaks
+}

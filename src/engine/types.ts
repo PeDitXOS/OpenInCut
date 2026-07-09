@@ -64,6 +64,15 @@ export interface ProbeInfo {
   vfr: boolean;
 }
 
+/** Meta de la tira de miniaturas generada por el backend. */
+export interface ThumbStrip {
+  path: string;
+  tile_w: number;
+  tile_h: number;
+  count: number;
+  interval_us: number;
+}
+
 export interface MediaAsset {
   id: Id;
   kind: MediaKind;

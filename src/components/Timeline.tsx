@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Clip, Project, Track } from "../engine/types";
 import { activeSequence, clipDisplayName } from "../engine/types";
 import { hash32, mulberry32, usToDuration } from "../lib/time";
+import { assetVisuals, requestVisuals, PEAKS_PER_SEC } from "../state/visuals";
 import { useStore } from "../state/store";
 
 const RULER_H = 26;
@@ -175,29 +176,68 @@ function drawClip(
   ctx.clip();
 
   const seed = hash32(clip.id);
+  const media = clip.payload.type === "media" ? clip.payload : null;
+  const visuals = media ? assetVisuals(media.asset_id) : undefined;
   if (!isAudio && !isText) {
-    // filmstrip determinista
-    const rng = mulberry32(seed);
-    const cell = 22;
-    for (let cx = 0; cx < w; cx += cell) {
-      const lum = 0.16 + rng() * 0.22;
-      ctx.fillStyle = `rgba(12, 20, 24, ${lum})`;
-      ctx.fillRect(x + cx, y, cell - 1.5, h - 14);
+    const thumbH = h - 14;
+    if (visuals?.strip && visuals.stripMeta && media) {
+      // miniaturas reales: cada celda muestra el frame de su tiempo de fuente
+      const m = visuals.stripMeta;
+      const cellW = Math.max(24, thumbH * (m.tile_w / m.tile_h));
+      for (let cx = 0; cx < w; cx += cellW) {
+        const tlUs = (cx / w) * clip.duration;
+        const srcUs = media.src_in + tlUs * clip.speed;
+        const idx = Math.min(m.count - 1, Math.max(0, Math.floor(srcUs / m.interval_us)));
+        ctx.drawImage(
+          visuals.strip,
+          idx * m.tile_w,
+          0,
+          m.tile_w,
+          m.tile_h,
+          x + cx,
+          y,
+          cellW,
+          thumbH,
+        );
+      }
+      ctx.fillStyle = "rgba(0,0,0,0.1)";
+      ctx.fillRect(x, y, w, thumbH);
+    } else {
+      // filmstrip determinista (demo navegador / miniaturas aún generándose)
+      const rng = mulberry32(seed);
+      const cell = 22;
+      for (let cx = 0; cx < w; cx += cell) {
+        const lum = 0.16 + rng() * 0.22;
+        ctx.fillStyle = `rgba(12, 20, 24, ${lum})`;
+        ctx.fillRect(x + cx, y, cell - 1.5, h - 14);
+      }
     }
     ctx.fillStyle = "rgba(0,0,0,0.28)";
     ctx.fillRect(x, y + h - 14, w, 14);
   } else if (isAudio) {
-    // waveform determinista
-    const rng = mulberry32(seed);
     const mid = y + h / 2 + 3;
     const maxAmp = (h - 18) / 2;
     ctx.fillStyle = hi + "66";
-    let prev = 0.4;
-    for (let cx = 1.5; cx < w - 1.5; cx += 2.5) {
-      const target = rng();
-      prev = prev * 0.6 + target * 0.4;
-      const amp = Math.max(1.2, prev * maxAmp * (0.55 + 0.45 * Math.sin(cx / 43)));
-      ctx.fillRect(x + cx, mid - amp, 1.6, amp * 2);
+    if (visuals?.peaks && media) {
+      // waveform real: columna → tiempo de fuente → bin de picos
+      const peaks = visuals.peaks;
+      for (let cx = 1.5; cx < w - 1.5; cx += 2.5) {
+        const tlUs = (cx / w) * clip.duration;
+        const srcUs = media.src_in + tlUs * clip.speed;
+        const bin = Math.min(peaks.length - 1, Math.floor((srcUs / 1e6) * PEAKS_PER_SEC));
+        const amp = Math.max(1.2, Math.pow(peaks[bin] ?? 0, 0.7) * maxAmp);
+        ctx.fillRect(x + cx, mid - amp, 1.6, amp * 2);
+      }
+    } else {
+      // waveform determinista (demo navegador / picos aún calculándose)
+      const rng = mulberry32(seed);
+      let prev = 0.4;
+      for (let cx = 1.5; cx < w - 1.5; cx += 2.5) {
+        const target = rng();
+        prev = prev * 0.6 + target * 0.4;
+        const amp = Math.max(1.2, prev * maxAmp * (0.55 + 0.45 * Math.sin(cx / 43)));
+        ctx.fillRect(x + cx, mid - amp, 1.6, amp * 2);
+      }
     }
     // fades como rampas oscuras
     const fadeW = (us: number) => (us / 1e6) * ((w / clip.duration) * 1e6);
@@ -478,6 +518,7 @@ export function Timeline() {
   const setActiveSequence = useStore((s) => s.setActiveSequence);
   const rangeInUs = useStore((s) => s.rangeInUs);
   const rangeOutUs = useStore((s) => s.rangeOutUs);
+  const visualsBump = useStore((s) => s.visualsBump);
 
   // seguir el playhead durante la reproducción
   useEffect(() => {
@@ -521,7 +562,11 @@ export function Timeline() {
       ghost,
       [rangeInUs, rangeOutUs],
     );
-  }, [project, version, selection, playheadUs, viewStartUs, pxPerSec, size, ghost, rangeInUs, rangeOutUs]);
+  }, [project, version, selection, playheadUs, viewStartUs, pxPerSec, size, ghost, rangeInUs, rangeOutUs, visualsBump]);
+
+  useEffect(() => {
+    requestVisuals(project);
+  }, [project, version]);
 
   const xToUs = useCallback(
     (x: number) => viewStartUs + (x / pxPerSec) * 1e6,

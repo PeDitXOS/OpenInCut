@@ -33,6 +33,9 @@ pub struct AppState {
     pub mcp_shutdown: AtomicBool,
     pub mcp_token: Mutex<String>,
     pub models_dir: Mutex<Option<PathBuf>>,
+    /// Cachés de visuales del timeline (por asset).
+    pub peaks_cache: Mutex<std::collections::HashMap<Id, Arc<Vec<f32>>>>,
+    pub thumbs_cache: Mutex<std::collections::HashMap<Id, ue_media::thumbs::ThumbStrip>>,
 }
 
 impl AppState {
@@ -52,6 +55,8 @@ impl AppState {
             mcp_shutdown: AtomicBool::new(false),
             mcp_token: Mutex::new(Id::new().to_string().to_lowercase()),
             models_dir: Mutex::new(None),
+            peaks_cache: Mutex::new(std::collections::HashMap::new()),
+            thumbs_cache: Mutex::new(std::collections::HashMap::new()),
         }
     }
 }
@@ -575,6 +580,94 @@ fn playback_frame(state: State<AppState>) -> Res<tauri::ipc::Response> {
         Some(fs) => fs.latest.lock().unwrap().clone(),
         None => vec![],
     };
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// Picos de audio reales del asset (25 bins/s, mezcla mono), para la waveform
+/// del timeline. Cachea en memoria y en disco junto al conformado.
+#[tauri::command]
+async fn get_audio_peaks(state: State<'_, AppState>, asset_id: String) -> Res<Vec<f32>> {
+    let id: Id = asset_id.parse().map_err(|_| "id inválido")?;
+    if let Some(p) = state.peaks_cache.lock().unwrap().get(&id) {
+        return Ok(p.as_ref().clone());
+    }
+    let conform = {
+        let store = state.store.lock().unwrap();
+        store
+            .project
+            .asset(id)
+            .ok_or("asset no encontrado")?
+            .audio_conform
+            .clone()
+            .ok_or("audio sin conformar todavía")?
+    };
+    let peaks = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<f32>, String> {
+        let disk = PathBuf::from(format!("{conform}.peaks"));
+        if let Ok(bytes) = std::fs::read(&disk) {
+            return Ok(bytes
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .collect());
+        }
+        let wav =
+            ue_audio::wav::WavMap::open(Path::new(&conform)).map_err(|e| e.to_string())?;
+        let peaks = ue_audio::wav::compute_peaks(&wav, 25);
+        let bytes: Vec<u8> = peaks.iter().flat_map(|f| f.to_le_bytes()).collect();
+        let _ = std::fs::write(&disk, bytes); // caché best-effort
+        Ok(peaks)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    state.peaks_cache.lock().unwrap().insert(id, Arc::new(peaks.clone()));
+    Ok(peaks)
+}
+
+/// Genera (o devuelve del caché) la tira de miniaturas del asset.
+#[tauri::command]
+async fn ensure_thumbs(
+    state: State<'_, AppState>,
+    asset_id: String,
+) -> Res<ue_media::thumbs::ThumbStrip> {
+    let id: Id = asset_id.parse().map_err(|_| "id inválido")?;
+    if let Some(t) = state.thumbs_cache.lock().unwrap().get(&id) {
+        return Ok(t.clone());
+    }
+    let (src, dur, hash, cache_dir) = {
+        let store = state.store.lock().unwrap();
+        let asset = store.project.asset(id).ok_or("asset no encontrado")?;
+        if asset.kind == ue_core::model::MediaKind::Audio {
+            return Err("los assets de audio no llevan miniaturas".into());
+        }
+        let cache = state.cache_dir.lock().unwrap().clone().ok_or("sin caché")?;
+        (
+            PathBuf::from(&asset.path),
+            asset.probe.duration_us.max(1_000_000),
+            asset.content_hash.clone(),
+            cache,
+        )
+    };
+    let strip = tauri::async_runtime::spawn_blocking(move || {
+        ue_media::thumbs::generate_thumb_strip(&src, dur, &cache_dir, &hash)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    state.thumbs_cache.lock().unwrap().insert(id, strip.clone());
+    Ok(strip)
+}
+
+/// Bytes JPEG de la tira de miniaturas ya generada.
+#[tauri::command]
+fn get_thumb_strip(state: State<AppState>, asset_id: String) -> Res<tauri::ipc::Response> {
+    let id: Id = asset_id.parse().map_err(|_| "id inválido")?;
+    let path = state
+        .thumbs_cache
+        .lock()
+        .unwrap()
+        .get(&id)
+        .map(|t| t.path.clone())
+        .ok_or("miniaturas no generadas (llama ensure_thumbs)")?;
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
@@ -1438,6 +1531,9 @@ pub fn run() {
             playback_pause,
             playback_seek,
             playback_position,
+            get_audio_peaks,
+            ensure_thumbs,
+            get_thumb_strip,
             playback_frame,
             save_project,
             open_project,

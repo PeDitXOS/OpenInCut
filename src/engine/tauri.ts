@@ -10,6 +10,7 @@ import type {
   Id,
   StateSnapshot,
   TextStyle,
+  ThumbStrip,
   TimeUs,
   Transform2D,
   TransitionRef,
@@ -116,6 +117,17 @@ export class TauriEngine implements EngineClient {
   }
   playbackSeek(tUs: TimeUs): Promise<void> {
     return invoke("playback_seek", { tUs });
+  }
+  getAudioPeaks(assetId: Id): Promise<number[] | null> {
+    return invoke("get_audio_peaks", { assetId });
+  }
+  async ensureThumbs(assetId: Id): Promise<ThumbStrip | null> {
+    return invoke("ensure_thumbs", { assetId });
+  }
+  async getThumbStrip(assetId: Id): Promise<Uint8Array | null> {
+    const buf = await invoke<ArrayBuffer>("get_thumb_strip", { assetId });
+    const bytes = new Uint8Array(buf);
+    return bytes.length > 0 ? bytes : null;
   }
   playbackPosition(): Promise<[TimeUs, boolean, number, number]> {
     return invoke("playback_position");

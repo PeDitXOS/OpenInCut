@@ -276,6 +276,15 @@ export class MockEngine implements EngineClient {
     throw new Error("sin audio en navegador");
   }
   async playbackSeek(): Promise<void> {}
+  async getAudioPeaks(): Promise<number[] | null> {
+    return null;
+  }
+  async ensureThumbs(): Promise<null> {
+    return null;
+  }
+  async getThumbStrip(): Promise<Uint8Array | null> {
+    return null;
+  }
   async playbackPosition(): Promise<[number, boolean, number, number]> {
     throw new Error("sin audio en navegador");
   }

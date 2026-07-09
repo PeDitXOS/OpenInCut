@@ -5,6 +5,7 @@ import type {
   Id,
   StateSnapshot,
   TextStyle,
+  ThumbStrip,
   TimeUs,
   Transform2D,
   TransitionRef,
@@ -66,6 +67,12 @@ export interface EngineClient {
   playbackPause(): Promise<TimeUs>;
   playbackSeek(tUs: TimeUs): Promise<void>;
   /** [posición µs, reproduciendo] según el reloj de audio. */
+  /** Picos de audio reales (25 bins/s) del asset, o null si no aplica. */
+  getAudioPeaks(assetId: Id): Promise<number[] | null>;
+  /** Genera/recupera la tira de miniaturas del asset (solo escritorio). */
+  ensureThumbs(assetId: Id): Promise<ThumbStrip | null>;
+  /** Bytes JPEG de la tira ya generada. */
+  getThumbStrip(assetId: Id): Promise<Uint8Array | null>;
   /** (posición, reproduciendo, RMS izq 0..1, RMS der 0..1). */
   playbackPosition(): Promise<[TimeUs, boolean, number, number]>;
 
