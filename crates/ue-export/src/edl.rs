@@ -10,6 +10,13 @@ use crate::{ExportError, ExportResult};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Segment {
+    /// Fuente lavfi generada (rectángulo, degradado, …), ya renderizada con
+    /// su duración de ventana.
+    Gen {
+        source: String,
+        duration: TimeUs,
+        vf: Option<String>,
+    },
     Source {
         asset_id: Id,
         src_in: TimeUs,
@@ -32,6 +39,7 @@ impl Segment {
             Segment::Source { src_in, src_out, speed, .. } => {
                 (((src_out - src_in) as f64) / speed).round() as TimeUs
             }
+            Segment::Gen { duration, .. } => *duration,
             Segment::Black { duration } => *duration,
         }
     }
@@ -58,7 +66,7 @@ pub fn build_video_edl_with(
     cuts.insert(0);
     for track in seq.tracks.iter().filter(|t| t.kind == TrackKind::Video && !t.muted) {
         for clip in &track.clips {
-            if let ClipPayload::Media { .. } = clip.payload {
+            if matches!(clip.payload, ClipPayload::Media { .. } | ClipPayload::Generator { .. }) {
                 cuts.insert(clip.start);
                 cuts.insert(clip.end());
             }
@@ -71,6 +79,7 @@ pub fn build_video_edl_with(
 
     // por tramo, resolver el clip visible (pista superior gana)
     let registry = ue_render::merge_registries(ue_render::core_registry(), extra_packs.to_vec());
+    let generators = ue_render::core_generators();
     let mut segments: Vec<Segment> = vec![];
     for w in cuts.windows(2) {
         let (a, b) = (w[0], w[1]);
@@ -79,6 +88,31 @@ pub fn build_video_edl_with(
         for track in seq.tracks.iter().rev().filter(|t| t.kind == TrackKind::Video && !t.muted) {
             for clip in &track.clips {
                 if clip.start <= mid && mid < clip.end() {
+                    if let ClipPayload::Generator { generator_id, params, color_params } =
+                        &clip.payload
+                    {
+                        if let Some(def) =
+                            ue_render::find_generator(&generators, generator_id)
+                        {
+                            found = Some(Segment::Gen {
+                                source: ue_render::render_generator(
+                                    def,
+                                    params,
+                                    color_params,
+                                    seq.fps,
+                                    b - a,
+                                ),
+                                duration: b - a,
+                                vf: ue_render::clip_vf(
+                                    &registry,
+                                    &clip.effects,
+                                    &clip.transform,
+                                    Some(seq.resolution),
+                                ),
+                            });
+                        }
+                        break;
+                    }
                     if let ClipPayload::Media { asset_id, src_in, src_out } = &clip.payload {
                         if project.asset(*asset_id).is_none() {
                             return Err(ExportError::MissingAsset(*asset_id));

@@ -7,7 +7,9 @@ import type {
   AudioProps,
   EffectDef,
   EffectInstance,
+  GeneratorDef,
   Id,
+  Param,
   Project,
   StateSnapshot,
   TimeUs,
@@ -79,6 +81,14 @@ export interface UiState {
   textTemplates: Record<string, TextStyle>;
   saveTextTemplate: (name: string, style: TextStyle) => Promise<void>;
   effectsCatalog: EffectDef[];
+  generatorsCatalog: GeneratorDef[];
+  addGeneratorClip: (generatorId: string) => Promise<void>;
+  setClipGenerator: (
+    clipId: Id,
+    generatorId: string,
+    params: Record<string, Param>,
+    colorParams: Record<string, string>,
+  ) => Promise<void>;
   setClipEffects: (clipId: Id, effects: EffectInstance[]) => Promise<void>;
   setClipTransition: (clipId: Id, transition: TransitionRef | null) => Promise<void>;
   reloadEffectPacks: () => Promise<void>;
@@ -198,6 +208,11 @@ export const useStore = create<UiState>((set, get) => {
         set({ effectsCatalog: await engine.getEffectsCatalog() });
       } catch {
         /* sin catálogo: el panel de efectos queda vacío */
+      }
+      try {
+        set({ generatorsCatalog: await engine.getGenerators() });
+      } catch {
+        /* sin generadores */
       }
       try {
         const status = await engine.mcpStatus();
@@ -404,6 +419,13 @@ export const useStore = create<UiState>((set, get) => {
       }
     },
     effectsCatalog: [],
+    generatorsCatalog: [],
+    addGeneratorClip: (generatorId) =>
+      run("Añadir generador", () => engine.addGeneratorClip(generatorId, get().playheadUs)),
+    setClipGenerator: (clipId, generatorId, params, colorParams) =>
+      run("Editar generador", () =>
+        engine.setClipGenerator(clipId, generatorId, params, colorParams),
+      ),
     setClipEffects: (clipId, effects) =>
       run("Editar efectos", () => engine.setClipEffects(clipId, effects)),
     setClipTransition: (clipId, transition) =>

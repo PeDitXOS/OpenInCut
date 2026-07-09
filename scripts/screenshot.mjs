@@ -174,5 +174,19 @@ if ((await page.getByTitle(/Quitar el keyframe del playhead/).count()) === 0)
   throw new Error("el keyframe no se creó (no hay ◆ en el playhead)");
 await shot("12-keyframe-creado");
 
+// 13. Generadores: añadir un rectángulo y editar su color en el Inspector
+await page.locator("header").click();
+await page.keyboard.press("Home");
+await page.getByRole("button", { name: /Forma/ }).click();
+await page.waitForTimeout(250);
+await page.mouse.click(xForSec(0.5), box.y + 26 + 2 + 27); // clip generador en V2
+await page.waitForTimeout(250);
+if ((await page.getByText("Generador", { exact: true }).count()) === 0)
+  throw new Error("el Inspector no muestra el panel Generador");
+const tipoSelect = page.locator("select").filter({ hasText: "Rectángulo sólido" });
+if ((await tipoSelect.count()) === 0)
+  throw new Error("el selector de tipo de generador no está");
+await shot("13-generador-rectangulo");
+
 await browser.close();
 console.log(`\nScreenshots en ${outDir}`);

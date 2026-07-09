@@ -20,6 +20,11 @@ pub enum RenderError {
 // Definición de efectos (manifest)
 // ---------------------------------------------------------------------------
 
+pub mod generators;
+pub use generators::{
+    core_generators, find_generator, generators_catalog_json, render_generator, GeneratorDef,
+};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum ParamKind {
@@ -117,14 +122,14 @@ pub fn merge_registries(core: Vec<EffectDef>, user: Vec<EffectDef>) -> Vec<Effec
 // Renderizado de la cadena ffmpeg (backend v0)
 // ---------------------------------------------------------------------------
 
-fn format_float(v: f64) -> String {
+pub(crate) fn format_float(v: f64) -> String {
     // sin notación científica y sin ceros infinitos
     let s = format!("{v:.4}");
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 /// "#rrggbb" → "0xRRGGBB" (sintaxis de color de ffmpeg). Valores raros caen al default.
-fn format_color(hex: &str) -> Option<String> {
+pub(crate) fn format_color(hex: &str) -> Option<String> {
     let h = hex.strip_prefix('#')?;
     if h.len() != 6 || !h.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;

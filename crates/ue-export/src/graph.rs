@@ -755,29 +755,69 @@ pub fn build_ffmpeg_args(
         .collect();
     let registry =
         ue_render::merge_registries(ue_render::core_registry(), settings.extra_packs.clone());
-    let mut layer_clips: Vec<(Id, TimeUs, TimeUs, TimeUs, f64, Option<String>, f64)> = vec![];
+    let generators = ue_render::core_generators();
+    enum LayerSrc {
+        Media { asset_id: Id, src_in: TimeUs, src_out: TimeUs, speed: f64 },
+        Gen { source: String },
+    }
+    struct LayerClip {
+        src: LayerSrc,
+        start: TimeUs,
+        out_dur: TimeUs,
+        vf: Option<String>,
+        opacity: f64,
+    }
+    let mut layer_clips: Vec<LayerClip> = vec![];
     for track in video_tracks.iter().skip(1) {
         for clip in &track.clips {
-            if let ClipPayload::Media { asset_id, src_in, src_out } = &clip.payload {
-                if project.asset(*asset_id).is_none() {
-                    return Err(ExportError::MissingAsset(*asset_id));
-                }
-                let vf = ue_render::clip_vf_layer(
+            let vf = || {
+                ue_render::clip_vf_layer(
                     &registry,
                     &clip.effects,
                     &clip.transform,
                     Some(seq.resolution),
-                );
-                let opacity = clip.transform.opacity.eval(0).clamp(0.0, 1.0);
-                layer_clips.push((
-                    *asset_id,
-                    *src_in,
-                    *src_out,
-                    clip.start,
-                    clip.speed,
-                    vf,
-                    opacity,
-                ));
+                )
+            };
+            let opacity = clip.transform.opacity.eval(0).clamp(0.0, 1.0);
+            match &clip.payload {
+                ClipPayload::Media { asset_id, src_in, src_out } => {
+                    if project.asset(*asset_id).is_none() {
+                        return Err(ExportError::MissingAsset(*asset_id));
+                    }
+                    layer_clips.push(LayerClip {
+                        src: LayerSrc::Media {
+                            asset_id: *asset_id,
+                            src_in: *src_in,
+                            src_out: *src_out,
+                            speed: clip.speed,
+                        },
+                        start: clip.start,
+                        out_dur: (((*src_out - *src_in) as f64) / clip.speed).round() as TimeUs,
+                        vf: vf(),
+                        opacity,
+                    });
+                }
+                ClipPayload::Generator { generator_id, params, color_params } => {
+                    let Some(def) = ue_render::find_generator(&generators, generator_id) else {
+                        continue;
+                    };
+                    layer_clips.push(LayerClip {
+                        src: LayerSrc::Gen {
+                            source: ue_render::render_generator(
+                                def,
+                                params,
+                                color_params,
+                                seq.fps,
+                                clip.duration,
+                            ),
+                        },
+                        start: clip.start,
+                        out_dur: clip.duration,
+                        vf: vf(),
+                        opacity,
+                    });
+                }
+                _ => {}
             }
         }
     }
@@ -802,13 +842,7 @@ pub fn build_ffmpeg_args(
     };
     let base_dur = edl_duration(&edl);
     // el master dura hasta el final de la capa más larga
-    let layers_end = layer_clips
-        .iter()
-        .map(|(_, si, so, start, speed, _, _)| {
-            start + (((so - si) as f64) / speed).round() as TimeUs
-        })
-        .max()
-        .unwrap_or(0);
+    let layers_end = layer_clips.iter().map(|l| l.start + l.out_dur).max().unwrap_or(0);
     let total_us = base_dur.max(layers_end);
     let audio_items = collect_audio(project, sequence_id);
 
@@ -857,6 +891,13 @@ pub fn build_ffmpeg_args(
                     secs(*src_in),
                     secs(*src_out),
                 ));
+            }
+            Segment::Gen { source, vf, .. } => {
+                let effects = match vf {
+                    Some(chain) => format!("{chain},"),
+                    None => String::new(),
+                };
+                fc.push(format!("{source},{effects}{norm}[{label}]"));
             }
             Segment::Black { duration } => {
                 fc.push(format!(
@@ -907,12 +948,8 @@ pub fn build_ffmpeg_args(
     }
 
     // ---- capas superiores: overlay en orden de pista (de abajo hacia arriba) ----
-    for (k, (asset_id, src_in, src_out, start, speed, vf, opacity)) in
-        layer_clips.iter().enumerate()
-    {
-        let idx = input_of(*asset_id, project);
-        let out_dur = ((*src_out - *src_in) as f64 / speed).round() as TimeUs;
-        let effects = match vf {
+    for (k, layer) in layer_clips.iter().enumerate() {
+        let effects = match &layer.vf {
             Some(chain) => format!("{chain},"),
             None => String::new(),
         };
@@ -920,22 +957,34 @@ pub fn build_ffmpeg_args(
         let fit = format!(
             "scale='min({out_w},iw)':'min({out_h},ih)':force_original_aspect_ratio=decrease"
         );
-        let alpha = if *opacity < 0.999 {
-            format!("format=rgba,colorchannelmixer=aa={opacity:.4},")
+        let alpha = if layer.opacity < 0.999 {
+            format!("format=rgba,colorchannelmixer=aa={:.4},", layer.opacity)
         } else {
             "format=rgba,".to_string()
         };
-        fc.push(format!(
-            "[{idx}:v]trim=start={}:end={},setpts=(PTS-STARTPTS)/{speed}+{}/TB,{effects}{fit},{alpha}fps={fps}[ly{k}]",
-            secs(*src_in),
-            secs(*src_out),
-            secs(*start),
-        ));
+        let start = layer.start;
+        match &layer.src {
+            LayerSrc::Media { asset_id, src_in, src_out, speed } => {
+                let idx = input_of(*asset_id, project);
+                fc.push(format!(
+                    "[{idx}:v]trim=start={}:end={},setpts=(PTS-STARTPTS)/{speed}+{}/TB,{effects}{fit},{alpha}fps={fps}[ly{k}]",
+                    secs(*src_in),
+                    secs(*src_out),
+                    secs(start),
+                ));
+            }
+            LayerSrc::Gen { source } => {
+                fc.push(format!(
+                    "{source},setpts=PTS-STARTPTS+{}/TB,{effects}{fit},{alpha}fps={fps}[ly{k}]",
+                    secs(start),
+                ));
+            }
+        }
         let out_label = format!("lc{k}");
         fc.push(format!(
             "[{current}][ly{k}]overlay=x=(W-w)/2:y=(H-h)/2:eof_action=pass:enable='between(t,{},{})'[{out_label}]",
-            secs(*start),
-            secs(*start + out_dur),
+            secs(start),
+            secs(start + layer.out_dur),
         ));
         current = out_label;
     }

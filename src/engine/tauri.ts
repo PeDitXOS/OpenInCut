@@ -8,6 +8,8 @@ import type {
   EffectDef,
   EffectInstance,
   Id,
+  GeneratorDef,
+  Param,
   StateSnapshot,
   TextStyle,
   ThumbStrip,
@@ -222,6 +224,20 @@ export class TauriEngine implements EngineClient {
 
   unlinkClip(clipId: Id): Promise<StateSnapshot> {
     return invoke("unlink_clip", { clipId });
+  }
+  getGenerators(): Promise<GeneratorDef[]> {
+    return invoke("get_generators");
+  }
+  addGeneratorClip(generatorId: string, atUs: TimeUs): Promise<StateSnapshot> {
+    return invoke("add_generator_clip", { generatorId, atUs });
+  }
+  setClipGenerator(
+    clipId: Id,
+    generatorId: string,
+    params: Record<string, Param>,
+    colorParams: Record<string, string>,
+  ): Promise<StateSnapshot> {
+    return invoke("set_clip_generator", { clipId, generatorId, params, colorParams });
   }
   addTrack(kind: "video" | "audio"): Promise<StateSnapshot> {
     return invoke("add_track", { kind });

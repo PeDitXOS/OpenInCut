@@ -1330,6 +1330,57 @@ fn add_text_clip(state: State<AppState>, content: String, at_us: TimeUs) -> Res<
     Ok(snapshot(&store))
 }
 
+/// Catálogo de generadores (manifests core) para la UI.
+#[tauri::command]
+fn get_generators() -> serde_json::Value {
+    ue_render::generators_catalog_json(&ue_render::core_generators())
+}
+
+/// Añade un clip generador (rectángulo, degradado, …) en el playhead, en una
+/// pista de video libre (se crea si hace falta).
+#[tauri::command]
+fn add_generator_clip(
+    state: State<AppState>,
+    generator_id: String,
+    at_us: TimeUs,
+) -> Res<StateSnapshot> {
+    if ue_render::find_generator(&ue_render::core_generators(), &generator_id).is_none() {
+        return Err(format!("generador desconocido: {generator_id}"));
+    }
+    let mut store = state.store.lock().unwrap();
+    let duration = 4_000_000;
+    let start = at_us.max(0);
+    let track_id = ensure_free_video_track(&mut store, start, duration)?;
+    let clip = Clip::new_generator(&generator_id, start, duration);
+    store.insert_clip(track_id, clip, InsertMode::Strict).map_err(|e| e.to_string())?;
+    Ok(snapshot(&store))
+}
+
+/// Edita los parámetros de un generador (deshacible).
+#[tauri::command]
+fn set_clip_generator(
+    state: State<AppState>,
+    clip_id: String,
+    generator_id: String,
+    params: std::collections::BTreeMap<String, ue_core::keyframe::Param>,
+    color_params: std::collections::BTreeMap<String, String>,
+) -> Res<StateSnapshot> {
+    let mut store = state.store.lock().unwrap();
+    let id = parse_id(&clip_id)?;
+    store
+        .dispatch(
+            "Editar generador",
+            vec![ue_core::Action::SetClipGenerator {
+                clip_id: id,
+                generator_id,
+                params,
+                color_params,
+            }],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(snapshot(&store))
+}
+
 #[tauri::command]
 fn set_clip_text(
     state: State<AppState>,
@@ -1807,6 +1858,9 @@ pub fn run() {
             rename_track,
             set_track_volume,
             add_text_clip,
+            get_generators,
+            add_generator_clip,
+            set_clip_generator,
             set_clip_text,
             remove_silences,
             transcribe_asset,

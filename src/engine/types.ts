@@ -170,7 +170,12 @@ export type ClipPayload =
   | { type: "media"; asset_id: Id; src_in: TimeUs; src_out: TimeUs }
   | { type: "text"; content: string; style: TextStyle }
   | { type: "subtitles"; transcript_id: Id; style: TextStyle; mode: SubtitleMode }
-  | { type: "solid"; color: [number, number, number, number] }
+  | {
+      type: "generator";
+      generator_id: string;
+      params: Record<string, Param>;
+      color_params: Record<string, string>;
+    }
   | {
       type: "avatar";
       driver_asset: Id;
@@ -452,8 +457,8 @@ export function clipDisplayName(clip: Clip, project: Project): string {
         : clip.payload.content || "Texto";
     case "subtitles":
       return "Subtítulos";
-    case "solid":
-      return "Color";
+    case "generator":
+      return clip.payload.generator_id === "core.gradient" ? "Degradado" : "Rectángulo";
     case "avatar":
       return "Avatar";
   }
@@ -476,6 +481,15 @@ export interface EffectDef {
   category: string;
   params: EffectParamDef[];
   ffmpeg: string;
+  notes?: string | null;
+}
+
+/** Manifest de un generador (rectángulo, degradado, …). */
+export interface GeneratorDef {
+  id: string;
+  name: string;
+  params: EffectParamDef[];
+  source: string;
   notes?: string | null;
 }
 

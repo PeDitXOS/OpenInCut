@@ -1,0 +1,12 @@
+{
+  "id": "core.gradient",
+  "name": "Degradado",
+  "params": [
+    { "key": "color_a", "label": "Color A", "type": "color", "default": "#ffb224" },
+    { "key": "color_b", "label": "Color B", "type": "color", "default": "#16130f" },
+    { "key": "width", "label": "Ancho", "type": "float", "default": 1920, "min": 16, "max": 4096 },
+    { "key": "height", "label": "Alto", "type": "float", "default": 1080, "min": 16, "max": 4096 }
+  ],
+  "source": "gradients=s={width}x{height}:c0={color_a}:c1={color_b}:x0=0:y0=0:x1={width}:y1={height}:speed=0:rate={fps}:duration={d}",
+  "notes": "Degradado lineal diagonal de dos colores (ángulo configurable: futuro)."
+}

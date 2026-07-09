@@ -207,7 +207,11 @@ function drawClip(
   selected: boolean,
   ghost: boolean,
 ) {
-  const isText = ["text", "subtitles", "avatar"].includes(clip.payload.type);
+  const isText = ["text", "subtitles", "avatar", "generator"].includes(clip.payload.type);
+  const genColor =
+    clip.payload.type === "generator"
+      ? (clip.payload.color_params["color"] ?? clip.payload.color_params["color_a"] ?? "#ff3355")
+      : null;
   const isAudio = track.kind === "audio";
   const base = isText ? COLORS.clipText : isAudio ? COLORS.clipAudio : COLORS.clipVideo;
   const hi = isText ? COLORS.clipTextHi : isAudio ? COLORS.clipAudioHi : COLORS.clipVideoHi;
@@ -306,6 +310,28 @@ function drawClip(
       ctx.lineTo(x + w, y + h);
       ctx.closePath();
       ctx.fill();
+    }
+  } else if (genColor) {
+    // clip generador: franja con su color real
+    ctx.fillStyle = genColor + "55";
+    ctx.fillRect(x, y, w, h - 14);
+    ctx.fillStyle = genColor;
+    ctx.fillRect(x, y + 3, w, 3);
+    ctx.fillStyle = "rgba(0,0,0,0.25)";
+    ctx.fillRect(x, y + h - 14, w, 14);
+    ctx.fillStyle = "rgba(233,228,219,0.85)";
+    ctx.font = '500 10px "Inter", sans-serif';
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    if (w > 50) {
+      ctx.fillText(
+        clip.payload.type === "generator" && clip.payload.generator_id === "core.gradient"
+          ? "▦ Degradado"
+          : "▦ Forma",
+        x + 6,
+        y + (h - 14) / 2 + 1,
+        w - 12,
+      );
     }
   } else {
     // clip de texto
@@ -638,6 +664,7 @@ export function Timeline() {
   const generateVertical = useStore((s) => s.generateVertical);
   const setActiveSequence = useStore((s) => s.setActiveSequence);
   const addTrack = useStore((s) => s.addTrack);
+  const addGeneratorClip = useStore((s) => s.addGeneratorClip);
   const rangeInUs = useStore((s) => s.rangeInUs);
   const rangeOutUs = useStore((s) => s.rangeOutUs);
   const visualsBump = useStore((s) => s.visualsBump);
@@ -952,6 +979,13 @@ export function Timeline() {
           title="Genera una copia vertical 1080x1920 con fondo desenfocado (Shorts/Reels)"
         >
           📱 Vertical
+        </button>
+        <button
+          className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
+          onClick={() => void addGeneratorClip("core.solid")}
+          title="Añadir un rectángulo de color en el playhead (Inspector: color, tamaño, degradado)"
+        >
+          ▦ Forma
         </button>
         <button
           className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"

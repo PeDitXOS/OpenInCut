@@ -342,6 +342,56 @@ fn multilayer_overlay_blends_with_opacity() {
     assert!(r > 200 && b < 60, "3.5s: rojo otra vez, fue ({r},{b})");
 }
 
+/// Generadores: degradado de base + rectángulo sólido como capa posicionada.
+#[test]
+fn generators_render_solid_and_gradient() {
+    let Some(dir) = media_dir() else { return };
+    let mut project = Project::new("generadores");
+    let seq_id = project.active_sequence;
+    let seq = project.sequence_mut(seq_id).unwrap();
+    seq.tracks.push(Track::new(TrackKind::Video, "V2"));
+    let v2 = seq.tracks.last().unwrap().id;
+    let v1 = seq.tracks.iter().find(|t| t.kind == TrackKind::Video && t.name == "V1").unwrap().id;
+    let mut store = ProjectStore::new(project);
+
+    // base: degradado a lienzo completo (ámbar → casi negro, diagonal)
+    let mut grad = Clip::new_generator("core.gradient", 0, 2 * SEC);
+    if let ClipPayload::Generator { color_params, .. } = &mut grad.payload {
+        color_params.insert("color_a".into(), "#ffb224".into());
+        color_params.insert("color_b".into(), "#000000".into());
+    }
+    store.insert_clip(v1, grad, InsertMode::Strict).unwrap();
+
+    // capa: rectángulo verde 400x300 desplazado a la derecha
+    let mut rect = Clip::new_generator("core.solid", 0, 2 * SEC);
+    if let ClipPayload::Generator { params, color_params, .. } = &mut rect.payload {
+        color_params.insert("color".into(), "#00cc44".into());
+        params.insert("width".into(), 400.0.into());
+        params.insert("height".into(), 300.0.into());
+    }
+    rect.transform.position.0 = 500.0.into();
+    store.insert_clip(v2, rect, InsertMode::Strict).unwrap();
+
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-generadores.mp4");
+    export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+
+    let meta = ffprobe_json(&out);
+    let dur: f64 = meta["format"]["duration"].as_str().unwrap().parse().unwrap();
+    assert!((1.9..=2.2).contains(&dur), "≈2 s, fue {dur}");
+    // esquina superior izquierda: ámbar del degradado (color_a)
+    let (r, g, b) = pixel_at(&out, 1.0, 60, 60);
+    assert!(r > 180 && g > 100 && b < 90, "esquina ámbar, fue ({r},{g},{b})");
+    // esquina inferior derecha: hacia negro (color_b)
+    let (r, g, b) = pixel_at(&out, 1.0, 1860, 1020);
+    assert!(r < 80 && g < 80 && b < 80, "esquina oscura, fue ({r},{g},{b})");
+    // el rectángulo verde: centro del lienzo + 500px
+    let (r, g, b) = pixel_at(&out, 1.0, 1460, 540);
+    assert!(g > 140 && r < 90 && b < 120, "rectángulo verde en +500px, fue ({r},{g},{b})");
+    // a la izquierda del centro NO hay rectángulo (se ve el degradado)
+    let (_r, g2, _b) = pixel_at(&out, 1.0, 500, 540);
+    assert!(g2 < 200, "sin verde sólido a la izquierda");
+}
+
 /// Posición animada por keyframes: el bloque rojo viaja de izquierda a derecha.
 #[test]
 fn animated_position_moves_in_export() {

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import type { Clip, Project } from "../engine/types";
 import { activeSequence, activeSubtitleText, assetName } from "../engine/types";
+import { paramValue } from "../engine/types";
 import { frameToUs, hash32, usToTimecode } from "../lib/time";
 import { engine, useStore } from "../state/store";
 
@@ -73,8 +74,50 @@ function activeClips(project: Project, playheadUs: number) {
   return {
     video: videoClips.find((c) => c.payload.type === "media"),
     texts: videoClips.filter((c) => c.payload.type === "text"),
+    // de abajo hacia arriba, como compone el export
+    generators: videoClips.filter((c) => c.payload.type === "generator").reverse(),
     subtitles,
   };
+}
+
+/** Dibuja los clips generadores (rect/degradado) con su transform muestreado. */
+function drawGenerators(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  seqRes: [number, number],
+  generators: Clip[],
+  playheadUs: number,
+) {
+  const sx = w / seqRes[0];
+  for (const clip of generators) {
+    if (clip.payload.type !== "generator") continue;
+    const { generator_id, params, color_params } = clip.payload;
+    const rel = Math.max(0, playheadUs - clip.start);
+    const isGrad = generator_id === "core.gradient";
+    const gw = paramValue(params["width"] ?? (isGrad ? 1920 : 640));
+    const gh = paramValue(params["height"] ?? (isGrad ? 1080 : 360));
+    const px = paramValue(clip.transform.position[0], rel);
+    const py = paramValue(clip.transform.position[1], rel);
+    const scale = paramValue(clip.transform.scale[0], rel);
+    const opacity = paramValue(clip.transform.opacity, rel);
+    const rw = gw * sx * scale;
+    const rh = gh * sx * scale;
+    const cx = w / 2 + px * sx;
+    const cy = h / 2 + py * sx;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, Math.min(1, opacity));
+    if (isGrad) {
+      const g = ctx.createLinearGradient(cx - rw / 2, cy - rh / 2, cx + rw / 2, cy + rh / 2);
+      g.addColorStop(0, color_params["color_a"] ?? "#ffb224");
+      g.addColorStop(1, color_params["color_b"] ?? "#16130f");
+      ctx.fillStyle = g;
+    } else {
+      ctx.fillStyle = color_params["color"] ?? "#ff3355";
+    }
+    ctx.fillRect(cx - rw / 2, cy - rh / 2, rw, rh);
+    ctx.restore();
+  }
 }
 
 function drawOverlays(
@@ -316,7 +359,7 @@ export function Preview() {
     const ctx = canvas.getContext("2d")!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    const { video, texts, subtitles } = activeClips(project, playheadUs);
+    const { video, texts, generators, subtitles } = activeClips(project, playheadUs);
 
     if (engine.kind === "tauri" && realFrame) {
       // frame real letterboxeado
@@ -343,6 +386,7 @@ export function Preview() {
       drawMockVideo(ctx, w, h, project, video);
       badge(ctx, w, h, "PREVIEW ½");
     }
+    drawGenerators(ctx, w, h, activeSequence(project).resolution, generators, playheadUs);
     drawOverlays(ctx, w, h, texts, subtitles);
   }, [project, playheadUs, version, parentSize, realFrame]);
 

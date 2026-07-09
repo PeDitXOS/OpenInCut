@@ -3,6 +3,8 @@ import type {
   EffectDef,
   EffectInstance,
   Id,
+  GeneratorDef,
+  Param,
   StateSnapshot,
   TextStyle,
   ThumbStrip,
@@ -125,6 +127,15 @@ export interface EngineClient {
 
   /** Rompe el enlace video↔audio del grupo del clip. */
   unlinkClip(clipId: Id): Promise<StateSnapshot>;
+  /** Catálogo de generadores (manifests). */
+  getGenerators(): Promise<GeneratorDef[]>;
+  addGeneratorClip(generatorId: string, atUs: TimeUs): Promise<StateSnapshot>;
+  setClipGenerator(
+    clipId: Id,
+    generatorId: string,
+    params: Record<string, Param>,
+    colorParams: Record<string, string>,
+  ): Promise<StateSnapshot>;
   addTrack(kind: "video" | "audio"): Promise<StateSnapshot>;
   removeTrack(trackId: Id): Promise<StateSnapshot>;
   renameTrack(trackId: Id, name: string): Promise<StateSnapshot>;

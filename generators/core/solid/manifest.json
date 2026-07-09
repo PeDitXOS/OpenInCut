@@ -1,0 +1,11 @@
+{
+  "id": "core.solid",
+  "name": "Rectángulo sólido",
+  "params": [
+    { "key": "color", "label": "Color", "type": "color", "default": "#ff3355" },
+    { "key": "width", "label": "Ancho", "type": "float", "default": 640, "min": 16, "max": 4096 },
+    { "key": "height", "label": "Alto", "type": "float", "default": 360, "min": 16, "max": 4096 }
+  ],
+  "source": "color=c={color}:s={width}x{height}:r={fps}:d={d}",
+  "notes": "Posición/escala/rotación/opacidad se controlan con la Transformación del clip."
+}

@@ -362,6 +362,7 @@ function ClipInspector({ clip }: { clip: Clip }) {
       )}
 
       {clip.payload.type === "text" && <TextPanel clip={clip} />}
+      {clip.payload.type === "generator" && <GeneratorPanel clip={clip} />}
       {clip.payload.type === "subtitles" && <SubtitlesPanel clip={clip} />}
 
       {clip.payload.type === "media" && asset && asset.probe.audio_channels > 0 && (
@@ -769,6 +770,75 @@ function EffectRow({
         </div>
       )}
     </div>
+  );
+}
+
+/** Panel de un clip generador: tipo + params autogenerados del manifest. */
+function GeneratorPanel({ clip }: { clip: Clip }) {
+  const catalog = useStore((s) => s.generatorsCatalog);
+  const setClipGenerator = useStore((s) => s.setClipGenerator);
+  if (clip.payload.type !== "generator") return null;
+  const { generator_id, params, color_params } = clip.payload;
+  const def = catalog.find((d) => d.id === generator_id);
+
+  return (
+    <Section title="Generador">
+      <Row label="Tipo">
+        <select
+          className="focus-ring min-w-0 flex-1 cursor-pointer rounded-md border border-line bg-bg2 px-2 py-1 text-[12px] text-ink"
+          value={generator_id}
+          onChange={(e) => void setClipGenerator(clip.id, e.target.value, {}, {})}
+          title="Tipo de generador (al cambiar se reinician los parámetros)"
+        >
+          {catalog.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.name}
+            </option>
+          ))}
+        </select>
+      </Row>
+      {def?.params.map((p) =>
+        p.type === "float" ? (
+          <Row key={p.key} label={p.label ?? p.key}>
+            <Slider
+              value={
+                params[p.key] !== undefined ? paramValue(params[p.key]) : (p.default as number)
+              }
+              min={p.min ?? 0}
+              max={p.max ?? 1}
+              step={1}
+              unit=" px"
+              onChange={(v) =>
+                void setClipGenerator(
+                  clip.id,
+                  generator_id,
+                  { ...params, [p.key]: v },
+                  color_params,
+                )
+              }
+            />
+          </Row>
+        ) : (
+          <Row key={p.key} label={p.label ?? p.key}>
+            <input
+              type="color"
+              className="h-6 w-10 cursor-pointer rounded border border-line bg-transparent"
+              value={color_params[p.key] ?? (p.default as string)}
+              onChange={(e) =>
+                void setClipGenerator(clip.id, generator_id, params, {
+                  ...color_params,
+                  [p.key]: e.target.value,
+                })
+              }
+            />
+            <span className="font-[var(--font-mono)] text-[10.5px] text-ink-faint">
+              {(color_params[p.key] ?? (p.default as string)).toUpperCase()}
+            </span>
+          </Row>
+        ),
+      )}
+      {def?.notes && <p className="mt-1.5 text-[10.5px] text-ink-faint">{def.notes}</p>}
+    </Section>
   );
 }
 

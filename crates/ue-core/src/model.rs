@@ -340,6 +340,26 @@ impl Clip {
         }
     }
 
+    pub fn new_generator(generator_id: &str, start: TimeUs, duration: TimeUs) -> Self {
+        Clip {
+            id: new_id(),
+            payload: ClipPayload::Generator {
+                generator_id: generator_id.into(),
+                params: Default::default(),
+                color_params: Default::default(),
+            },
+            start,
+            duration,
+            speed: 1.0,
+            effects: vec![],
+            transform: Default::default(),
+            audio: AudioProps { muted: true, ..Default::default() },
+            transition_in: None,
+            label_color: None,
+            group: None,
+        }
+    }
+
     pub fn new_text(content: &str, start: TimeUs, duration: TimeUs) -> Self {
         Clip {
             id: new_id(),
@@ -379,8 +399,14 @@ pub enum ClipPayload {
         style: TextStyle,
         mode: SubtitleMode,
     },
-    Solid {
-        color: [f32; 4],
+    /// Contenido generado (rectángulo sólido, degradado, …): un manifest de
+    /// generador (ue-render) produce la fuente lavfi a partir de los params.
+    Generator {
+        generator_id: String,
+        #[serde(default)]
+        params: std::collections::BTreeMap<String, Param>,
+        #[serde(default)]
+        color_params: std::collections::BTreeMap<String, String>,
     },
     /// Avatar reactivo (PLAN §7.E.1): clips en loop por emoción, guiados por
     /// el transcript del asset conductor. Config compatible con el

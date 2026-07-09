@@ -12,8 +12,10 @@ import type {
   Clip,
   EffectDef,
   EffectInstance,
+  GeneratorDef,
   Id,
   MediaAsset,
+  Param,
   Project,
   Sequence,
   StateSnapshot,
@@ -556,6 +558,45 @@ export class MockEngine implements EngineClient {
     });
   }
 
+  async getGenerators(): Promise<GeneratorDef[]> {
+    return MOCK_GENERATORS;
+  }
+  async addGeneratorClip(generatorId: string, atUs: number): Promise<StateSnapshot> {
+    return this.transaction("Añadir generador", () => {
+      const track = this.sequence.tracks.filter((t) => t.kind === "video").at(-1);
+      if (!track) throw new Error("sin pista de video");
+      track.clips.push({
+        ...emptyClipDefaults(),
+        id: `gen_${Math.random().toString(36).slice(2, 8)}`,
+        payload: { type: "generator", generator_id: generatorId, params: {}, color_params: {} },
+        start: Math.max(0, atUs),
+        duration: 4_000_000,
+      });
+      track.clips.sort((a, b) => a.start - b.start);
+    });
+  }
+  async setClipGenerator(
+    clipId: Id,
+    generatorId: string,
+    params: Record<string, Param>,
+    colorParams: Record<string, string>,
+  ): Promise<StateSnapshot> {
+    return this.transaction("Editar generador", () => {
+      for (const t of this.sequence.tracks) {
+        const clip = t.clips.find((c) => c.id === clipId);
+        if (clip && clip.payload.type === "generator") {
+          clip.payload = {
+            type: "generator",
+            generator_id: generatorId,
+            params,
+            color_params: colorParams,
+          };
+          return;
+        }
+      }
+      throw new Error("clip generador no encontrado");
+    });
+  }
   async addTrack(kind: "video" | "audio"): Promise<StateSnapshot> {
     return this.transaction("Añadir pista", () => {
       const n = this.sequence.tracks.filter((t) => t.kind === kind).length;
@@ -595,6 +636,43 @@ export class MockEngine implements EngineClient {
       track.volume_db = db;
     });
   }
+}
+
+const MOCK_GENERATORS: GeneratorDef[] = [
+  {
+    id: "core.solid",
+    name: "Rectángulo sólido",
+    params: [
+      { key: "color", label: "Color", type: "color", default: "#ff3355" },
+      { key: "width", label: "Ancho", type: "float", default: 640, min: 16, max: 4096 },
+      { key: "height", label: "Alto", type: "float", default: 360, min: 16, max: 4096 },
+    ],
+    source: "color",
+  },
+  {
+    id: "core.gradient",
+    name: "Degradado",
+    params: [
+      { key: "color_a", label: "Color A", type: "color", default: "#ffb224" },
+      { key: "color_b", label: "Color B", type: "color", default: "#16130f" },
+      { key: "width", label: "Ancho", type: "float", default: 1920, min: 16, max: 4096 },
+      { key: "height", label: "Alto", type: "float", default: 1080, min: 16, max: 4096 },
+    ],
+    source: "gradients",
+  },
+];
+
+/** Campos comunes de un clip nuevo del mock. */
+function emptyClipDefaults() {
+  return {
+    speed: 1,
+    effects: [],
+    transform: structuredClone(DEFAULT_TRANSFORM),
+    audio: { ...DEFAULT_AUDIO, muted: true },
+    transition_in: null,
+    label_color: null,
+    group: null,
+  };
 }
 
 // ---------------------------------------------------------------------------

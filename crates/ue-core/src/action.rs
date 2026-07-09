@@ -38,6 +38,12 @@ pub enum Action {
     SetClipTransition { clip_id: Id, transition: Option<TransitionRef> },
     /// Cambia contenido y estilo de un clip de texto (payload Text).
     SetClipText { clip_id: Id, content: String, style: TextStyle },
+    SetClipGenerator {
+        clip_id: Id,
+        generator_id: String,
+        params: std::collections::BTreeMap<String, crate::keyframe::Param>,
+        color_params: std::collections::BTreeMap<String, String>,
+    },
     /// Cambia estilo y modo de un clip de subtítulos (payload Subtitles).
     SetClipSubtitles { clip_id: Id, style: TextStyle, mode: SubtitleMode },
     /// Cambia la velocidad de un clip media (rate stretch: mismo material
@@ -331,6 +337,29 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
                     Ok(Action::SetClipText { clip_id, content: old_content, style: old_style })
                 }
                 _ => Err(UeError::Invalid("el clip no es de texto".into())),
+            }
+        }
+
+        Action::SetClipGenerator { clip_id, generator_id, params, color_params } => {
+            let (si, ti, ci) = project
+                .locate_clip(clip_id)
+                .ok_or_else(|| UeError::NotFound(format!("clip {clip_id}")))?;
+            let clip = &mut project.sequences[si].tracks[ti].clips[ci];
+            match &mut clip.payload {
+                ClipPayload::Generator {
+                    generator_id: g,
+                    params: p,
+                    color_params: c,
+                } => {
+                    let old = Action::SetClipGenerator {
+                        clip_id,
+                        generator_id: std::mem::replace(g, generator_id),
+                        params: std::mem::replace(p, params),
+                        color_params: std::mem::replace(c, color_params),
+                    };
+                    Ok(old)
+                }
+                _ => Err(UeError::Invalid("el clip no es un generador".into())),
             }
         }
 
