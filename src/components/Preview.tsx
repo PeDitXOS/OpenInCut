@@ -5,6 +5,40 @@ import { activeSequence, activeSubtitleText, assetName } from "../engine/types";
 import { frameToUs, hash32, usToTimecode } from "../lib/time";
 import { engine, useStore } from "../state/store";
 
+/** RMS → posición 0..1 en escala dB (-60..0). */
+function meterFill(rms: number): number {
+  if (rms <= 0) return 0;
+  const db = 20 * Math.log10(rms);
+  return Math.min(1, Math.max(0, (db + 60) / 60));
+}
+
+/** Medidores L/R compactos (escala dB, rojo por encima de -6 dB). */
+function AudioMeters() {
+  const meterL = useStore((s) => s.meterL);
+  const meterR = useStore((s) => s.meterR);
+  return (
+    <div className="flex w-24 flex-col gap-0.5" title="Nivel RMS (dBFS)">
+      {[meterL, meterR].map((m, i) => {
+        const fill = meterFill(m);
+        return (
+          <div key={i} className="h-1.5 overflow-hidden rounded-sm bg-bg3">
+            <div
+              className="h-full rounded-sm"
+              style={{
+                width: `${fill * 100}%`,
+                background:
+                  fill > 0.9
+                    ? "var(--color-danger, #e5484d)"
+                    : "linear-gradient(90deg, #46a758, #ffb224)",
+              }}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /**
  * Monitor de programa. Dos modos:
  * - Escritorio (Tauri): frame REAL extraído por ffmpeg (ue-media) + overlays.
@@ -325,6 +359,7 @@ export function Preview() {
         <div className="flex-1" />
 
         <div className="flex items-center gap-2 text-[11px] text-ink-faint">
+          {engine.kind === "tauri" && <AudioMeters />}
           <span className="rounded-md border border-line px-2 py-1">
             {engine.kind === "tauri" ? "Motor: escritorio" : "Motor: navegador"}
           </span>

@@ -589,11 +589,14 @@ fn playback_seek(state: State<AppState>, t_us: TimeUs) -> Res<()> {
 /// (posición µs, reproduciendo). También re-sincroniza los items si el
 /// proyecto cambió durante la reproducción (editar mientras suena).
 #[tauri::command]
-fn playback_position(state: State<AppState>) -> Res<(TimeUs, bool)> {
+fn playback_position(state: State<AppState>) -> Res<(TimeUs, bool, f32, f32)> {
     let _ = sync_player(&state); // barato si no cambió la versión
     let guard = state.player.lock().unwrap();
     match guard.as_ref() {
-        Some(p) => Ok((p.position_us(), p.is_playing())),
+        Some(p) => {
+            let (ml, mr) = p.meters();
+            Ok((p.position_us(), p.is_playing(), ml, mr))
+        }
         None => Err("sin reproductor".into()),
     }
 }

@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
+use ue_core::keyframe::{KeyframeCurve, Param};
 use ue_core::model::{ClipPayload, Id, MediaAsset, Project};
 
 use crate::mixer::{db_to_linear, MixItem};
@@ -18,7 +19,12 @@ pub struct ItemSpec {
     /// Duración en TIEMPO DE TIMELINE (la fuente ya dividida por speed).
     pub len_us: i64,
     pub speed: f64,
+    /// Parte estática de la ganancia (const del clip + volumen de pista).
     pub gain_db: f64,
+    /// Curva de ganancia en dB (si el gain del clip es animado).
+    pub gain_curve: Option<KeyframeCurve>,
+    /// Balance -1..1 (estático; se evalúa en t=0).
+    pub pan: f64,
     pub fade_in_us: i64,
     pub fade_out_us: i64,
 }
@@ -44,13 +50,19 @@ pub fn collect_specs(project: &Project, sequence_id: Id) -> Vec<ItemSpec> {
                 continue;
             }
             let src_len_tl = (((*src_out - *src_in) as f64) / clip.speed).round() as i64;
+            let (gain_const, gain_curve) = match &clip.audio.gain_db {
+                Param::Const(v) => (*v, None),
+                Param::Curve(c) => (0.0, Some(c.clone())),
+            };
             specs.push(ItemSpec {
                 asset_id: *asset_id,
                 timeline_start_us: clip.start,
                 src_in_us: *src_in,
                 len_us: src_len_tl.min(clip.duration),
                 speed: clip.speed,
-                gain_db: clip.audio.gain_db.eval(0) + track.volume_db as f64,
+                gain_db: gain_const + track.volume_db as f64,
+                gain_curve,
+                pan: clip.audio.pan.eval(0).clamp(-1.0, 1.0),
                 fade_in_us: clip.audio.fade_in_us,
                 fade_out_us: clip.audio.fade_out_us,
             });
@@ -85,6 +97,8 @@ pub fn load_items(
                 len: us_to_frames(spec.len_us),
                 speed: spec.speed,
                 gain: db_to_linear(spec.gain_db),
+                gain_curve: spec.gain_curve.clone(),
+                pan: spec.pan as f32,
                 fade_in: us_to_frames(spec.fade_in_us),
                 fade_out: us_to_frames(spec.fade_out_us),
             }),

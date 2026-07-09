@@ -47,6 +47,8 @@ fn dc_item(path: &PathBuf, timeline_start: i64, len: i64) -> MixItem {
         len,
         speed: 1.0,
         gain: 1.0,
+        gain_curve: None,
+        pan: 0.0,
         fade_in: 0,
         fade_out: 0,
     }
@@ -83,6 +85,42 @@ fn gain_in_db_is_applied() {
 }
 
 #[test]
+fn pan_balance_law_attenuates_opposite_channel() {
+    let path = write_wav("dc_pan.wav", 100, |_| (16384, 16384)); // 0.5 ambos
+    // pan 1.0 = todo derecha: izquierda muere, derecha intacta
+    let mut item = dc_item(&path, 0, 100);
+    item.pan = 1.0;
+    let (l, r) = mix_frame(&[item], 50);
+    assert!(l.abs() < 1e-6, "izquierda silenciada, fue {l}");
+    assert!((r - 0.5).abs() < 1e-3, "derecha sin tocar, fue {r}");
+    // pan -0.5: derecha a la mitad, izquierda intacta
+    let mut item = dc_item(&path, 0, 100);
+    item.pan = -0.5;
+    let (l, r) = mix_frame(&[item], 50);
+    assert!((l - 0.5).abs() < 1e-3, "izquierda unidad, fue {l}");
+    assert!((r - 0.25).abs() < 1e-3, "derecha a 0.5×, fue {r}");
+}
+
+#[test]
+fn gain_curve_animates_during_playback() {
+    use ue_core::keyframe::{Interp, Keyframe, KeyframeCurve};
+    // 1 s de DC 0.5 con curva lineal 0 dB → -20 dB
+    let frames = RATE as i64;
+    let path = write_wav("dc_curve.wav", frames, |_| (16384, 16384));
+    let mut item = dc_item(&path, 0, frames);
+    item.gain_curve = Some(KeyframeCurve::new(vec![
+        Keyframe { t: 0, value: 0.0, interp: Interp::Linear },
+        Keyframe { t: SEC, value: -20.0, interp: Interp::Linear },
+    ]));
+    let items = [item];
+    let (start, _) = mix_frame(&items, 0);
+    assert!((start - 0.5).abs() < 1e-3, "arranque a 0 dB, fue {start}");
+    let (mid, _) = mix_frame(&items, frames / 2);
+    let expected = 0.5 * db_to_linear(-10.0);
+    assert!((mid - expected).abs() < 2e-3, "centro ≈ -10 dB ({expected}), fue {mid}");
+}
+
+#[test]
 fn overlapping_items_sum_and_clamp() {
     let path = write_wav("dc_04.wav", 100, |_| (13107, 13107)); // 0.4
     let a = dc_item(&path, 0, 100);
@@ -108,6 +146,8 @@ fn timeline_offset_and_src_in_mapping() {
         len: 300,
         speed: 1.0,
         gain: 1.0,
+        gain_curve: None,
+        pan: 0.0,
         fade_in: 0,
         fade_out: 0,
     };
@@ -121,6 +161,8 @@ fn timeline_offset_and_src_in_mapping() {
         len: 300,
         speed: 1.0,
         gain: 1.0,
+        gain_curve: None,
+        pan: 0.0,
         fade_in: 0,
         fade_out: 0,
     };
@@ -134,6 +176,8 @@ fn timeline_offset_and_src_in_mapping() {
         len: 300,
         speed: 1.0,
         gain: 1.0,
+        gain_curve: None,
+        pan: 0.0,
         fade_in: 0,
         fade_out: 0,
     };
@@ -151,6 +195,8 @@ fn fades_ramp_linearly() {
         len: 1000,
         speed: 1.0,
         gain: 1.0,
+        gain_curve: None,
+        pan: 0.0,
         fade_in: 200,
         fade_out: 200,
     };

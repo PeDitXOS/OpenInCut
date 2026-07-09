@@ -2,7 +2,7 @@
 //! el control viaja por atomics compartidos. El audio es el reloj maestro:
 //! la posición se deriva de los frames servidos al dispositivo.
 
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -19,6 +19,9 @@ struct Shared {
     pos_fp: AtomicI64,
     items: Mutex<Arc<Vec<MixItem>>>,
     items_version: AtomicU64,
+    /// RMS del último buffer servido, por canal (bits de f32).
+    meter_l: AtomicU32,
+    meter_r: AtomicU32,
 }
 
 pub struct Player {
@@ -34,6 +37,8 @@ impl Player {
             pos_fp: AtomicI64::new(0),
             items: Mutex::new(Arc::new(vec![])),
             items_version: AtomicU64::new(0),
+            meter_l: AtomicU32::new(0),
+            meter_r: AtomicU32::new(0),
         });
         let shared2 = shared.clone();
         let (tx, rx) = mpsc::channel::<AudioResult<u32>>();
@@ -98,6 +103,14 @@ impl Player {
     pub fn items_version(&self) -> u64 {
         self.shared.items_version.load(Ordering::SeqCst)
     }
+
+    /// RMS (0..1) por canal del último buffer de audio servido.
+    pub fn meters(&self) -> (f32, f32) {
+        (
+            f32::from_bits(self.shared.meter_l.load(Ordering::Relaxed)),
+            f32::from_bits(self.shared.meter_r.load(Ordering::Relaxed)),
+        )
+    }
 }
 
 fn build_stream(shared: Arc<Shared>) -> AudioResult<(cpal::Stream, u32)> {
@@ -117,12 +130,18 @@ fn build_stream(shared: Arc<Shared>) -> AudioResult<(cpal::Stream, u32)> {
             move |out: &mut [f32], _| {
                 if !shared.playing.load(Ordering::Relaxed) {
                     out.fill(0.0);
+                    shared.meter_l.store(0, Ordering::Relaxed);
+                    shared.meter_r.store(0, Ordering::Relaxed);
                     return;
                 }
                 let items = shared.items.lock().unwrap().clone();
                 let mut fp = shared.pos_fp.load(Ordering::Relaxed);
+                let (mut sq_l, mut sq_r, mut n) = (0.0f64, 0.0f64, 0u32);
                 for frame in out.chunks_mut(channels) {
                     let (l, r) = mix_frame(&items, fp / FP);
+                    sq_l += (l as f64) * (l as f64);
+                    sq_r += (r as f64) * (r as f64);
+                    n += 1;
                     match channels {
                         1 => frame[0] = (l + r) * 0.5,
                         _ => {
@@ -136,6 +155,12 @@ fn build_stream(shared: Arc<Shared>) -> AudioResult<(cpal::Stream, u32)> {
                     fp += step_fp;
                 }
                 shared.pos_fp.store(fp, Ordering::Relaxed);
+                if n > 0 {
+                    let rms_l = (sq_l / n as f64).sqrt() as f32;
+                    let rms_r = (sq_r / n as f64).sqrt() as f32;
+                    shared.meter_l.store(rms_l.to_bits(), Ordering::Relaxed);
+                    shared.meter_r.store(rms_r.to_bits(), Ordering::Relaxed);
+                }
             },
             |err| eprintln!("[ue-audio] error de stream: {err}"),
             None,

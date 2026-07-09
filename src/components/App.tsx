@@ -66,9 +66,9 @@ function usePlayback() {
       // el reloj de audio del backend manda: sondear posición
       const id = window.setInterval(async () => {
         try {
-          const [t, isPlaying] = await engine.playbackPosition();
-          useStore.setState({ playheadUs: t });
-          if (!isPlaying) useStore.setState({ playing: false });
+          const [t, isPlaying, meterL, meterR] = await engine.playbackPosition();
+          useStore.setState({ playheadUs: t, meterL, meterR });
+          if (!isPlaying) useStore.setState({ playing: false, meterL: 0, meterR: 0 });
         } catch {
           useStore.setState({ engineClock: false });
         }

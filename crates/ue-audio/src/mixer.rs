@@ -1,6 +1,9 @@
 //! Mezclador puro: dado un conjunto de items y un frame del timeline, produce
 //! la muestra estéreo mezclada. Sin IO, sin dispositivos: 100% testeable.
 
+use ue_core::keyframe::KeyframeCurve;
+
+use crate::frames_to_us;
 use crate::wav::WavMap;
 
 pub struct MixItem {
@@ -14,8 +17,14 @@ pub struct MixItem {
     /// Velocidad del clip: la fuente se lee a este ritmo. En vivo cambia el
     /// pitch (remuestreo simple); el export preserva pitch con atempo.
     pub speed: f64,
-    /// Ganancia lineal (clip gain_db + volumen de pista, ya convertidos).
+    /// Ganancia lineal estática (gain_db const del clip + volumen de pista).
     pub gain: f32,
+    /// Curva de ganancia en dB, tiempos relativos al inicio del clip (µs de
+    /// timeline). Si existe, se multiplica sobre `gain` frame a frame.
+    pub gain_curve: Option<KeyframeCurve>,
+    /// Balance -1 (todo izquierda) .. 1 (todo derecha): atenúa el canal
+    /// contrario sin tocar el propio (centro = unidad).
+    pub pan: f32,
     pub fade_in: i64,
     pub fade_out: i64,
 }
@@ -24,10 +33,20 @@ pub fn db_to_linear(db: f64) -> f32 {
     10f64.powf(db / 20.0) as f32
 }
 
+/// Ley de balance: (gan_izq, gan_der) para pan en [-1, 1].
+#[inline]
+pub fn pan_gains(pan: f32) -> (f32, f32) {
+    let p = pan.clamp(-1.0, 1.0);
+    ((1.0 - p).min(1.0), (1.0 + p).min(1.0))
+}
+
 impl MixItem {
     #[inline]
     fn factor_at(&self, rel: i64) -> f32 {
         let mut g = self.gain;
+        if let Some(curve) = &self.gain_curve {
+            g *= db_to_linear(curve.eval(frames_to_us(rel)));
+        }
         if self.fade_in > 0 && rel < self.fade_in {
             g *= rel as f32 / self.fade_in as f32;
         }
@@ -58,8 +77,9 @@ pub fn mix_frame(items: &[MixItem], pos: i64) -> (f32, f32) {
         };
         let (l, r) = item.wav.frame(item.src_in + src_rel);
         let g = item.factor_at(rel);
-        acc.0 += l * g;
-        acc.1 += r * g;
+        let (pl, pr) = pan_gains(item.pan);
+        acc.0 += l * g * pl;
+        acc.1 += r * g * pr;
     }
     (acc.0.clamp(-1.0, 1.0), acc.1.clamp(-1.0, 1.0))
 }

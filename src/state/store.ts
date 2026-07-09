@@ -59,6 +59,9 @@ export interface UiState {
   relinkAsset: (assetId: Id) => Promise<void>;
   mcpPort: number | null;
   mcpToken: string | null;
+  /** RMS 0..1 por canal del último buffer (solo motor tauri). */
+  meterL: number;
+  meterR: number;
   setAiSettings: (lang: string, model: string) => Promise<void>;
   fonts: [string, string][];
   textTemplates: Record<string, TextStyle>;
@@ -311,6 +314,8 @@ export const useStore = create<UiState>((set, get) => {
 
     mcpPort: null,
     mcpToken: null,
+    meterL: 0,
+    meterR: 0,
     setAiSettings: (lang, model) =>
       run("Ajustes de IA", () => engine.setProjectSettings(lang, model)),
     fonts: [],

@@ -44,6 +44,8 @@ pub struct ExportSettings {
     pub crf: u8,
     pub preset: String,
     pub audio_bitrate_k: u32,
+    /// Normalización de sonoridad R128 (loudnorm -14 LUFS) al final del máster.
+    pub loudnorm: bool,
     /// Packs de efectos de usuario (se fusionan sobre los core).
     pub extra_packs: Vec<ue_render::EffectDef>,
 }
@@ -55,6 +57,7 @@ impl Default for ExportSettings {
             crf: 18,
             preset: "veryfast".into(),
             audio_bitrate_k: 256,
+            loudnorm: false,
             extra_packs: vec![],
         }
     }

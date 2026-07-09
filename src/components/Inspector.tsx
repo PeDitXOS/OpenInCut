@@ -27,6 +27,7 @@ function Slider({
   step,
   unit,
   disabled,
+  format,
   onChange,
 }: {
   value: number;
@@ -35,6 +36,7 @@ function Slider({
   step: number;
   unit?: string;
   disabled?: boolean;
+  format?: (v: number) => string;
   onChange: (v: number) => void;
 }) {
   return (
@@ -50,8 +52,7 @@ function Slider({
         onChange={(e) => onChange(Number(e.target.value))}
       />
       <span className="w-14 shrink-0 text-right font-[var(--font-mono)] text-[11px] text-ink">
-        {value.toFixed(step < 1 ? 2 : 0)}
-        {unit}
+        {format ? format(value) : `${value.toFixed(step < 1 ? 2 : 0)}${unit ?? ""}`}
       </span>
     </>
   );
@@ -178,6 +179,18 @@ function ClipInspector({ clip }: { clip: Clip }) {
             unit=" dB"
             disabled={isCurve(clip.audio.gain_db)}
             onChange={(v) => void setClipAudio(clip.id, { ...clip.audio, gain_db: v })}
+          />
+        </Row>
+        <Row label="Pan">
+          <Slider
+            value={paramValue(clip.audio.pan)}
+            min={-1}
+            max={1}
+            step={0.05}
+            unit=""
+            format={(v) => (v === 0 ? "C" : v < 0 ? `I ${Math.round(-v * 100)}%` : `D ${Math.round(v * 100)}%`)}
+            disabled={isCurve(clip.audio.pan)}
+            onChange={(v) => void setClipAudio(clip.id, { ...clip.audio, pan: v })}
           />
         </Row>
         <Row label="Fade in">

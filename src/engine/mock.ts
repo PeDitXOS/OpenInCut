@@ -276,7 +276,7 @@ export class MockEngine implements EngineClient {
     throw new Error("sin audio en navegador");
   }
   async playbackSeek(): Promise<void> {}
-  async playbackPosition(): Promise<[number, boolean]> {
+  async playbackPosition(): Promise<[number, boolean, number, number]> {
     throw new Error("sin audio en navegador");
   }
   async onStateChanged(): Promise<() => void> {

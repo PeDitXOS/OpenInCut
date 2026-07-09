@@ -266,6 +266,89 @@ fn export_cut_and_reordered_timeline() {
 }
 
 // ---------------------------------------------------------------------------
+// Audio: pan, curvas de ganancia y loudnorm
+// ---------------------------------------------------------------------------
+
+/// PCM s16le intercalado del audio exportado (48k estéreo).
+fn decode_pcm(path: &Path) -> Vec<i16> {
+    let out = Command::new(ue_media::ffmpeg_bin())
+        .args(["-v", "error", "-i"])
+        .arg(path)
+        .args(["-map", "0:a", "-ac", "2", "-ar", "48000", "-f", "s16le", "-"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    out.stdout
+        .chunks_exact(2)
+        .map(|b| i16::from_le_bytes([b[0], b[1]]))
+        .collect()
+}
+
+fn rms(samples: impl Iterator<Item = i16>) -> f64 {
+    let (mut sq, mut n) = (0.0f64, 0u64);
+    for s in samples {
+        let v = s as f64 / 32768.0;
+        sq += v * v;
+        n += 1;
+    }
+    if n == 0 { 0.0 } else { (sq / n as f64).sqrt() }
+}
+
+/// pan=1 silencia la izquierda; una curva 0→-40 dB apaga la segunda mitad;
+/// loudnorm aparece en el grafo cuando se pide.
+#[test]
+fn audio_pan_and_gain_curve_apply_in_export() {
+    use ue_core::keyframe::{Interp, Keyframe, KeyframeCurve, Param};
+    let Some(dir) = media_dir() else { return };
+    let (mut store, seq_id) = simple_store(dir);
+    let seq = store.project.sequences.iter_mut().find(|s| s.id == seq_id).unwrap();
+    let clip = seq
+        .tracks
+        .iter_mut()
+        .find(|t| t.kind == TrackKind::Video)
+        .and_then(|t| t.clips.first_mut())
+        .unwrap();
+    clip.audio.pan = 1.0.into();
+    clip.audio.gain_db = Param::Curve(KeyframeCurve::new(vec![
+        Keyframe { t: 0, value: 0.0, interp: Interp::Linear },
+        Keyframe { t: 2 * SEC, value: 0.0, interp: Interp::Linear },
+        Keyframe { t: 2 * SEC + 1, value: -40.0, interp: Interp::Hold },
+    ]));
+
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-audio-pan-curve.mp4");
+    export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+
+    let pcm = decode_pcm(&out);
+    let left = rms(pcm.iter().step_by(2).copied());
+    let right_first = rms(pcm.chunks_exact(2).take(48000 * 2).map(|c| c[1]));
+    let right_second = rms(pcm.chunks_exact(2).skip(48000 * 2 + 24000).map(|c| c[1]));
+    assert!(left < 0.005, "pan=1 debe silenciar la izquierda, RMS fue {left}");
+    // el sine de lavfi es de baja amplitud: basta con que suene claramente
+    assert!(right_first > 0.03, "derecha suena en la primera mitad, RMS fue {right_first}");
+    assert!(
+        right_second < right_first * 0.05,
+        "la curva apaga la segunda mitad: {right_second} vs {right_first}"
+    );
+}
+
+#[test]
+fn loudnorm_flag_appends_master_filter() {
+    let Some(dir) = media_dir() else { return };
+    let (store, seq_id) = simple_store(dir);
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-audio-loudnorm.mp4");
+    let settings = ExportSettings { loudnorm: true, ..Default::default() };
+    let plan =
+        ue_export::graph::build_ffmpeg_args(&store.project, seq_id, dir, &out, &settings).unwrap();
+    let fc = plan.args.iter().find(|a| a.contains("amix")).unwrap();
+    assert!(fc.contains("loudnorm=I=-14"), "grafo con loudnorm: {fc}");
+    let settings = ExportSettings::default();
+    let plan =
+        ue_export::graph::build_ffmpeg_args(&store.project, seq_id, dir, &out, &settings).unwrap();
+    let fc = plan.args.iter().find(|a| a.contains("amix")).unwrap();
+    assert!(!fc.contains("loudnorm"), "sin flag no hay loudnorm: {fc}");
+}
+
+// ---------------------------------------------------------------------------
 // Progreso, cancelación y efectos (chroma key de punta a punta)
 // ---------------------------------------------------------------------------
 

@@ -54,7 +54,8 @@ export interface EngineClient {
   playbackPause(): Promise<TimeUs>;
   playbackSeek(tUs: TimeUs): Promise<void>;
   /** [posición µs, reproduciendo] según el reloj de audio. */
-  playbackPosition(): Promise<[TimeUs, boolean]>;
+  /** (posición, reproduciendo, RMS izq 0..1, RMS der 0..1). */
+  playbackPosition(): Promise<[TimeUs, boolean, number, number]>;
 
   /** Suscripción a cambios de estado originados en el backend (jobs). */
   onStateChanged(cb: () => void): Promise<() => void>;

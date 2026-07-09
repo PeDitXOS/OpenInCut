@@ -108,7 +108,7 @@ export class TauriEngine implements EngineClient {
   playbackSeek(tUs: TimeUs): Promise<void> {
     return invoke("playback_seek", { tUs });
   }
-  playbackPosition(): Promise<[TimeUs, boolean]> {
+  playbackPosition(): Promise<[TimeUs, boolean, number, number]> {
     return invoke("playback_position");
   }
 

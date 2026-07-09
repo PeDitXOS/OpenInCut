@@ -31,9 +31,44 @@ struct AudioItem {
     src_out: TimeUs,
     start: TimeUs,
     speed: f64,
+    /// Parte estática (const del clip + volumen de pista).
     gain_db: f64,
+    /// Curva de ganancia en dB (tiempos relativos al inicio del clip).
+    gain_curve: Option<ue_core::keyframe::KeyframeCurve>,
+    /// Balance -1..1 (misma ley que el mezclador en vivo).
+    pan: f64,
     fade_in_us: TimeUs,
     fade_out_us: TimeUs,
+}
+
+/// Expresión del filtro `volume` (eval=frame) para una curva de dB: tramos
+/// Hold/Linear exactos; Smooth se linealiza entre keys (v0). `t` arranca en 0
+/// al inicio del clip (post atrim+asetpts+atempo). `offset_db` = pista + const.
+fn volume_expr(curve: &ue_core::keyframe::KeyframeCurve, offset_db: f64) -> String {
+    use ue_core::keyframe::Interp;
+    let keys = &curve.keys;
+    if keys.is_empty() {
+        return "1".into();
+    }
+    let lin = |db: f64| format!("pow(10,{:.4}/20)", db + offset_db);
+    let ts = |us: TimeUs| format!("{:.6}", us as f64 / 1_000_000.0);
+    // de dentro hacia fuera: valor tras el último key
+    let mut expr = lin(keys[keys.len() - 1].value);
+    for i in (0..keys.len().saturating_sub(1)).rev() {
+        let (k0, k1) = (&keys[i], &keys[i + 1]);
+        let seg = match k0.interp {
+            Interp::Hold => lin(k0.value),
+            _ => format!(
+                "pow(10,({:.4}+({:.4})*(t-{})/({:.6}))/20)",
+                k0.value + offset_db,
+                k1.value - k0.value,
+                ts(k0.t),
+                ((k1.t - k0.t).max(1)) as f64 / 1_000_000.0,
+            ),
+        };
+        expr = format!("if(lt(t,{}),{seg},{expr})", ts(k1.t));
+    }
+    format!("if(lt(t,{}),{},{expr})", ts(keys[0].t), lin(keys[0].value))
 }
 
 /// Cadena atempo (preserva el pitch). atempo acepta 0.5–2 por instancia:
@@ -72,13 +107,19 @@ fn collect_audio(project: &Project, sequence_id: Id) -> Vec<AudioItem> {
                 if asset.probe.audio_channels == 0 {
                     continue;
                 }
+                let (gain_const, gain_curve) = match &clip.audio.gain_db {
+                    ue_core::keyframe::Param::Const(v) => (*v, None),
+                    ue_core::keyframe::Param::Curve(c) => (0.0, Some(c.clone())),
+                };
                 items.push(AudioItem {
                     asset_id: *asset_id,
                     src_in: *src_in,
                     src_out: *src_out,
                     start: clip.start,
                     speed: clip.speed,
-                    gain_db: clip.audio.gain_db.eval(0) + track.volume_db as f64,
+                    gain_db: gain_const + track.volume_db as f64,
+                    gain_curve,
+                    pan: clip.audio.pan.eval(0).clamp(-1.0, 1.0),
                     fade_in_us: clip.audio.fade_in_us,
                     fade_out_us: clip.audio.fade_out_us,
                 });
@@ -536,8 +577,22 @@ pub fn build_ffmpeg_args(
             chain.push(',');
             chain.push_str(&atempo_chain(item.speed));
         }
-        if item.gain_db.abs() > 1e-9 {
-            chain.push_str(&format!(",volume={:.2}dB", item.gain_db));
+        match &item.gain_curve {
+            Some(curve) => chain.push_str(&format!(
+                ",volume=volume='{}':eval=frame",
+                volume_expr(curve, item.gain_db)
+            )),
+            None if item.gain_db.abs() > 1e-9 => {
+                chain.push_str(&format!(",volume={:.2}dB", item.gain_db));
+            }
+            None => {}
+        }
+        if item.pan.abs() > 1e-3 {
+            let (pl, pr) = (
+                (1.0 - item.pan).min(1.0),
+                (1.0 + item.pan).min(1.0),
+            );
+            chain.push_str(&format!(",pan=stereo|c0={pl:.4}*c0|c1={pr:.4}*c1"));
         }
         if item.fade_in_us > 0 {
             chain.push_str(&format!(",afade=t=in:st=0:d={}", secs(item.fade_in_us)));
@@ -558,11 +613,18 @@ pub fn build_ffmpeg_args(
     }
     let has_audio = !alabels.is_empty();
     if has_audio {
+        let master = if settings.loudnorm {
+            // R128 una pasada (streaming): -14 LUFS estilo YouTube
+            ",loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000".to_string()
+        } else {
+            String::new()
+        };
         fc.push(format!(
-            "{}amix=inputs={}:duration=longest:normalize=0,atrim=0:{}[aout]",
+            "{}amix=inputs={}:duration=longest:normalize=0,atrim=0:{}{}[aout]",
             alabels.join(""),
             alabels.len(),
             secs(total_us),
+            master,
         ));
     }
 
