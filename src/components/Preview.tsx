@@ -165,11 +165,12 @@ export function Preview() {
     return () => obs.disconnect();
   }, []);
 
-  // Frame real (solo escritorio): pedir al pausar/seek con debounce corto.
+  // Frame real (solo escritorio): debounce corto al hacer seek; durante la
+  // reproducción, frames a baja cadencia (~2/s) hasta que exista el DecodePool.
   useEffect(() => {
     if (engine.kind !== "tauri") return;
-    if (playing) return; // v0: sin frames en reproducción continua
     const req = ++frameReqRef.current;
+    const delay = playing ? 450 : 90;
     const handle = window.setTimeout(async () => {
       try {
         const bytes = await engine.renderFrame(playheadUs, 1280);
@@ -185,7 +186,7 @@ export function Preview() {
       } catch {
         if (frameReqRef.current === req) setRealFrame(null);
       }
-    }, 90);
+    }, delay);
     return () => window.clearTimeout(handle);
   }, [playheadUs, version, playing]);
 

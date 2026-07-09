@@ -19,4 +19,5 @@ serde_json.workspace = true
 ulid.workspace = true
 ue-core = { path = "../crates/ue-core" }
 ue-media = { path = "../crates/ue-media" }
+ue-audio = { path = "../crates/ue-audio" }
 ue-export = { path = "../crates/ue-export" }

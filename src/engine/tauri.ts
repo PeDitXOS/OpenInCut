@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
 import type { EngineClient } from "./client";
@@ -86,5 +87,22 @@ export class TauriEngine implements EngineClient {
 
   exportVideo(path: string): Promise<string> {
     return invoke("export_video", { path, maxHeight: null });
+  }
+
+  playbackPlay(fromUs: TimeUs): Promise<void> {
+    return invoke("playback_play", { fromUs });
+  }
+  playbackPause(): Promise<TimeUs> {
+    return invoke("playback_pause");
+  }
+  playbackSeek(tUs: TimeUs): Promise<void> {
+    return invoke("playback_seek", { tUs });
+  }
+  playbackPosition(): Promise<[TimeUs, boolean]> {
+    return invoke("playback_position");
+  }
+
+  async onStateChanged(cb: () => void): Promise<() => void> {
+    return listen("state-changed", cb);
   }
 }

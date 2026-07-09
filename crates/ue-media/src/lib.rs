@@ -56,6 +56,34 @@ pub fn import_file(path: &Path) -> MediaResult<MediaAsset> {
     })
 }
 
+/// Conforma el audio de un archivo a WAV PCM s16le 48 kHz estéreo (PLAN §5.3).
+/// Idempotente: si `out` ya existe no re-conforma.
+pub fn conform_audio(src: &Path, out: &Path) -> MediaResult<()> {
+    if out.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = out.with_extension("wav.tmp");
+    let result = std::process::Command::new(ffmpeg_bin())
+        .args(["-y", "-v", "error", "-i"])
+        .arg(src)
+        .args(["-vn", "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", "-f", "wav"])
+        .arg(&tmp)
+        .output()
+        .map_err(|e| MediaError::Spawn("ffmpeg".into(), e.to_string()))?;
+    if !result.status.success() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(MediaError::Tool(
+            "ffmpeg (conform)".into(),
+            String::from_utf8_lossy(&result.stderr).trim().to_string(),
+        ));
+    }
+    std::fs::rename(&tmp, out)?;
+    Ok(())
+}
+
 /// Duración por defecto de un clip de imagen fija.
 pub const IMAGE_CLIP_DURATION_US: i64 = 5_000_000;
 

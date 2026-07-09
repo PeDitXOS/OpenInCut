@@ -26,6 +26,8 @@ export interface UiState {
   selection: Id[];
   playheadUs: TimeUs;
   playing: boolean;
+  /** true = la posición la dicta el reloj de audio del backend */
+  engineClock: boolean;
   viewStartUs: TimeUs;
   pxPerSec: number;
   lastActionLabel?: string;
@@ -104,20 +106,57 @@ export const useStore = create<UiState>((set, get) => {
     selection: [],
     playheadUs: 12_400_000,
     playing: false,
+    engineClock: false,
     viewStartUs: 0,
     pxPerSec: 26,
     lastActionLabel: undefined,
 
     init: async () => {
       applySnapshot(await engine.getState());
+      // refrescar cuando el backend termina jobs (conformado, etc.)
+      void engine.onStateChanged(async () => {
+        applySnapshot(await engine.getState());
+      });
     },
 
-    seek: (us) => set({ playheadUs: Math.max(0, us) }),
+    seek: (us) => {
+      const clamped = Math.max(0, us);
+      set({ playheadUs: clamped });
+      // mantener el reloj de audio alineado si está sonando
+      if (engine.kind === "tauri" && get().playing) {
+        void engine.playbackSeek(clamped).catch(() => {});
+      }
+    },
 
     select: (ids, additive = false) =>
       set((s) => ({ selection: additive ? [...new Set([...s.selection, ...ids])] : ids })),
 
-    togglePlay: () => set((s) => ({ playing: !s.playing })),
+    togglePlay: () => {
+      const s = get();
+      if (engine.kind !== "tauri") {
+        set({ playing: !s.playing, engineClock: false });
+        return;
+      }
+      if (!s.playing) {
+        engine
+          .playbackPlay(s.playheadUs)
+          .then(() => set({ playing: true, engineClock: true }))
+          .catch((e) => {
+            // sin dispositivo de audio → reloj local silencioso
+            set({
+              playing: true,
+              engineClock: false,
+              lastActionLabel: `⚠ audio no disponible: ${e instanceof Error ? e.message : e}`,
+            });
+          });
+      } else {
+        set({ playing: false });
+        engine
+          .playbackPause()
+          .then((t) => set({ playheadUs: t }))
+          .catch(() => {});
+      }
+    },
 
     setView: (viewStartUs, pxPerSec) =>
       set({

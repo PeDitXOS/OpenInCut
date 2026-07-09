@@ -264,6 +264,21 @@ export class MockEngine implements EngineClient {
     throw new Error("Exportar requiere la app de escritorio (npx tauri dev)");
   }
 
+  // el mock no reproduce audio: la UI usa su reloj local (rAF)
+  async playbackPlay(): Promise<void> {
+    throw new Error("sin audio en navegador");
+  }
+  async playbackPause(): Promise<number> {
+    throw new Error("sin audio en navegador");
+  }
+  async playbackSeek(): Promise<void> {}
+  async playbackPosition(): Promise<[number, boolean]> {
+    throw new Error("sin audio en navegador");
+  }
+  async onStateChanged(): Promise<() => void> {
+    return () => {};
+  }
+
   /** Ayuda para tests/pruebas: alterna props de pista. */
   async toggleTrack(trackId: Id, prop: "muted" | "solo" | "locked"): Promise<StateSnapshot> {
     return this.transaction("Pista", () => {

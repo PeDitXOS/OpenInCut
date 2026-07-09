@@ -2,7 +2,7 @@ import { useEffect } from "react";
 
 import { activeSequence } from "../engine/types";
 import { frameToUs } from "../lib/time";
-import { useStore } from "../state/store";
+import { engine, useStore } from "../state/store";
 import { Header } from "./Header";
 import { MediaPool } from "./MediaPool";
 import { Preview } from "./Preview";
@@ -51,20 +51,37 @@ function useKeyboard() {
 
 function usePlayback() {
   const playing = useStore((s) => s.playing);
+  const engineClock = useStore((s) => s.engineClock);
   useEffect(() => {
     if (!playing) return;
+
+    if (engineClock) {
+      // el reloj de audio del backend manda: sondear posición
+      const id = window.setInterval(async () => {
+        try {
+          const [t, isPlaying] = await engine.playbackPosition();
+          useStore.setState({ playheadUs: t });
+          if (!isPlaying) useStore.setState({ playing: false });
+        } catch {
+          useStore.setState({ engineClock: false });
+        }
+      }, 33);
+      return () => window.clearInterval(id);
+    }
+
+    // reloj local (navegador / sin dispositivo de audio)
     let raf = 0;
     let last = performance.now();
     const tick = (now: number) => {
       const dt = now - last;
       last = now;
       const s = useStore.getState();
-      s.seek(s.playheadUs + dt * 1000);
+      useStore.setState({ playheadUs: s.playheadUs + dt * 1000 });
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [playing]);
+  }, [playing, engineClock]);
 }
 
 export function App() {

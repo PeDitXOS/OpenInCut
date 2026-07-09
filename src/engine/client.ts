@@ -36,4 +36,16 @@ export interface EngineClient {
   pickSavePath(defaultName: string): Promise<string | null>;
   /** Exporta la secuencia activa a MP4. Devuelve la ruta escrita. */
   exportVideo(path: string): Promise<string>;
+
+  // -- transporte con el audio como reloj maestro (solo escritorio) --
+  /** Arranca la reproducción de audio desde `fromUs`. Rechaza si no hay dispositivo. */
+  playbackPlay(fromUs: TimeUs): Promise<void>;
+  /** Pausa y devuelve la posición exacta del reloj de audio. */
+  playbackPause(): Promise<TimeUs>;
+  playbackSeek(tUs: TimeUs): Promise<void>;
+  /** [posición µs, reproduciendo] según el reloj de audio. */
+  playbackPosition(): Promise<[TimeUs, boolean]>;
+
+  /** Suscripción a cambios de estado originados en el backend (jobs). */
+  onStateChanged(cb: () => void): Promise<() => void>;
 }

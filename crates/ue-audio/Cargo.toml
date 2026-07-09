@@ -1,0 +1,15 @@
+[package]
+name = "ue-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cpal = "0.16"
+memmap2 = "0.9"
+thiserror.workspace = true
+ue-core = { path = "../ue-core" }
+
+[dev-dependencies]
+hound = "3.5"
+ue-media = { path = "../ue-media" }

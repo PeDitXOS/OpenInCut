@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{Emitter, Manager, State};
+use ue_audio::items::{collect_specs, load_items};
+use ue_audio::player::Player;
 use ue_core::model::{AudioProps, Clip, Id, MediaKind, Project, TrackKind, Transform2D};
 use ue_core::ops::InsertMode;
 use ue_core::{ProjectStore, TimeUs};
@@ -14,6 +16,32 @@ use ue_core::{ProjectStore, TimeUs};
 pub struct AppState {
     pub store: Mutex<ProjectStore>,
     pub path: Mutex<Option<PathBuf>>,
+    pub cache_dir: Mutex<Option<PathBuf>>,
+    pub player: Mutex<Option<Player>>,
+}
+
+/// Ruta del WAV conformado de un asset en la caché de la app.
+fn conform_target(cache_dir: &Path, content_hash: &str) -> PathBuf {
+    cache_dir.join(content_hash.replace(':', "-")).join("audio.wav")
+}
+
+/// Sincroniza los items del mezclador con el estado actual (si cambió).
+/// Orden de locks SIEMPRE: store → player.
+fn sync_player(state: &AppState) -> Result<(), String> {
+    let store = state.store.lock().unwrap();
+    let mut player_guard = state.player.lock().unwrap();
+    if player_guard.is_none() {
+        *player_guard = Some(Player::new().map_err(|e| e.to_string())?);
+    }
+    let player = player_guard.as_ref().unwrap();
+    // versión+1 para distinguir del 0 inicial del player
+    if player.items_version() != store.version + 1 {
+        let specs = collect_specs(&store.project, store.project.active_sequence);
+        let (items, _skipped) =
+            load_items(&store.project, &specs, |a| a.audio_conform.as_ref().map(PathBuf::from));
+        player.set_items(items, store.version + 1);
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -150,8 +178,15 @@ fn set_clip_transform(
 }
 
 /// Importa archivos al pool (probe + hash). No entra al historial (PLAN §6.10).
+/// El conformado de audio se lanza en segundo plano; al terminar se emite
+/// `state-changed` para que la UI refresque.
 #[tauri::command]
-fn import_media(state: State<AppState>, paths: Vec<String>) -> Res<StateSnapshot> {
+fn import_media(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    paths: Vec<String>,
+) -> Res<StateSnapshot> {
+    let cache_dir = state.cache_dir.lock().unwrap().clone();
     let mut store = state.store.lock().unwrap();
     let mut errors: Vec<String> = vec![];
     let mut imported = 0usize;
@@ -160,6 +195,11 @@ fn import_media(state: State<AppState>, paths: Vec<String>) -> Res<StateSnapshot
             Ok(asset) => {
                 // re-import del mismo contenido → no duplicar
                 if !store.project.assets.iter().any(|a| a.content_hash == asset.content_hash) {
+                    if asset.probe.audio_channels > 0 {
+                        if let Some(cache) = &cache_dir {
+                            spawn_conform_job(&app, &asset, cache);
+                        }
+                    }
                     store.project.assets.push(asset);
                 }
                 imported += 1;
@@ -175,6 +215,68 @@ fn import_media(state: State<AppState>, paths: Vec<String>) -> Res<StateSnapshot
         return Err(errors.join("\n"));
     }
     Ok(snapshot(&store))
+}
+
+fn spawn_conform_job(app: &tauri::AppHandle, asset: &ue_core::model::MediaAsset, cache: &Path) {
+    let app = app.clone();
+    let asset_id = asset.id;
+    let src = PathBuf::from(&asset.path);
+    let out = conform_target(cache, &asset.content_hash);
+    std::thread::spawn(move || {
+        match ue_media::conform_audio(&src, &out) {
+            Ok(()) => {
+                let state = app.state::<AppState>();
+                {
+                    let mut store = state.store.lock().unwrap();
+                    if let Some(a) = store.project.assets.iter_mut().find(|a| a.id == asset_id) {
+                        a.audio_conform = Some(out.to_string_lossy().into_owned());
+                    }
+                    store.version += 1;
+                }
+                let _ = app.emit("state-changed", ());
+            }
+            Err(e) => eprintln!("[conform] {src:?}: {e}"),
+        }
+    });
+}
+
+// ---- transporte (el audio es el reloj maestro) ----
+
+#[tauri::command]
+fn playback_play(state: State<AppState>, from_us: TimeUs) -> Res<()> {
+    sync_player(&state)?;
+    let guard = state.player.lock().unwrap();
+    guard.as_ref().unwrap().play(from_us);
+    Ok(())
+}
+
+#[tauri::command]
+fn playback_pause(state: State<AppState>) -> Res<TimeUs> {
+    let guard = state.player.lock().unwrap();
+    match guard.as_ref() {
+        Some(p) => Ok(p.pause()),
+        None => Err("sin reproductor".into()),
+    }
+}
+
+#[tauri::command]
+fn playback_seek(state: State<AppState>, t_us: TimeUs) -> Res<()> {
+    if let Some(p) = state.player.lock().unwrap().as_ref() {
+        p.seek(t_us);
+    }
+    Ok(())
+}
+
+/// (posición µs, reproduciendo). También re-sincroniza los items si el
+/// proyecto cambió durante la reproducción (editar mientras suena).
+#[tauri::command]
+fn playback_position(state: State<AppState>) -> Res<(TimeUs, bool)> {
+    let _ = sync_player(&state); // barato si no cambió la versión
+    let guard = state.player.lock().unwrap();
+    match guard.as_ref() {
+        Some(p) => Ok((p.position_us(), p.is_playing())),
+        None => Err("sin reproductor".into()),
+    }
 }
 
 /// Añade un clip del asset a la primera pista compatible: en `at_us` si cabe,
@@ -312,10 +414,20 @@ pub fn run() {
     let state = AppState {
         store: Mutex::new(ProjectStore::new(Project::new("Proyecto sin título"))),
         path: Mutex::new(None),
+        cache_dir: Mutex::new(None),
+        player: Mutex::new(None),
     };
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
+        .setup(|app| {
+            let state = app.state::<AppState>();
+            if let Ok(dir) = app.path().app_cache_dir() {
+                let _ = std::fs::create_dir_all(&dir);
+                *state.cache_dir.lock().unwrap() = Some(dir);
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             get_state,
             split_clip,
@@ -331,6 +443,10 @@ pub fn run() {
             add_clip,
             render_frame,
             export_video,
+            playback_play,
+            playback_pause,
+            playback_seek,
+            playback_position,
             save_project,
             open_project,
             new_project,

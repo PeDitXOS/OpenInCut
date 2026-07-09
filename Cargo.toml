@@ -1,6 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["crates/ue-core", "crates/ue-media", "crates/ue-export", "src-tauri"]
+members = [
+    "crates/ue-core",
+    "crates/ue-media",
+    "crates/ue-audio",
+    "crates/ue-export",
+    "src-tauri",
+]
 
 [workspace.package]
 version = "0.1.0"
