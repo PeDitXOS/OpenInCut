@@ -64,6 +64,8 @@ export interface UiState {
   removeSilences: (clipId: Id) => Promise<void>;
   transcribeAsset: (assetId: Id) => Promise<void>;
   addSubtitlesClip: (clipId: Id) => Promise<void>;
+  generateVertical: () => Promise<void>;
+  setActiveSequence: (sequenceId: Id) => Promise<void>;
   cutTimelineRanges: (ranges: [TimeUs, TimeUs][]) => Promise<void>;
   setClipText: (clipId: Id, content: string, style: TextStyle) => Promise<void>;
   toggleTrack: (trackId: Id, prop: "muted" | "solo" | "locked") => Promise<void>;
@@ -292,6 +294,10 @@ export const useStore = create<UiState>((set, get) => {
         engine.cutRanges(seqId, ranges, true),
       );
     },
+
+    generateVertical: () => run("Generar vertical", () => engine.generateVertical()),
+    setActiveSequence: (sequenceId) =>
+      run("Cambiar secuencia", () => engine.setActiveSequence(sequenceId)),
 
     addSubtitlesClip: (clipId) =>
       run("Subtítulos automáticos", () => engine.addSubtitlesClip(clipId)),

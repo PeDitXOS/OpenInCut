@@ -38,6 +38,9 @@ pub enum Action {
     SetClipTransition { clip_id: Id, transition: Option<TransitionRef> },
     /// Cambia contenido y estilo de un clip de texto (payload Text).
     SetClipText { clip_id: Id, content: String, style: TextStyle },
+    AddSequence { sequence: Sequence },
+    RemoveSequence { sequence_id: Id },
+    SetActiveSequence { sequence_id: Id },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -309,6 +312,35 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
                 }
                 _ => Err(UeError::Invalid("el clip no es de texto".into())),
             }
+        }
+
+        Action::AddSequence { sequence } => {
+            let id = sequence.id;
+            project.sequences.push(sequence);
+            Ok(Action::RemoveSequence { sequence_id: id })
+        }
+
+        Action::RemoveSequence { sequence_id } => {
+            if project.active_sequence == sequence_id {
+                return Err(UeError::Invalid(
+                    "no se puede eliminar la secuencia activa".into(),
+                ));
+            }
+            let idx = project
+                .sequences
+                .iter()
+                .position(|s| s.id == sequence_id)
+                .ok_or_else(|| UeError::NotFound(format!("secuencia {sequence_id}")))?;
+            let sequence = project.sequences.remove(idx);
+            Ok(Action::AddSequence { sequence })
+        }
+
+        Action::SetActiveSequence { sequence_id } => {
+            if project.sequence(sequence_id).is_none() {
+                return Err(UeError::NotFound(format!("secuencia {sequence_id}")));
+            }
+            let old = std::mem::replace(&mut project.active_sequence, sequence_id);
+            Ok(Action::SetActiveSequence { sequence_id: old })
         }
 
         Action::SetClipTransition { clip_id, transition } => {

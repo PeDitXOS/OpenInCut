@@ -178,6 +178,13 @@ export class TauriEngine implements EngineClient {
     return invoke("cut_ranges", { sequenceId, ranges, ripple });
   }
 
+  generateVertical(): Promise<StateSnapshot> {
+    return invoke("generate_vertical");
+  }
+  setActiveSequence(sequenceId: Id): Promise<StateSnapshot> {
+    return invoke("set_active_sequence", { sequenceId });
+  }
+
   addSubtitlesClip(clipId: Id): Promise<StateSnapshot> {
     return invoke("add_subtitles_clip", { clipId });
   }

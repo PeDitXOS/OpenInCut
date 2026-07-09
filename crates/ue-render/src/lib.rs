@@ -63,6 +63,7 @@ pub fn core_registry() -> Vec<EffectDef> {
         include_str!("../../../effects/core/color_correct/manifest.json"),
         include_str!("../../../effects/core/chroma_key/manifest.json"),
         include_str!("../../../effects/core/gaussian_blur/manifest.json"),
+        include_str!("../../../effects/core/vertical_fill/manifest.json"),
     ];
     MANIFESTS
         .iter()
@@ -133,8 +134,15 @@ fn format_color(hex: &str) -> Option<String> {
 
 /// Sustituye los parámetros de una instancia en la plantilla de su definición.
 /// Parámetros ausentes usan el default del manifest; los float se clampean al rango.
+/// `{u}` se sustituye por un contador único (para plantillas con mini-grafos
+/// split/overlay: las etiquetas no colisionan entre usos en el mismo ffmpeg).
 pub fn render_effect(def: &EffectDef, inst: &EffectInstance) -> String {
+    static UNIQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let mut out = def.ffmpeg.clone();
+    if out.contains("{u}") {
+        let n = UNIQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        out = out.replace("{u}", &format!("u{n}"));
+    }
     for p in &def.params {
         let placeholder = format!("{{{}}}", p.key);
         let value = match &p.kind {

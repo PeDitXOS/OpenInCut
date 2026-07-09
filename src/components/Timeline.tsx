@@ -451,6 +451,8 @@ export function Timeline() {
   const splitAtPlayhead = useStore((s) => s.splitAtPlayhead);
   const deleteSelection = useStore((s) => s.deleteSelection);
   const addTextClip = useStore((s) => s.addTextClip);
+  const generateVertical = useStore((s) => s.generateVertical);
+  const setActiveSequence = useStore((s) => s.setActiveSequence);
 
   // seguir el playhead durante la reproducción
   useEffect(() => {
@@ -676,6 +678,27 @@ export function Timeline() {
         >
           + Título
         </button>
+        <button
+          className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
+          onClick={() => void generateVertical()}
+          title="Genera una copia vertical 1080x1920 con fondo desenfocado (Shorts/Reels)"
+        >
+          📱 Vertical
+        </button>
+        {project.sequences.length > 1 && (
+          <select
+            className="focus-ring cursor-pointer rounded-md border border-line bg-bg2 px-1.5 py-0.5 text-[11px] text-ink"
+            value={activeSequence(project).id}
+            onChange={(e) => void setActiveSequence(e.target.value)}
+            title="Secuencia activa"
+          >
+            {project.sequences.map((sq) => (
+              <option key={sq.id} value={sq.id}>
+                {sq.name}
+              </option>
+            ))}
+          </select>
+        )}
         <div className="flex-1" />
         <button
           className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"

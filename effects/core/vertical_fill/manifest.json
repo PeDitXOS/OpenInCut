@@ -1,0 +1,12 @@
+{
+  "id": "core.vertical_fill",
+  "name": "Vertical: fondo desenfocado",
+  "category": "layout",
+  "params": [
+    { "key": "width", "label": "Ancho", "type": "float", "default": 1080, "min": 320, "max": 2160 },
+    { "key": "height", "label": "Alto", "type": "float", "default": 1920, "min": 320, "max": 3840 },
+    { "key": "blur", "label": "Desenfoque", "type": "float", "default": 20, "min": 0, "max": 60 }
+  ],
+  "ffmpeg": "split[{u}a][{u}b];[{u}a]scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},gblur=sigma={blur}[{u}bg];[{u}b]scale={width}:-2[{u}fg];[{u}bg][{u}fg]overlay=(W-w)/2:(H-h)/2",
+  "notes": "El look de shorts.py del toolkit: la misma imagen escalada a sangre y desenfocada de fondo, con el video centrado encima."
+}

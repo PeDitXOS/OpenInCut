@@ -543,6 +543,79 @@ fn set_clip_effects(
     Ok(snapshot(&store))
 }
 
+/// Duplica una secuencia con IDs nuevos (los ids son únicos globalmente).
+fn duplicate_sequence(seq: &ue_core::model::Sequence) -> ue_core::model::Sequence {
+    let mut copy = seq.clone();
+    copy.id = Id::new();
+    for track in &mut copy.tracks {
+        track.id = Id::new();
+        for clip in &mut track.clips {
+            clip.id = Id::new();
+        }
+    }
+    for marker in &mut copy.markers {
+        marker.id = Id::new();
+    }
+    copy
+}
+
+/// Genera la versión vertical (1080x1920) de la secuencia activa: nueva
+/// secuencia con el efecto core.vertical_fill en cada clip de video (el look
+/// fondo-desenfocado del toolkit). Una sola entrada de undo.
+pub(crate) fn generate_vertical_impl(state: &AppState) -> Result<String, String> {
+    use ue_core::model::{ClipPayload, EffectInstance};
+    let mut store = state.store.lock().unwrap();
+    let seq = store
+        .project
+        .sequence(store.project.active_sequence)
+        .ok_or("sin secuencia activa")?;
+    let mut vertical = duplicate_sequence(seq);
+    vertical.name = format!("{} (Vertical)", seq.name);
+    vertical.resolution = (1080, 1920);
+    for track in vertical.tracks.iter_mut().filter(|t| t.kind == TrackKind::Video) {
+        for clip in &mut track.clips {
+            if matches!(clip.payload, ClipPayload::Media { .. }) {
+                clip.effects.push(EffectInstance {
+                    effect_id: "core.vertical_fill".into(),
+                    enabled: true,
+                    params: Default::default(),
+                    color_params: Default::default(),
+                });
+            }
+        }
+    }
+    let new_id = vertical.id;
+    store
+        .dispatch(
+            "Generar vertical",
+            vec![
+                ue_core::Action::AddSequence { sequence: vertical },
+                ue_core::Action::SetActiveSequence { sequence_id: new_id },
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(new_id.to_string())
+}
+
+#[tauri::command]
+fn generate_vertical(state: State<AppState>) -> Res<StateSnapshot> {
+    generate_vertical_impl(&state)?;
+    Ok(snapshot(&state.store.lock().unwrap()))
+}
+
+#[tauri::command]
+fn set_active_sequence(state: State<AppState>, sequence_id: String) -> Res<StateSnapshot> {
+    let id = parse_id(&sequence_id)?;
+    let mut store = state.store.lock().unwrap();
+    store
+        .dispatch(
+            "Cambiar secuencia",
+            vec![ue_core::Action::SetActiveSequence { sequence_id: id }],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(snapshot(&store))
+}
+
 /// Crea un clip de subtítulos automáticos sobre un clip de media transcrito.
 #[tauri::command]
 fn add_subtitles_clip(state: State<AppState>, clip_id: String) -> Res<StateSnapshot> {
@@ -911,6 +984,8 @@ pub fn run() {
             remove_silences,
             transcribe_asset,
             add_subtitles_clip,
+            generate_vertical,
+            set_active_sequence,
             export_video,
             cancel_export,
             playback_play,

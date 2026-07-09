@@ -333,6 +333,41 @@ export class MockEngine implements EngineClient {
     throw new Error("La edición por texto requiere la app de escritorio (npx tauri dev)");
   }
 
+  async generateVertical(): Promise<StateSnapshot> {
+    return this.transaction("Generar vertical", () => {
+      const src = this.sequence;
+      const copy: Sequence = structuredClone(src);
+      copy.id = newId("seq");
+      copy.name = `${src.name} (Vertical)`;
+      copy.resolution = [1080, 1920];
+      for (const track of copy.tracks) {
+        track.id = newId("track");
+        for (const clip of track.clips) {
+          clip.id = newId("clip");
+          if (track.kind === "video" && clip.payload.type === "media") {
+            clip.effects.push({
+              effect_id: "core.vertical_fill",
+              enabled: true,
+              params: {},
+              color_params: {},
+            });
+          }
+        }
+      }
+      for (const m of copy.markers) m.id = newId("mk");
+      this.project.sequences.push(copy);
+      this.project.active_sequence = copy.id;
+    });
+  }
+
+  async setActiveSequence(sequenceId: Id): Promise<StateSnapshot> {
+    return this.transaction("Cambiar secuencia", () => {
+      if (!this.project.sequences.some((s) => s.id === sequenceId))
+        throw new Error("secuencia no encontrada");
+      this.project.active_sequence = sequenceId;
+    });
+  }
+
   async addSubtitlesClip(clipId: Id): Promise<StateSnapshot> {
     return this.transaction("Subtítulos automáticos", () => {
       const found = this.locate(clipId);

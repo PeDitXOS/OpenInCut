@@ -326,8 +326,13 @@ fn export_cancellation_kills_and_cleans() {
     assert!(!out.exists(), "el parcial se borra al cancelar");
 }
 
-/// Lee el píxel RGB (x, y) del frame en `t` segundos de un video.
+/// Lee el píxel RGB (x, y) del frame en `t` segundos de un video de 1920 de ancho.
 fn pixel_at(video: &Path, t: f64, x: u32, y: u32) -> (u8, u8, u8) {
+    pixel_at_w(video, t, x, y, 1920)
+}
+
+/// Igual que pixel_at pero para anchos arbitrarios.
+fn pixel_at_w(video: &Path, t: f64, x: u32, y: u32, w: usize) -> (u8, u8, u8) {
     let out = Command::new(ue_media::ffmpeg_bin())
         .args(["-v", "error", "-ss", &t.to_string(), "-i"])
         .arg(video)
@@ -335,8 +340,6 @@ fn pixel_at(video: &Path, t: f64, x: u32, y: u32) -> (u8, u8, u8) {
         .output()
         .unwrap();
     assert!(out.status.success());
-    // resolución de la secuencia por defecto: 1920x1080
-    let w = 1920usize;
     let idx = (y as usize * w + x as usize) * 3;
     (out.stdout[idx], out.stdout[idx + 1], out.stdout[idx + 2])
 }
@@ -735,4 +738,58 @@ fn auto_subtitles_burn_per_segment() {
     assert!(bright_at(0.7) >= 3, "primera frase visible en t=0.7 ({})", bright_at(0.7));
     assert_eq!(bright_at(1.5), 0, "hueco entre frases sin texto");
     assert!(bright_at(2.2) >= 2, "segunda frase visible en t=2.2 ({})", bright_at(2.2));
+}
+
+// ---------------------------------------------------------------------------
+// Modo vertical (core.vertical_fill)
+// ---------------------------------------------------------------------------
+
+/// La secuencia vertical exporta a 1080x1920 y el fondo desenfocado llena la
+/// parte superior (no hay letterbox negro), mientras el centro es el video.
+#[test]
+fn vertical_fill_export_has_blurred_background() {
+    let Some(dir) = media_dir() else { return };
+    let mut project = Project::new("vertical-test");
+    let seq_id = project.active_sequence;
+    let asset = ue_media::import_file(&dir.join("counter.mp4")).unwrap();
+    let aid = asset.id;
+    project.assets.push(asset);
+    // secuencia vertical con el efecto en el clip (lo que produce el wizard)
+    let seq = project.sequence_mut(seq_id).unwrap();
+    seq.resolution = (1080, 1920);
+    let v1 = seq
+        .tracks
+        .iter()
+        .find(|t| t.kind == TrackKind::Video)
+        .unwrap()
+        .id;
+    let mut store = ProjectStore::new(project);
+    let mut clip = Clip::new_media(aid, 0, 3 * SEC, 0);
+    clip.effects.push(EffectInstance {
+        effect_id: "core.vertical_fill".into(),
+        enabled: true,
+        params: Default::default(),
+        color_params: Default::default(),
+    });
+    store.insert_clip(v1, clip, InsertMode::Strict).unwrap();
+
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-vertical-out.mp4");
+    export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+
+    let meta = ffprobe_json(&out);
+    let v = meta["streams"].as_array().unwrap().iter().find(|s| s["codec_type"] == "video").unwrap();
+    assert_eq!((v["width"].as_i64(), v["height"].as_i64()), (Some(1080), Some(1920)));
+
+    // banda superior (y=200): fondo desenfocado ⇒ NO negro
+    let mut top_bright = 0;
+    for x in (100..1000).step_by(80) {
+        let (r, g, b) = pixel_at_w(&out, 1.0, x, 200, 1080);
+        if r as u32 + g as u32 + b as u32 > 90 {
+            top_bright += 1;
+        }
+    }
+    assert!(top_bright >= 6, "el fondo desenfocado llena arriba ({top_bright}/12)");
+    // centro (y=960): el video real (testsrc tiene colores saturados)
+    let (r, g, b) = pixel_at_w(&out, 1.0, 540, 960, 1080);
+    assert!(r as u32 + g as u32 + b as u32 > 120, "centro con contenido: rgb({r},{g},{b})");
 }

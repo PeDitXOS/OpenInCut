@@ -111,6 +111,11 @@ fn tool_defs() -> Value {
             }
         },
         {
+            "name": "generate_vertical",
+            "description": "Genera una secuencia vertical 1080x1920 (fondo desenfocado + video centrado) a partir de la secuencia activa y la activa. Deshacible.",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        },
+        {
             "name": "undo",
             "description": "Deshace la última edición.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
@@ -263,6 +268,10 @@ fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 Err(e) => tool_error(&e),
             }
         }
+        "generate_vertical" => match generate_vertical_inner(state) {
+            Ok(id) => text_result(json!({ "sequence_id": id })),
+            Err(e) => tool_error(&e),
+        },
         "undo" => {
             let mut store = state.store.lock().unwrap();
             match store.undo() {
@@ -279,6 +288,11 @@ fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
         }
         _ => tool_error(&format!("herramienta desconocida: {name}")),
     }
+}
+
+fn generate_vertical_inner(state: &AppState) -> Result<String, String> {
+    // mismo flujo que el comando de la UI
+    crate::generate_vertical_impl(state)
 }
 
 fn remove_silences_inner(state: &AppState, clip_id: ue_core::model::Id) -> Result<(usize, i64), String> {

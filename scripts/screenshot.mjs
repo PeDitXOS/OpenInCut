@@ -126,5 +126,13 @@ const cutBtn = await page.getByText(/Cortar 2 palabra/).count();
 if (cutBtn === 0) throw new Error("la selección de palabras no se refleja en el botón de corte");
 await shot("08-edicion-por-texto");
 
+// 9. Modo vertical: genera la secuencia 1080x1920 y verifica el cambio
+await page.getByRole("button", { name: /Medios/ }).click();
+await page.getByTitle(/Genera una copia vertical/).click();
+await page.waitForTimeout(300);
+const vertRes = await page.getByText("1080×1920").count();
+if (vertRes === 0) throw new Error("la secuencia vertical no está activa (no se ve 1080×1920)");
+await shot("09-modo-vertical");
+
 await browser.close();
 console.log(`\nScreenshots en ${outDir}`);

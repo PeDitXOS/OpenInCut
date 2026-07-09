@@ -91,6 +91,10 @@ export interface EngineClient {
     ripple: boolean,
   ): Promise<StateSnapshot>;
 
+  /** Genera la secuencia vertical 1080x1920 (fondo desenfocado) y la activa. */
+  generateVertical(): Promise<StateSnapshot>;
+  setActiveSequence(sequenceId: Id): Promise<StateSnapshot>;
+
   /** Crea un clip de subtítulos automáticos sobre un clip de media transcrito. */
   addSubtitlesClip(clipId: Id): Promise<StateSnapshot>;
 
