@@ -1,0 +1,22 @@
+# Rust
+target/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# OS
+.DS_Store
+
+# UberEditor runtime artifacts
+*.uep.autosave
+/screenshots/**/*.tmp.png
+
+# Env
+.env
+.env.local
+
+# Playwright
+playwright-report/
+test-results/
