@@ -290,6 +290,23 @@ fn cut_ranges(
     Ok(snapshot(&store))
 }
 
+/// Rompe el enlace video↔audio de un clip (todo su grupo, 1 undo).
+#[tauri::command]
+fn unlink_clip(state: State<AppState>, clip_id: String) -> Res<StateSnapshot> {
+    let mut store = state.store.lock().unwrap();
+    let id = parse_id(&clip_id)?;
+    let members = ue_core::ops::linked_ids(&store.project, id);
+    if members.len() < 2 {
+        return Err("el clip no está enlazado".into());
+    }
+    let actions = members
+        .into_iter()
+        .map(|clip_id| ue_core::Action::SetClipGroup { clip_id, group: None })
+        .collect();
+    store.dispatch("Desenlazar clips", actions).map_err(|e| e.to_string())?;
+    Ok(snapshot(&store))
+}
+
 #[tauri::command]
 fn set_subtitles_props(
     state: State<AppState>,
@@ -755,18 +772,7 @@ fn add_subtitles_clip(state: State<AppState>, clip_id: String) -> Res<StateSnaps
         .find(|t| t.asset_id == asset_id)
         .map(|t| t.id)
         .ok_or("el medio no tiene transcripción; transcríbelo primero (botón T)")?;
-    let seq_id = store.project.active_sequence;
-    let seq = store.project.sequence(seq_id).ok_or("sin secuencia")?;
-    let track = seq
-        .tracks
-        .iter()
-        .rev()
-        .find(|t| t.kind == TrackKind::Video && !t.locked)
-        .ok_or("no hay pista de video desbloqueada")?;
-    let track_id = track.id;
-    if track.collides(media.start, media.duration, None) {
-        return Err("la pista superior está ocupada en ese rango (usa otra pista)".into());
-    }
+    let track_id = ensure_free_video_track(&mut store, media.start, media.duration)?;
     // tercio inferior a 1080p
     let style = TextStyle { size: 48.0, y_offset: 380.0, ..Default::default() };
     let clip = Clip {
@@ -847,16 +853,8 @@ fn add_avatar_clip(state: State<AppState>, clip_id: String, config_path: String)
         store.version += 1;
     }
 
-    // 3. clip Avatar en la pista superior
-    let seq_id = store.project.active_sequence;
-    let seq = store.project.sequence(seq_id).ok_or("sin secuencia")?;
-    let track = seq
-        .tracks
-        .iter()
-        .rev()
-        .find(|t| t.kind == TrackKind::Video && !t.locked && !t.collides(media.start, media.duration, None))
-        .ok_or("no hay pista de video libre en ese rango (añade una pista)")?;
-    let track_id = track.id;
+    // 3. clip Avatar en una pista de video libre (se crea si hace falta)
+    let track_id = ensure_free_video_track(&mut store, media.start, media.duration)?;
     let clip = Clip {
         id: Id::new(),
         payload: ClipPayload::Avatar {
@@ -974,26 +972,45 @@ fn remove_silences(
     }))
 }
 
+/// Pista de video con hueco libre en [start, start+duration); si no existe,
+/// añade una pista nueva encima (dentro de la MISMA transacción del caller no:
+/// se despacha aparte con su propio undo agrupado por el label).
+fn ensure_free_video_track(
+    store: &mut ProjectStore,
+    start: TimeUs,
+    duration: TimeUs,
+) -> Result<Id, String> {
+    let seq_id = store.project.active_sequence;
+    let seq = store.project.sequence(seq_id).ok_or("sin secuencia activa")?;
+    if let Some(t) = seq
+        .tracks
+        .iter()
+        .rev()
+        .find(|t| t.kind == TrackKind::Video && !t.locked && !t.collides(start, duration, None))
+    {
+        return Ok(t.id);
+    }
+    // crear V(n+1) encima de todo
+    let n = seq.tracks.iter().filter(|t| t.kind == TrackKind::Video).count();
+    let track = ue_core::model::Track::new(TrackKind::Video, &format!("V{}", n + 1));
+    let track_id = track.id;
+    let index = seq.tracks.len();
+    store
+        .dispatch(
+            "Añadir pista",
+            vec![ue_core::Action::AddTrack { sequence_id: seq_id, index, track }],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(track_id)
+}
+
 /// Añade un clip de texto (título) en la pista de video superior.
 #[tauri::command]
 fn add_text_clip(state: State<AppState>, content: String, at_us: TimeUs) -> Res<StateSnapshot> {
     let mut store = state.store.lock().unwrap();
-    let seq_id = store.project.active_sequence;
-    let seq = store.project.sequence(seq_id).ok_or("sin secuencia activa")?;
-    let track = seq
-        .tracks
-        .iter()
-        .rev()
-        .find(|t| t.kind == TrackKind::Video && !t.locked)
-        .ok_or("no hay pista de video desbloqueada")?;
-    let track_id = track.id;
     let duration = 4_000_000;
-    let at = at_us.max(0);
-    let start = if track.collides(at, duration, None) {
-        track.clips.iter().map(|c| c.end()).max().unwrap_or(0)
-    } else {
-        at
-    };
+    let start = at_us.max(0);
+    let track_id = ensure_free_video_track(&mut store, start, duration)?;
     let clip = Clip::new_text(&content, start, duration);
     store.insert_clip(track_id, clip, InsertMode::Strict).map_err(|e| e.to_string())?;
     Ok(snapshot(&store))
@@ -1196,6 +1213,7 @@ pub fn run() {
             move_range,
             set_clip_speed,
             set_subtitles_props,
+            unlink_clip,
             undo,
             redo,
             set_clip_audio,

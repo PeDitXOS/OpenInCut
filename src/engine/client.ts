@@ -83,6 +83,8 @@ export interface EngineClient {
     style: TextStyle,
     mode: "phrase" | "word" | "karaoke",
   ): Promise<StateSnapshot>;
+  /** Rompe el enlace video↔audio del grupo del clip. */
+  unlinkClip(clipId: Id): Promise<StateSnapshot>;
   setTrackProp(
     trackId: Id,
     prop: "muted" | "solo" | "locked",

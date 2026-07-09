@@ -169,6 +169,9 @@ export class TauriEngine implements EngineClient {
   ): Promise<StateSnapshot> {
     return invoke("set_subtitles_props", { clipId, style, mode });
   }
+  unlinkClip(clipId: Id): Promise<StateSnapshot> {
+    return invoke("unlink_clip", { clipId });
+  }
   setTrackProp(
     trackId: Id,
     prop: "muted" | "solo" | "locked",

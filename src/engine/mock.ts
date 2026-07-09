@@ -481,6 +481,16 @@ export class MockEngine implements EngineClient {
     });
   }
 
+  async unlinkClip(clipId: Id): Promise<StateSnapshot> {
+    return this.transaction("Desenlazar clips", () => {
+      const found = this.locate(clipId);
+      if (!found?.clip.group) throw new Error("el clip no está enlazado");
+      const group = found.clip.group;
+      for (const track of this.sequence.tracks)
+        for (const c of track.clips) if (c.group === group) c.group = null;
+    });
+  }
+
   async setTrackProp(
     trackId: Id,
     prop: "muted" | "solo" | "locked",

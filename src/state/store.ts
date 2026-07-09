@@ -63,6 +63,7 @@ export interface UiState {
   addTextClip: () => Promise<void>;
   removeSilences: (clipId: Id, mode: "delete" | "speedup") => Promise<void>;
   setClipSpeed: (clipId: Id, speed: number) => Promise<void>;
+  unlinkClip: (clipId: Id) => Promise<void>;
   transcribeAsset: (assetId: Id) => Promise<void>;
   addSubtitlesClip: (clipId: Id) => Promise<void>;
   generateVertical: () => Promise<void>;
@@ -359,6 +360,7 @@ export const useStore = create<UiState>((set, get) => {
 
     setClipSpeed: (clipId, speed) =>
       run(`Velocidad ${speed}×`, () => engine.setClipSpeed(clipId, speed)),
+    unlinkClip: (clipId) => run("Desenlazar", () => engine.unlinkClip(clipId)),
 
     addTextClip: async () => {
       await run("Añadir título", () => engine.addTextClip("Título", get().playheadUs));

@@ -70,6 +70,7 @@ function ClipInspector({ clip }: { clip: Clip }) {
   const setClipTransform = useStore((s) => s.setClipTransform);
   const removeSilences = useStore((s) => s.removeSilences);
   const setClipSpeed = useStore((s) => s.setClipSpeed);
+  const unlinkClip = useStore((s) => s.unlinkClip);
   const addSubtitlesClip = useStore((s) => s.addSubtitlesClip);
   const addAvatarClip = useStore((s) => s.addAvatarClip);
   const fps = activeSequence(project).fps;
@@ -199,6 +200,24 @@ function ClipInspector({ clip }: { clip: Clip }) {
           />
         </Row>
       </Section>
+
+      {clip.group && (
+        <Section title="Enlace">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] text-ink-dim">
+              🔗 Video y audio enlazados: mover, dividir, recortar, velocidad y
+              borrar afectan a ambos.
+            </span>
+            <button
+              className="focus-ring shrink-0 rounded-md border border-line px-2 py-1.5 text-[12px] text-ink-dim hover:text-ink"
+              onClick={() => void unlinkClip(clip.id)}
+              title="Rompe el enlace para editar video y audio por separado"
+            >
+              Desenlazar
+            </button>
+          </div>
+        </Section>
+      )}
 
       {clip.payload.type === "media" && (
         <Section title="Velocidad">

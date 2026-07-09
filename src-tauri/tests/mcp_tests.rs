@@ -216,3 +216,63 @@ fn remove_silences_via_mcp_cuts_the_gap() {
     let clips: usize = seq.tracks.iter().map(|t| t.clips.len()).sum();
     assert_eq!(clips, 2, "el clip quedó partido en dos alrededor del silencio");
 }
+
+/// El desenlace rompe el grupo entero y es deshacible.
+#[test]
+fn unlink_breaks_group_with_undo() {
+    let state = AppState::new_default();
+    let (v_id, group);
+    {
+        let mut store = state.store.lock().unwrap();
+        let asset = MediaAsset {
+            id: Id::new(),
+            kind: MediaKind::Video,
+            path: "x.mp4".into(),
+            content_hash: "h".into(),
+            probe: ProbeInfo {
+                duration_us: 10 * SEC,
+                fps: Some((30, 1)),
+                width: 640,
+                height: 360,
+                rotation: 0,
+                vcodec: None,
+                acodec: Some("aac".into()),
+                audio_channels: 2,
+                vfr: false,
+            },
+            proxy: None,
+            audio_conform: None,
+            peaks: None,
+            thumbnails: None,
+            transcript: None,
+            offline: false,
+        };
+        let aid = asset.id;
+        store.project.assets.push(asset);
+        let seq = store.project.sequence(store.project.active_sequence).unwrap();
+        let vt = seq.tracks.iter().find(|t| t.kind == TrackKind::Video).unwrap().id;
+        let at = seq.tracks.iter().find(|t| t.kind == TrackKind::Audio).unwrap().id;
+        group = Id::new();
+        let mut vc = Clip::new_media(aid, 0, 5 * SEC, 0);
+        vc.group = Some(group);
+        v_id = vc.id;
+        let mut ac = Clip::new_media(aid, 0, 5 * SEC, 0);
+        ac.group = Some(group);
+        store.insert_clip(vt, vc, InsertMode::Strict).unwrap();
+        store.insert_clip(at, ac, InsertMode::Strict).unwrap();
+    }
+    // desenlazar via las mismas acciones que usa el comando
+    {
+        let mut store = state.store.lock().unwrap();
+        let members = ue_core::ops::linked_ids(&store.project, v_id);
+        assert_eq!(members.len(), 2);
+        let actions = members
+            .into_iter()
+            .map(|clip_id| ue_core::Action::SetClipGroup { clip_id, group: None })
+            .collect();
+        store.dispatch("Desenlazar clips", actions).unwrap();
+        assert_eq!(ue_core::ops::linked_ids(&store.project, v_id).len(), 1, "grupo roto");
+        store.undo().unwrap();
+        assert_eq!(ue_core::ops::linked_ids(&store.project, v_id).len(), 2, "undo re-enlaza");
+    }
+}
