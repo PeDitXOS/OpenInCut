@@ -1,0 +1,16 @@
+[package]
+name = "ue-whisper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+ulid.workspace = true
+whisper-rs = "0.14"
+ue-core = { path = "../ue-core" }
+ue-audio = { path = "../ue-audio" }
+
+[dev-dependencies]
+ue-media = { path = "../ue-media" }

@@ -38,6 +38,7 @@ export function MediaPool() {
   const assets = useStore((s) => s.project.assets);
   const importMedia = useStore((s) => s.importMedia);
   const addClipFromAsset = useStore((s) => s.addClipFromAsset);
+  const transcribeAsset = useStore((s) => s.transcribeAsset);
 
   return (
     <div className="flex h-full flex-col">
@@ -77,6 +78,26 @@ export function MediaPool() {
                 {a.probe.vfr && " · VFR"}
               </div>
             </div>
+            {a.probe.audio_channels > 0 &&
+              (a.transcript ? (
+                <span
+                  className="shrink-0 rounded bg-clip-audio px-1.5 py-0.5 font-[var(--font-mono)] text-[9px] text-clip-audio-hi"
+                  title="Transcripción word-level lista"
+                >
+                  T✓
+                </span>
+              ) : (
+                <button
+                  className="focus-ring shrink-0 rounded border border-line px-1.5 py-0.5 text-[10px] text-ink-faint opacity-0 hover:text-ink group-hover:opacity-100"
+                  title="Transcribir con Whisper (palabra por palabra)"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void transcribeAsset(a.id);
+                  }}
+                >
+                  T
+                </button>
+              ))}
           </div>
         ))}
       </div>

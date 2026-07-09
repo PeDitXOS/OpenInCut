@@ -62,6 +62,7 @@ export interface UiState {
   reloadEffectPacks: () => Promise<void>;
   addTextClip: () => Promise<void>;
   removeSilences: (clipId: Id) => Promise<void>;
+  transcribeAsset: (assetId: Id) => Promise<void>;
   setClipText: (clipId: Id, content: string, style: TextStyle) => Promise<void>;
   toggleTrack: (trackId: Id, prop: "muted" | "solo" | "locked") => Promise<void>;
   undo: () => Promise<void>;
@@ -281,6 +282,18 @@ export const useStore = create<UiState>((set, get) => {
       run("Editar efectos", () => engine.setClipEffects(clipId, effects)),
     setClipTransition: (clipId, transition) =>
       run("Editar transición", () => engine.setClipTransition(clipId, transition)),
+
+    transcribeAsset: async (assetId) => {
+      try {
+        await engine.transcribeAsset(assetId);
+        set({
+          lastActionLabel:
+            "Transcribiendo en segundo plano… (descarga el modelo la primera vez)",
+        });
+      } catch (e) {
+        set({ lastActionLabel: `⚠ ${e instanceof Error ? e.message : String(e)}` });
+      }
+    },
 
     removeSilences: async (clipId) => {
       try {

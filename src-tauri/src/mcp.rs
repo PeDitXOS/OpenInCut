@@ -93,6 +93,15 @@ fn tool_defs() -> Value {
             }
         },
         {
+            "name": "get_transcript",
+            "description": "Transcripción word-level de un asset (palabras con timestamps en µs y frases). Vacío si aún no se ha transcrito.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "asset_id": { "type": "string" } },
+                "required": ["asset_id"]
+            }
+        },
+        {
             "name": "remove_silences",
             "description": "Detecta y elimina los silencios de un clip (corta y cierra huecos en todas las pistas; una sola entrada de undo). El clip debe tener audio conformado.",
             "inputSchema": {
@@ -231,6 +240,17 @@ fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             ) {
                 Ok(()) => text_result(json!({ "ok": true })),
                 Err(e) => tool_error(&e.to_string()),
+            }
+        }
+        "get_transcript" => {
+            let asset_id = match parse_id("asset_id") {
+                Ok(v) => v,
+                Err(e) => return tool_error(&e),
+            };
+            let store = state.store.lock().unwrap();
+            match store.project.transcripts.iter().find(|t| t.asset_id == asset_id) {
+                Some(doc) => text_result(serde_json::to_value(doc).unwrap_or(Value::Null)),
+                None => tool_error("el asset no tiene transcripción todavía (usa transcribe en la UI)"),
             }
         }
         "remove_silences" => {

@@ -84,6 +84,9 @@ export interface EngineClient {
     value: boolean,
   ): Promise<StateSnapshot>;
 
+  /** Lanza la transcripción Whisper de un asset (job en segundo plano). */
+  transcribeAsset(assetId: Id, model?: string): Promise<void>;
+
   /** Elimina silencios de un clip; devuelve nº de cortes y µs eliminados. */
   removeSilences(clipId: Id): Promise<{ removed: number; removed_us: number; snapshot: StateSnapshot }>;
 

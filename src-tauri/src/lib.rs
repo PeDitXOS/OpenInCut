@@ -31,6 +31,7 @@ pub struct AppState {
     pub effects_dir: Mutex<Option<PathBuf>>,
     pub mcp_port: Mutex<Option<u16>>,
     pub mcp_shutdown: AtomicBool,
+    pub models_dir: Mutex<Option<PathBuf>>,
 }
 
 impl AppState {
@@ -48,6 +49,7 @@ impl AppState {
             effects_dir: Mutex::new(None),
             mcp_port: Mutex::new(None),
             mcp_shutdown: AtomicBool::new(false),
+            models_dir: Mutex::new(None),
         }
     }
 }
@@ -541,6 +543,58 @@ fn set_clip_effects(
     Ok(snapshot(&store))
 }
 
+/// Transcribe un asset con Whisper (word-level) en segundo plano.
+/// Descarga el modelo ggml si hace falta. Al terminar emite state-changed.
+#[tauri::command]
+fn transcribe_asset(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    asset_id: String,
+    model: Option<String>,
+) -> Res<()> {
+    let id = parse_id(&asset_id)?;
+    let (conform, models_dir) = {
+        let store = state.store.lock().unwrap();
+        let asset = store.project.asset(id).ok_or("asset no encontrado")?;
+        if asset.probe.audio_channels == 0 {
+            return Err("el archivo no tiene audio".into());
+        }
+        let conform = asset
+            .audio_conform
+            .clone()
+            .ok_or("el audio aún se está preparando (conformado); prueba en unos segundos")?;
+        let models = state
+            .models_dir
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or("sin carpeta de modelos")?;
+        (PathBuf::from(conform), models)
+    };
+    let model_name = model.unwrap_or_else(|| "base".into());
+    std::thread::spawn(move || {
+        let result = ue_whisper::ensure_model(&models_dir, &model_name)
+            .and_then(|m| ue_whisper::transcribe(&conform, &m, None, id));
+        let state = app.state::<AppState>();
+        match result {
+            Ok(doc) => {
+                let mut store = state.store.lock().unwrap();
+                let doc_id = doc.id;
+                store.project.transcripts.retain(|t| t.asset_id != id);
+                store.project.transcripts.push(doc);
+                if let Some(a) = store.project.assets.iter_mut().find(|a| a.id == id) {
+                    a.transcript = Some(doc_id);
+                }
+                store.version += 1;
+                store.dirty = true;
+            }
+            Err(e) => eprintln!("[whisper] {conform:?}: {e}"),
+        }
+        let _ = app.emit("state-changed", ());
+    });
+    Ok(())
+}
+
 /// Elimina los silencios de un clip (corta y cierra huecos en TODAS las
 /// pistas: una sola entrada de undo). Requiere el audio conformado.
 #[tauri::command]
@@ -771,6 +825,11 @@ pub fn run() {
                     eprintln!("[packs] manifest inválido: {e}");
                 }
             }
+            if let Ok(dir) = app.path().app_data_dir() {
+                let models = dir.join("models");
+                let _ = std::fs::create_dir_all(&models);
+                *state.models_dir.lock().unwrap() = Some(models);
+            }
             match mcp::start(app.handle().clone()) {
                 Some(port) => {
                     *state.mcp_port.lock().unwrap() = Some(port);
@@ -803,6 +862,7 @@ pub fn run() {
             add_text_clip,
             set_clip_text,
             remove_silences,
+            transcribe_asset,
             export_video,
             cancel_export,
             playback_play,

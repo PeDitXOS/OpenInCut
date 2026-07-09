@@ -170,6 +170,10 @@ export class TauriEngine implements EngineClient {
     return invoke("set_track_prop", { trackId, prop, value });
   }
 
+  transcribeAsset(assetId: Id, model?: string): Promise<void> {
+    return invoke("transcribe_asset", { assetId, model: model ?? null });
+  }
+
   removeSilences(
     clipId: Id,
   ): Promise<{ removed: number; removed_us: number; snapshot: StateSnapshot }> {

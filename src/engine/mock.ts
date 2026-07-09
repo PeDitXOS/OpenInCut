@@ -329,6 +329,10 @@ export class MockEngine implements EngineClient {
     });
   }
 
+  async transcribeAsset(): Promise<void> {
+    throw new Error("Transcribir requiere la app de escritorio (npx tauri dev)");
+  }
+
   async removeSilences(): Promise<{ removed: number; removed_us: number; snapshot: StateSnapshot }> {
     throw new Error("Eliminar silencios requiere la app de escritorio (npx tauri dev)");
   }
