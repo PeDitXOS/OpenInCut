@@ -295,7 +295,8 @@ pub fn trim_clip(project: &Project, clip_id: Id, left: bool, new_edge: TimeUs) -
     let min_dur = frame_duration_us(seq.fps);
     let new_edge = quantize_to_frame(new_edge, seq.fps);
 
-    let (mut start, mut duration) = (clip.start, clip.duration);
+    let mut start = clip.start;
+    let duration; // se fija en ambas ramas
     let (mut src_in, mut src_out) = match &clip.payload {
         ClipPayload::Media { src_in, src_out, .. } => (Some(*src_in), Some(*src_out)),
         _ => (None, None),

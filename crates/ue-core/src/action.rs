@@ -12,6 +12,7 @@ use crate::time::TimeUs;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "op")]
+#[allow(clippy::large_enum_variant)] // las acciones viven poco y viajan por historial; Box-ear Clip complicaría las inversas
 pub enum Action {
     SetProjectName { name: String },
     AddTrack { sequence_id: Id, index: usize, track: Track },
