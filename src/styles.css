@@ -1,0 +1,85 @@
+@import "tailwindcss";
+@import "@fontsource/space-grotesk/500.css";
+@import "@fontsource/space-grotesk/600.css";
+@import "@fontsource/space-grotesk/700.css";
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/jetbrains-mono/700.css";
+
+@theme {
+  /* Carbón cálido, cromáticamente silencioso: el material manda. */
+  --color-bg0: #131110;
+  --color-bg1: #1a1816;
+  --color-bg2: #221f1c;
+  --color-bg3: #2a2723;
+  --color-line: #35312b;
+  --color-line-soft: #2b2823;
+  --color-ink: #e9e4db;
+  --color-ink-dim: #a49b8f;
+  --color-ink-faint: #6e675e;
+  /* Único acento: ámbar "luz de REC". Playhead, timecode, acción primaria. */
+  --color-accent: #ffb224;
+  --color-accent-deep: #cc8a10;
+  /* Colores funcionales de clip, apagados a propósito. */
+  --color-clip-video: #43626e;
+  --color-clip-video-hi: #6fa3b5;
+  --color-clip-audio: #4a5c3d;
+  --color-clip-audio-hi: #8fb573;
+  --color-clip-text: #63496b;
+  --color-clip-text-hi: #b088bd;
+  --color-danger: #e5484d;
+
+  --font-display: "Space Grotesk", system-ui, sans-serif;
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+  background: var(--color-bg0);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-line);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Etiqueta de panel: versalitas pequeñas, tracking ancho. */
+.panel-eyebrow {
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-ink-faint);
+}
+
+.focus-ring:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
