@@ -156,6 +156,10 @@ export class TauriEngine implements EngineClient {
     return invoke("set_clip_transition", { clipId, transition });
   }
 
+  mcpStatus(): Promise<number | null> {
+    return invoke("mcp_status");
+  }
+
   cancelExport(): Promise<void> {
     return invoke("cancel_export");
   }

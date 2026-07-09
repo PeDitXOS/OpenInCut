@@ -328,6 +328,10 @@ export class MockEngine implements EngineClient {
     });
   }
 
+  async mcpStatus(): Promise<number | null> {
+    return null;
+  }
+
   async cancelExport(): Promise<void> {}
   async onExportProgress(): Promise<() => void> {
     return () => {};

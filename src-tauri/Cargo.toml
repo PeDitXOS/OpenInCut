@@ -22,3 +22,4 @@ ue-media = { path = "../crates/ue-media" }
 ue-audio = { path = "../crates/ue-audio" }
 ue-render = { path = "../crates/ue-render" }
 ue-export = { path = "../crates/ue-export" }
+tiny_http = "0.12"

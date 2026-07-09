@@ -12,6 +12,7 @@ export function Header() {
   const saveProject = useStore((s) => s.saveProject);
   const openProject = useStore((s) => s.openProject);
   const exportProgress = useStore((s) => s.exportProgress);
+  const mcpPort = useStore((s) => s.mcpPort);
   const cancelExport = useStore((s) => s.cancelExport);
 
   return (
@@ -71,11 +72,19 @@ export function Header() {
       <div className="mx-1 h-5 w-px bg-line" />
 
       <span
-        className="flex items-center gap-1.5 rounded-full border border-line px-2.5 py-1 text-[11px] text-ink-faint"
-        title="Servidor MCP: llega en la Fase 4"
+        className={`flex items-center gap-1.5 rounded-full border border-line px-2.5 py-1 text-[11px] ${
+          mcpPort ? "text-ink" : "text-ink-faint"
+        }`}
+        title={
+          mcpPort
+            ? `Servidor MCP activo: claude mcp add --transport http ubereditor http://127.0.0.1:${mcpPort}/mcp`
+            : "El servidor MCP corre en la app de escritorio"
+        }
       >
-        <span className="h-1.5 w-1.5 rounded-full bg-ink-faint" />
-        MCP inactivo
+        <span
+          className={`h-1.5 w-1.5 rounded-full ${mcpPort ? "bg-clip-audio-hi" : "bg-ink-faint"}`}
+        />
+        {mcpPort ? `MCP :${mcpPort}` : "MCP inactivo"}
       </span>
 
       {exporting && (

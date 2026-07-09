@@ -54,6 +54,7 @@ export interface UiState {
   cancelExport: () => Promise<void>;
   saveProject: () => Promise<void>;
   openProject: () => Promise<void>;
+  mcpPort: number | null;
   effectsCatalog: EffectDef[];
   setClipEffects: (clipId: Id, effects: EffectInstance[]) => Promise<void>;
   setClipTransition: (clipId: Id, transition: TransitionRef | null) => Promise<void>;
@@ -133,6 +134,11 @@ export const useStore = create<UiState>((set, get) => {
         set({ effectsCatalog: await engine.getEffectsCatalog() });
       } catch {
         /* sin catálogo: el panel de efectos queda vacío */
+      }
+      try {
+        set({ mcpPort: await engine.mcpStatus() });
+      } catch {
+        /* sin MCP */
       }
     },
 
@@ -265,6 +271,7 @@ export const useStore = create<UiState>((set, get) => {
       }
     },
 
+    mcpPort: null,
     effectsCatalog: [],
     setClipEffects: (clipId, effects) =>
       run("Editar efectos", () => engine.setClipEffects(clipId, effects)),

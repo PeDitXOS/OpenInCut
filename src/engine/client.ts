@@ -75,6 +75,9 @@ export interface EngineClient {
   setClipEffects(clipId: Id, effects: EffectInstance[]): Promise<StateSnapshot>;
   setClipTransition(clipId: Id, transition: TransitionRef | null): Promise<StateSnapshot>;
 
+  /** Puerto del servidor MCP embebido (null si no está activo). */
+  mcpStatus(): Promise<number | null>;
+
   // -- progreso de export --
   cancelExport(): Promise<void>;
   onExportProgress(cb: (progress: number) => void): Promise<() => void>;

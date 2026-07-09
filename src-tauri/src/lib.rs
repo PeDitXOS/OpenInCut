@@ -16,6 +16,8 @@ use ue_core::ops::InsertMode;
 use ue_core::{ProjectStore, TimeUs};
 use ue_media::stream::MjpegSession;
 
+pub mod mcp;
+
 pub struct AppState {
     pub store: Mutex<ProjectStore>,
     pub path: Mutex<Option<PathBuf>>,
@@ -27,6 +29,27 @@ pub struct AppState {
     pub registry: Mutex<Arc<Vec<ue_render::EffectDef>>>,
     pub user_packs: Mutex<Vec<ue_render::EffectDef>>,
     pub effects_dir: Mutex<Option<PathBuf>>,
+    pub mcp_port: Mutex<Option<u16>>,
+    pub mcp_shutdown: AtomicBool,
+}
+
+impl AppState {
+    /// Estado inicial (también usado por los tests del servidor MCP).
+    pub fn new_default() -> Self {
+        AppState {
+            store: Mutex::new(ProjectStore::new(Project::new("Proyecto sin título"))),
+            path: Mutex::new(None),
+            cache_dir: Mutex::new(None),
+            player: Mutex::new(None),
+            frames: Mutex::new(None),
+            export_cancel: Arc::new(AtomicBool::new(false)),
+            registry: Mutex::new(Arc::new(ue_render::core_registry())),
+            user_packs: Mutex::new(vec![]),
+            effects_dir: Mutex::new(None),
+            mcp_port: Mutex::new(None),
+            mcp_shutdown: AtomicBool::new(false),
+        }
+    }
 }
 
 /// Recarga los packs de usuario desde disco y reconstruye el registro.
@@ -535,6 +558,12 @@ fn set_clip_transition(
     Ok(snapshot(&store))
 }
 
+/// Puerto del servidor MCP embebido (None si no pudo arrancar).
+#[tauri::command]
+fn mcp_status(state: State<AppState>) -> Option<u16> {
+    *state.mcp_port.lock().unwrap()
+}
+
 #[tauri::command]
 fn cancel_export(state: State<AppState>) -> Res<()> {
     state.export_cancel.store(true, Ordering::SeqCst);
@@ -626,17 +655,7 @@ fn new_project(state: State<AppState>, name: String) -> Res<StateSnapshot> {
 }
 
 pub fn run() {
-    let state = AppState {
-        store: Mutex::new(ProjectStore::new(Project::new("Proyecto sin título"))),
-        path: Mutex::new(None),
-        cache_dir: Mutex::new(None),
-        player: Mutex::new(None),
-        frames: Mutex::new(None),
-        export_cancel: Arc::new(AtomicBool::new(false)),
-        registry: Mutex::new(Arc::new(ue_render::core_registry())),
-        user_packs: Mutex::new(vec![]),
-        effects_dir: Mutex::new(None),
-    };
+    let state = AppState::new_default();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
@@ -654,6 +673,13 @@ pub fn run() {
                 for e in errors {
                     eprintln!("[packs] manifest inválido: {e}");
                 }
+            }
+            match mcp::start(app.handle().clone()) {
+                Some(port) => {
+                    *state.mcp_port.lock().unwrap() = Some(port);
+                    eprintln!("[mcp] escuchando en http://127.0.0.1:{port}/mcp");
+                }
+                None => eprintln!("[mcp] no se pudo abrir el puerto {}", mcp::MCP_PORT),
             }
             Ok(())
         })
@@ -673,6 +699,7 @@ pub fn run() {
             render_frame,
             get_effects_catalog,
             reload_effect_packs,
+            mcp_status,
             set_clip_effects,
             set_clip_transition,
             export_video,
