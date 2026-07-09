@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { Clip, EffectDef, EffectInstance, Param } from "../engine/types";
 import { hasKeyAt, removeKeyAt, withKeyAt } from "../engine/types";
@@ -90,6 +90,187 @@ function KeyBtn({
   );
 }
 
+/** Interpolación del key i (para el selector). */
+function keyInterp(k: { interp: { kind: string } }): string {
+  return k.interp.kind;
+}
+
+/**
+ * Mini editor de curvas: arrastra keys (tiempo/valor), doble click añade o
+ * borra, click selecciona (interpolación editable). Commit al soltar.
+ */
+function CurveEditor({
+  param,
+  durationUs,
+  playheadUs,
+  min,
+  max,
+  onChange,
+}: {
+  param: Param;
+  durationUs: number;
+  playheadUs: number;
+  min: number;
+  max: number;
+  onChange: (p: Param) => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [draft, setDraft] = useState<
+    { t: number; value: number; interp: { kind: "hold" | "linear" | "smooth" } }[] | null
+  >(null);
+  const [selected, setSelected] = useState<number | null>(null);
+  const dragIdx = useRef<number | null>(null);
+  const H = 64;
+
+  const keys =
+    draft ?? (typeof param === "number" ? [] : (param.keys as NonNullable<typeof draft>));
+
+  const toX = (t: number, w: number) => (t / Math.max(1, durationUs)) * w;
+  const toY = (v: number) => 5 + (1 - (v - min) / (max - min)) * (H - 10);
+  const fromXY = (x: number, y: number, w: number) => ({
+    t: Math.round(Math.max(0, Math.min(1, x / w)) * durationUs),
+    value: Math.max(min, Math.min(max, min + (1 - (y - 5) / (H - 10)) * (max - min))),
+  });
+  const hitKey = (x: number, y: number, w: number) =>
+    keys.findIndex((k) => Math.abs(toX(k.t, w) - x) < 7 && Math.abs(toY(k.value) - y) < 7);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const w = canvas.clientWidth;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = w * dpr;
+    canvas.height = H * dpr;
+    const ctx = canvas.getContext("2d")!;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, H);
+    // línea de cero (si el rango la cruza)
+    if (min < 0 && max > 0) {
+      ctx.strokeStyle = "rgba(233,228,219,0.12)";
+      ctx.beginPath();
+      ctx.moveTo(0, toY(0) + 0.5);
+      ctx.lineTo(w, toY(0) + 0.5);
+      ctx.stroke();
+    }
+    // curva (muestreada con paramValue: misma interpolación que el motor)
+    const evalAt = (t: number) => paramValue(keys.length ? { keys } : 0, t);
+    ctx.strokeStyle = "#ffb224";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let x = 0; x <= w; x += 2) {
+      const v = evalAt((x / w) * durationUs);
+      const y = toY(v);
+      if (x === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    // playhead
+    const px = toX(playheadUs, w);
+    ctx.strokeStyle = "rgba(255,178,36,0.45)";
+    ctx.beginPath();
+    ctx.moveTo(px + 0.5, 0);
+    ctx.lineTo(px + 0.5, H);
+    ctx.stroke();
+    // keys
+    keys.forEach((k, i) => {
+      const x = toX(k.t, w);
+      const y = toY(k.value);
+      ctx.fillStyle = i === selected ? "#ffb224" : "#e9e4db";
+      ctx.beginPath();
+      ctx.moveTo(x, y - 4.5);
+      ctx.lineTo(x + 4.5, y);
+      ctx.lineTo(x, y + 4.5);
+      ctx.lineTo(x - 4.5, y);
+      ctx.closePath();
+      ctx.fill();
+    });
+  }, [keys, selected, playheadUs, durationUs, min, max]);
+
+  const commit = (ks: NonNullable<typeof draft>) => {
+    const sorted = [...ks].sort((a, b) => a.t - b.t);
+    if (sorted.length === 0) onChange(paramValue(param, playheadUs));
+    else if (sorted.length === 1) onChange(sorted[0].value);
+    else onChange({ keys: sorted });
+  };
+
+  return (
+    <div className="mt-1 rounded-md border border-line bg-bg2/50">
+      <canvas
+        ref={canvasRef}
+        aria-label="Editor de curvas"
+        className="block h-16 w-full cursor-crosshair touch-none"
+        onPointerDown={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          const [x, y] = [e.clientX - rect.left, e.clientY - rect.top];
+          const i = hitKey(x, y, rect.width);
+          setSelected(i >= 0 ? i : null);
+          if (i >= 0) {
+            dragIdx.current = i;
+            setDraft(keys.map((k) => ({ ...k })));
+            e.currentTarget.setPointerCapture(e.pointerId);
+          }
+        }}
+        onPointerMove={(e) => {
+          if (dragIdx.current === null || !draft) return;
+          const rect = e.currentTarget.getBoundingClientRect();
+          const { t, value } = fromXY(e.clientX - rect.left, e.clientY - rect.top, rect.width);
+          const next = draft.map((k, i) => (i === dragIdx.current ? { ...k, t, value } : k));
+          setDraft(next);
+        }}
+        onPointerUp={() => {
+          if (dragIdx.current !== null && draft) commit(draft);
+          dragIdx.current = null;
+          setDraft(null);
+        }}
+        onDoubleClick={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          const [x, y] = [e.clientX - rect.left, e.clientY - rect.top];
+          const i = hitKey(x, y, rect.width);
+          if (i >= 0) {
+            commit(keys.filter((_, k) => k !== i));
+            setSelected(null);
+          } else {
+            const { t, value } = fromXY(x, y, rect.width);
+            commit([...keys, { t, value, interp: { kind: "linear" } }]);
+          }
+        }}
+      />
+      <div className="flex items-center gap-2 border-t border-line-soft px-2 py-1 text-[10.5px] text-ink-faint">
+        {selected !== null && keys[selected] ? (
+          <>
+            <span>Key {selected + 1}</span>
+            <select
+              className="focus-ring cursor-pointer rounded border border-line bg-bg1 px-1 py-0.5 text-[10.5px] text-ink"
+              value={keyInterp(keys[selected])}
+              onChange={(e) => {
+                const kind = e.target.value as "hold" | "linear" | "smooth";
+                commit(keys.map((k, i) => (i === selected ? { ...k, interp: { kind } } : k)));
+              }}
+              title="Interpolación del tramo que empieza en este key"
+            >
+              <option value="linear">Lineal</option>
+              <option value="hold">Escalón</option>
+              <option value="smooth">Suave</option>
+            </select>
+            <button
+              className="focus-ring rounded px-1 text-ink-faint hover:text-danger"
+              onClick={() => {
+                commit(keys.filter((_, k) => k !== selected));
+                setSelected(null);
+              }}
+              title="Eliminar este keyframe"
+            >
+              ✕ key
+            </button>
+          </>
+        ) : (
+          <span>Doble click: añadir/borrar · arrastra los rombos</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="border-b border-line-soft px-3 py-3">
@@ -165,6 +346,21 @@ function ClipInspector({ clip }: { clip: Clip }) {
             }
           />
         </Row>
+        {isCurve(clip.transform.position[0]) && (
+          <CurveEditor
+            param={clip.transform.position[0]}
+            durationUs={clip.duration}
+            playheadUs={relUs}
+            min={-960}
+            max={960}
+            onChange={(p) =>
+              void setClipTransform(clip.id, {
+                ...clip.transform,
+                position: [p, clip.transform.position[1]],
+              })
+            }
+          />
+        )}
         <Row label="Posición Y">
           <Slider
             value={paramValue(clip.transform.position[1], relUs)}
@@ -190,6 +386,21 @@ function ClipInspector({ clip }: { clip: Clip }) {
             }
           />
         </Row>
+        {isCurve(clip.transform.position[1]) && (
+          <CurveEditor
+            param={clip.transform.position[1]}
+            durationUs={clip.duration}
+            playheadUs={relUs}
+            min={-540}
+            max={540}
+            onChange={(p) =>
+              void setClipTransform(clip.id, {
+                ...clip.transform,
+                position: [clip.transform.position[0], p],
+              })
+            }
+          />
+        )}
         <Row label="Opacidad">
           <Slider
             value={opacity}
@@ -209,6 +420,16 @@ function ClipInspector({ clip }: { clip: Clip }) {
             onChange={(p) => void setClipTransform(clip.id, { ...clip.transform, opacity: p })}
           />
         </Row>
+        {isCurve(clip.transform.opacity) && (
+          <CurveEditor
+            param={clip.transform.opacity}
+            durationUs={clip.duration}
+            playheadUs={relUs}
+            min={0}
+            max={1}
+            onChange={(p) => void setClipTransform(clip.id, { ...clip.transform, opacity: p })}
+          />
+        )}
         <Row label="Escala">
           <Slider
             value={scale}
@@ -226,6 +447,16 @@ function ClipInspector({ clip }: { clip: Clip }) {
             onChange={(p) => void setClipTransform(clip.id, { ...clip.transform, scale: [p, p] })}
           />
         </Row>
+        {isCurve(clip.transform.scale[0]) && (
+          <CurveEditor
+            param={clip.transform.scale[0]}
+            durationUs={clip.duration}
+            playheadUs={relUs}
+            min={0.1}
+            max={4}
+            onChange={(p) => void setClipTransform(clip.id, { ...clip.transform, scale: [p, p] })}
+          />
+        )}
         <Row label="Rotación">
           <Slider
             value={rotation}
@@ -246,6 +477,16 @@ function ClipInspector({ clip }: { clip: Clip }) {
             onChange={(p) => void setClipTransform(clip.id, { ...clip.transform, rotation: p })}
           />
         </Row>
+        {isCurve(clip.transform.rotation) && (
+          <CurveEditor
+            param={clip.transform.rotation}
+            durationUs={clip.duration}
+            playheadUs={relUs}
+            min={-180}
+            max={180}
+            onChange={(p) => void setClipTransform(clip.id, { ...clip.transform, rotation: p })}
+          />
+        )}
       </Section>
 
       <Section title="Audio">
@@ -266,6 +507,16 @@ function ClipInspector({ clip }: { clip: Clip }) {
             onChange={(p) => void setClipAudio(clip.id, { ...clip.audio, gain_db: p })}
           />
         </Row>
+        {isCurve(clip.audio.gain_db) && (
+          <CurveEditor
+            param={clip.audio.gain_db}
+            durationUs={clip.duration}
+            playheadUs={relUs}
+            min={-60}
+            max={12}
+            onChange={(p) => void setClipAudio(clip.id, { ...clip.audio, gain_db: p })}
+          />
+        )}
         <Row label="Pan">
           <Slider
             value={paramValue(clip.audio.pan)}

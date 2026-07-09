@@ -765,20 +765,21 @@ pub fn build_ffmpeg_args(
         start: TimeUs,
         out_dur: TimeUs,
         vf: Option<String>,
-        opacity: f64,
     }
     let mut layer_clips: Vec<LayerClip> = vec![];
     for track in video_tracks.iter().skip(1) {
         for clip in &track.clips {
+            // las capas corren en tiempo de timeline: t relativo al clip
+            let tvar = format!("(t-{})", secs(clip.start));
             let vf = || {
                 ue_render::clip_vf_layer(
                     &registry,
                     &clip.effects,
                     &clip.transform,
                     Some(seq.resolution),
+                    &tvar,
                 )
             };
-            let opacity = clip.transform.opacity.eval(0).clamp(0.0, 1.0);
             match &clip.payload {
                 ClipPayload::Media { asset_id, src_in, src_out } => {
                     if project.asset(*asset_id).is_none() {
@@ -794,7 +795,6 @@ pub fn build_ffmpeg_args(
                         start: clip.start,
                         out_dur: (((*src_out - *src_in) as f64) / clip.speed).round() as TimeUs,
                         vf: vf(),
-                        opacity,
                     });
                 }
                 ClipPayload::Generator { generator_id, params, color_params } => {
@@ -814,7 +814,6 @@ pub fn build_ffmpeg_args(
                         start: clip.start,
                         out_dur: clip.duration,
                         vf: vf(),
-                        opacity,
                     });
                 }
                 _ => {}
@@ -957,11 +956,8 @@ pub fn build_ffmpeg_args(
         let fit = format!(
             "scale='min({out_w},iw)':'min({out_h},ih)':force_original_aspect_ratio=decrease"
         );
-        let alpha = if layer.opacity < 0.999 {
-            format!("format=rgba,colorchannelmixer=aa={:.4},", layer.opacity)
-        } else {
-            "format=rgba,".to_string()
-        };
+        // la opacidad (estática o animada) ya viene aplicada en el vf del clip
+        let alpha = "format=rgba,".to_string();
         let start = layer.start;
         match &layer.src {
             LayerSrc::Media { asset_id, src_in, src_out, speed } => {

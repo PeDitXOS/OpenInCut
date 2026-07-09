@@ -17,6 +17,8 @@ pub struct ResolvedFrame {
     pub src_t_us: TimeUs,
     /// Tiempo relativo al inicio del clip (µs de timeline): evalúa curvas.
     pub clip_rel_us: TimeUs,
+    /// Velocidad del clip (para mapear t del stream a tiempo de clip).
+    pub speed: f64,
     /// Efectos y transform del clip resuelto (la capa superior decide la cadena).
     pub effects: Vec<EffectInstance>,
     pub transform: Transform2D,
@@ -48,6 +50,7 @@ pub fn resolve_top_video(project: &Project, sequence_id: Id, t_us: TimeUs) -> Op
                         asset_path: path,
                         src_t_us: src_t,
                         clip_rel_us: t_us - clip.start,
+                        speed: clip.speed,
                         effects: clip.effects.clone(),
                         transform: clip.transform.clone(),
                     });

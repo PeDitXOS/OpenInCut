@@ -124,6 +124,7 @@ fn frame_service_loop(app: tauri::AppHandle, latest: Arc<Mutex<Vec<u8>>>, runnin
                 .sequence(store.project.active_sequence)
                 .map(|s| s.resolution)
         };
+        // vf canónico (tvar="t") solo para COMPARAR: no cambia con el playhead
         let vf = ue_render::clip_vf(&reg, &r.effects, &r.transform, canvas);
 
         // ¿sirve la sesión actual? (mismo archivo, misma cadena de efectos,
@@ -137,8 +138,19 @@ fn frame_service_loop(app: tauri::AppHandle, latest: Arc<Mutex<Vec<u8>>>, runnin
                 && src_t <= s.next_src_us() + 1_500_000
         });
         if !reusable {
+            // el stream corre con -ss: t=0 en el punto de apertura, a ritmo de
+            // FUENTE → tiempo de clip = t/speed + offset_al_abrir. Así las
+            // curvas de transform ANIMAN también durante la reproducción.
+            let rel0 = r.clip_rel_us as f64 / 1_000_000.0;
+            let tvar = if (r.speed - 1.0).abs() > 1e-9 {
+                format!("(t/{}+{rel0:.6})", r.speed)
+            } else {
+                format!("(t+{rel0:.6})")
+            };
+            let open_vf = ue_render::clip_vf_at(&reg, &r.effects, &r.transform, canvas, &tvar);
             session =
-                MjpegSession::open(&path, src_t, PLAYBACK_MAX_W, PLAYBACK_FPS, vf.as_deref()).ok();
+                MjpegSession::open(&path, src_t, PLAYBACK_MAX_W, PLAYBACK_FPS, open_vf.as_deref())
+                    .ok();
             session_vf = vf;
         }
         if let Some(s) = session.as_mut() {

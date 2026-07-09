@@ -445,6 +445,87 @@ fn animated_position_moves_in_export() {
     assert!(r < 60, "t=3.7: izquierda vacía, fue r={r}");
 }
 
+/// Escala animada: el bloque rojo crece 0.2→1.0 (eval=frame + lienzo).
+#[test]
+fn animated_scale_grows_in_export() {
+    use ue_core::keyframe::{Interp, Keyframe, KeyframeCurve, Param};
+    let Some(dir) = media_dir() else { return };
+    let src = dir.join("solid_red.mp4");
+    assert!(src.exists(), "generado por otros tests o por este");
+    let mut project = Project::new("anim-scale");
+    let seq_id = project.active_sequence;
+    let asset = ue_media::import_file(&src).unwrap();
+    let aid = asset.id;
+    project.assets.push(asset);
+    let v1 = project
+        .sequence(seq_id)
+        .unwrap()
+        .tracks
+        .iter()
+        .find(|t| t.kind == TrackKind::Video)
+        .unwrap()
+        .id;
+    let mut store = ProjectStore::new(project);
+    let mut clip = Clip::new_media(aid, 0, 4 * SEC, 0);
+    let curve = Param::Curve(KeyframeCurve::new(vec![
+        Keyframe { t: 0, value: 0.2, interp: Interp::Linear },
+        Keyframe { t: 4 * SEC, value: 1.0, interp: Interp::Linear },
+    ]));
+    clip.transform.scale = (curve.clone(), curve);
+    store.insert_clip(v1, clip, InsertMode::Strict).unwrap();
+
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-anim-scale.mp4");
+    export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+
+    // el rojo nativo es 640x360; a escala 0.2 NO llega a x=700, a 1.0 sí
+    let (r, _g, _b) = pixel_at(&out, 0.3, 700, 540);
+    assert!(r < 60, "t=0.3: escala pequeña, x=700 negro, fue r={r}");
+    let (r, _g, _b) = pixel_at(&out, 0.3, 960, 540);
+    assert!(r > 180, "t=0.3: el centro sí es rojo, fue r={r}");
+    let (r, _g, _b) = pixel_at(&out, 3.8, 700, 540);
+    assert!(r > 180, "t=3.8: escala 1.0, x=700 rojo, fue r={r}");
+}
+
+/// Opacidad animada 0→1 sobre negro: el centro pasa de oscuro a rojo.
+#[test]
+fn animated_opacity_fades_in_export() {
+    use ue_core::keyframe::{Interp, Keyframe, KeyframeCurve, Param};
+    let Some(dir) = media_dir() else { return };
+    let src = dir.join("solid_red.mp4");
+    assert!(src.exists());
+    let mut project = Project::new("anim-op");
+    let seq_id = project.active_sequence;
+    let asset = ue_media::import_file(&src).unwrap();
+    let aid = asset.id;
+    project.assets.push(asset);
+    let v1 = project
+        .sequence(seq_id)
+        .unwrap()
+        .tracks
+        .iter()
+        .find(|t| t.kind == TrackKind::Video)
+        .unwrap()
+        .id;
+    let mut store = ProjectStore::new(project);
+    let mut clip = Clip::new_media(aid, 0, 4 * SEC, 0);
+    clip.transform.opacity = Param::Curve(KeyframeCurve::new(vec![
+        Keyframe { t: 0, value: 0.0, interp: Interp::Linear },
+        Keyframe { t: 4 * SEC, value: 1.0, interp: Interp::Linear },
+    ]));
+    store.insert_clip(v1, clip, InsertMode::Strict).unwrap();
+
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-anim-op.mp4");
+    export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+
+    let (r0, _g, _b) = pixel_at(&out, 0.2, 960, 540);
+    let (r1, _g, _b) = pixel_at(&out, 2.0, 960, 540);
+    let (r2, _g, _b) = pixel_at(&out, 3.8, 960, 540);
+    assert!(r0 < 40, "t=0.2: casi transparente sobre negro, fue r={r0}");
+    assert!((80..190).contains(&(r1 as i32)), "t=2.0: mezcla intermedia, fue r={r1}");
+    assert!(r2 > 200, "t=3.8: opaco, fue r={r2}");
+    assert!(r0 < r1 && r1 < r2, "monótono: {r0} < {r1} < {r2}");
+}
+
 // ---------------------------------------------------------------------------
 // Audio: pan, curvas de ganancia y loudnorm
 // ---------------------------------------------------------------------------

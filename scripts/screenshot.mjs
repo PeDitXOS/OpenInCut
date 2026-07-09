@@ -172,6 +172,14 @@ await addKey.click();
 await page.waitForTimeout(200);
 if ((await page.getByTitle(/Quitar el keyframe del playhead/).count()) === 0)
   throw new Error("el keyframe no se creó (no hay ◆ en el playhead)");
+// el editor de curvas aparece para la propiedad animada
+const curveCanvas = page.getByLabel("Editor de curvas").first();
+if ((await curveCanvas.count()) === 0)
+  throw new Error("el editor de curvas no apareció en el Inspector");
+// doble click en un punto vacío añade un segundo key (y el pie muestra ayuda)
+const cbox = await curveCanvas.boundingBox();
+await page.mouse.dblclick(cbox.x + cbox.width * 0.75, cbox.y + cbox.height * 0.3);
+await page.waitForTimeout(250);
 await shot("12-keyframe-creado");
 
 // 13. Generadores: añadir un rectángulo y editar su color en el Inspector
