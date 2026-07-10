@@ -508,6 +508,18 @@ fn tool_defs() -> Value {
             }),
             &["clip_id"], Kind::Edit,
         ),
+        tool(
+            "set_clip_name",
+            "Gives a clip a human-friendly name so it reads as e.g. 'intro hook' \
+             instead of a ULID in get_timeline. Purely a label — the id never \
+             changes. Send an empty name to clear it (back to the derived \
+             label).",
+            json!({
+                "clip_id": clip_id.clone(),
+                "name": str_("the name to show, or '' to clear it"),
+            }),
+            &["clip_id", "name"], Kind::Edit,
+        ),
 
         // -------------------------------------------------------------- tracks
         tool(
@@ -949,11 +961,7 @@ fn call_tool(state: &AppState, app: Option<&tauri::AppHandle>, name: &str, raw: 
     match name {
         // ---------------------------------------------------------------- read
         "get_project_summary" => finish(get_project_summary(state)),
-        "get_timeline" => finish((|| {
-            let seq_id = target_sequence(state, &args)?;
-            let store = state.store.lock().unwrap();
-            serde_json::to_value(store.project.sequence(seq_id)).map_err(|e| e.to_string())
-        })()),
+        "get_timeline" => finish(get_timeline(state, &args)),
         "get_media_pool" => finish(
             serde_json::to_value(&state.store.lock().unwrap().project.assets)
                 .map_err(|e| e.to_string()),
@@ -1139,6 +1147,18 @@ fn call_tool(state: &AppState, app: Option<&tauri::AppHandle>, name: &str, raw: 
         // ------------------------------------------------------ clip properties
         "set_clip_properties" => finish(set_clip_properties(state, app, &args)),
         "set_clip_content" => finish(set_clip_content(state, &args)),
+        "set_clip_name" => finish((|| {
+            let clip_id = args.id("clip_id")?;
+            let name = args.str("name")?.trim();
+            let name = (!name.is_empty()).then(|| name.to_string());
+            state
+                .store
+                .lock()
+                .unwrap()
+                .dispatch("Rename clip", vec![ue_core::Action::SetClipName { clip_id, name }])
+                .map_err(|e| e.to_string())?;
+            Ok(json!({ "ok": true }))
+        })()),
 
         // -------------------------------------------------------------- tracks
         "add_track" => finish((|| {
@@ -1375,6 +1395,34 @@ fn get_project_summary(state: &AppState) -> Result<Value, String> {
         "can_redo": store.can_redo(),
         "undo_history": store.undo_labels(),
     }))
+}
+
+/// The sequence as JSON, with a human-friendly `label` added to every clip
+/// (the custom name, or one derived from the payload) so the agent isn't
+/// staring at raw ULIDs.
+fn get_timeline(state: &AppState, args: &Args) -> Result<Value, String> {
+    let seq_id = target_sequence(state, args)?;
+    let store = state.store.lock().unwrap();
+    let seq = store.project.sequence(seq_id).ok_or("sequence not found")?;
+    let mut val = serde_json::to_value(seq).map_err(|e| e.to_string())?;
+    // enrich each serialized clip with its display label (id → readable name)
+    if let Some(tracks) = val.get_mut("tracks").and_then(|t| t.as_array_mut()) {
+        for (ti, track) in seq.tracks.iter().enumerate() {
+            let Some(clips) = tracks
+                .get_mut(ti)
+                .and_then(|t| t.get_mut("clips"))
+                .and_then(|c| c.as_array_mut())
+            else {
+                continue;
+            };
+            for (ci, clip) in track.clips.iter().enumerate() {
+                if let Some(obj) = clips.get_mut(ci).and_then(|c| c.as_object_mut()) {
+                    obj.insert("label".into(), json!(clip.display_label(&store.project)));
+                }
+            }
+        }
+    }
+    Ok(val)
 }
 
 /// Finds a transcript by asset id OR transcript id (agents have either).

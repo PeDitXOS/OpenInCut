@@ -1118,6 +1118,7 @@ fn auto_subtitles_burn_per_segment() {
         audio: Default::default(),
         transition_in: None,
         label_color: None,
+        name: None,
         group: None,
     };
     store.insert_clip(v2, subs, InsertMode::Strict).unwrap();
@@ -1273,6 +1274,7 @@ fn avatar_overlay_switches_emotion_per_segment() {
         audio: Default::default(),
         transition_in: None,
         label_color: None,
+        name: None,
         group: None,
     };
     store.insert_clip(v2, avatar, InsertMode::Strict).unwrap();
@@ -1398,6 +1400,7 @@ fn word_mode_subtitles_burn_per_word() {
         audio: Default::default(),
         transition_in: None,
         label_color: None,
+        name: None,
         group: None,
     };
     store.insert_clip(v2, subs, InsertMode::Strict).unwrap();
@@ -1482,6 +1485,7 @@ fn karaoke_mode_highlights_words_progressively() {
         audio: Default::default(),
         transition_in: None,
         label_color: None,
+        name: None,
         group: None,
     };
     store.insert_clip(v2, subs, InsertMode::Strict).unwrap();
@@ -1619,6 +1623,7 @@ fn continuous_speech_chunks_into_multiple_captions() {
         audio: Default::default(),
         transition_in: None,
         label_color: None,
+        name: None,
         group: None,
     };
     store.insert_clip(v2, subs, InsertMode::Strict).unwrap();
@@ -1779,6 +1784,7 @@ fn corrected_words_appear_in_captions() {
         audio: Default::default(),
         transition_in: None,
         label_color: None,
+        name: None,
         group: None,
     };
     store.insert_clip(v2, subs, InsertMode::Strict).unwrap();

@@ -133,7 +133,7 @@ fn tools_cover_the_whole_editor_and_are_documented() {
         "split_clip", "delete_clips", "move_clip", "trim_clip", "unlink_clip",
         "cut_ranges", "move_range",
         // clip properties
-        "set_clip_properties", "set_clip_content",
+        "set_clip_properties", "set_clip_content", "set_clip_name",
         // tracks / sequences
         "add_track", "remove_track", "set_track_prop",
         "set_sequence_props", "set_active_sequence", "remove_sequence", "generate_vertical",
@@ -1002,6 +1002,7 @@ fn avatar_stream_suffix_groups_by_emotion_and_maps_time() {
         audio: AudioProps { muted: true, ..Default::default() },
         transition_in: None,
         label_color: None,
+        name: None,
         group: None,
     };
     let track2 = Track::new(TrackKind::Video, "V2");
@@ -1112,6 +1113,7 @@ fn avatar_stream_graph_runs_in_ffmpeg() {
                 audio: AudioProps { muted: true, ..Default::default() },
                 transition_in: None,
                 label_color: None,
+                name: None,
                 group: None,
             },
             InsertMode::Strict,
@@ -1363,7 +1365,7 @@ fn tool_count_matches_the_docs() {
     let state = AppState::new_default();
     let tools = rpc(&state, "tools/list", json!({}));
     let n = tools.pointer("/result/tools").unwrap().as_array().unwrap().len();
-    assert_eq!(n, 48, "README/docs/MCP.md advertise the tool count; update them");
+    assert_eq!(n, 49, "README/docs/MCP.md advertise the tool count; update them");
 }
 
 /// GOLDEN RULE: the paused preview must show subtitles, exactly like the
@@ -1441,6 +1443,7 @@ fn preview_frame_shows_subtitles_like_export() {
             audio: Default::default(),
             transition_in: None,
             label_color: None,
+            name: None,
             group: None,
         };
         store.insert_clip(v2, subs, InsertMode::Strict).unwrap();
@@ -1548,4 +1551,38 @@ fn transcript_granularity_and_word_search() {
     // a miss is zero hits, not an error
     let none = call("find_words", json!({ "asset_id": asset_id.to_string(), "query": "godot" }));
     assert_eq!(none["matches"], 0);
+}
+
+/// Clips read as friendly labels, and set_clip_name overrides the label
+/// without touching the id.
+#[test]
+fn clip_labels_and_naming() {
+    let (state, clip_id) = state_with_clip();
+    let timeline = || tool_json(&rpc(&state, "tools/call", json!({ "name": "get_timeline", "arguments": {} })));
+    let name = |t: &Value| -> String {
+        t["tracks"].as_array().unwrap().iter()
+            .flat_map(|tr| tr["clips"].as_array().unwrap())
+            .find(|c| c["id"] == clip_id.to_string())
+            .unwrap()["label"].as_str().unwrap().to_string()
+    };
+
+    // derived from the media file, not the ULID
+    assert_eq!(name(&timeline()), "x.mp4");
+
+    // custom name wins
+    let resp = rpc(&state, "tools/call", json!({ "name": "set_clip_name", "arguments": {
+        "clip_id": clip_id.to_string(), "name": "intro hook"
+    }}));
+    assert!(resp.pointer("/result/isError").is_none(), "{resp}");
+    assert_eq!(name(&timeline()), "intro hook");
+    // the id is unchanged
+    assert!(state.store.lock().unwrap().project.clip(clip_id).is_some());
+
+    // clearing falls back to the derived label (and is undoable)
+    rpc(&state, "tools/call", json!({ "name": "set_clip_name", "arguments": {
+        "clip_id": clip_id.to_string(), "name": ""
+    }}));
+    assert_eq!(name(&timeline()), "x.mp4");
+    rpc(&state, "tools/call", json!({ "name": "undo", "arguments": {} }));
+    assert_eq!(name(&timeline()), "intro hook", "undo restores the name");
 }

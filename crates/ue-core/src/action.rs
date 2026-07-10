@@ -50,6 +50,8 @@ pub enum Action {
     /// material, duration = source/speed). `duration` comes precomputed.
     SetClipSpeed { clip_id: Id, speed: f64, duration: TimeUs },
     SetClipGroup { clip_id: Id, group: Option<Id> },
+    /// Human-friendly clip name (None clears it → derived label).
+    SetClipName { clip_id: Id, name: Option<String> },
     AddSequence { sequence: Sequence },
     SetSequenceProps { sequence_id: Id, resolution: (u32, u32), fps: (u32, u32) },
     /// Correct a transcribed word's display text (None = back to the original).
@@ -386,6 +388,16 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
             let clip = &mut project.sequences[si].tracks[ti].clips[ci];
             let old = std::mem::replace(&mut clip.group, group);
             Ok(Action::SetClipGroup { clip_id, group: old })
+        }
+
+        Action::SetClipName { clip_id, name } => {
+            let (si, ti, ci) = project
+                .locate_clip(clip_id)
+                .ok_or_else(|| UeError::NotFound(format!("clip {clip_id}")))?;
+            let clip = &mut project.sequences[si].tracks[ti].clips[ci];
+            let name = name.filter(|n| !n.trim().is_empty());
+            let old = std::mem::replace(&mut clip.name, name);
+            Ok(Action::SetClipName { clip_id, name: old })
         }
 
         Action::SetClipSpeed { clip_id, speed, duration } => {

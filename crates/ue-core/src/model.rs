@@ -384,10 +384,50 @@ pub struct Clip {
     pub transition_in: Option<TransitionRef>,
     #[serde(default)]
     pub label_color: Option<String>,
+    /// Optional human-friendly name (agents/users; the UI and MCP fall back to
+    /// a derived label when it's None). Not the id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// Linked clips (video+audio of the same media): they share a group and
     /// operations (move, split, trim, delete, speed) propagate across them.
     #[serde(default)]
     pub group: Option<Id>,
+}
+
+impl Clip {
+    /// Human-friendly label: the custom name, else something derived from the
+    /// payload (asset file, text content, generator…). Never the raw id.
+    pub fn display_label(&self, project: &Project) -> String {
+        if let Some(n) = &self.name {
+            if !n.trim().is_empty() {
+                return n.clone();
+            }
+        }
+        match &self.payload {
+            ClipPayload::Media { asset_id, .. } => project
+                .asset(*asset_id)
+                .map(|a| {
+                    std::path::Path::new(&a.path)
+                        .file_name()
+                        .map(|f| f.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| a.path.clone())
+                })
+                .unwrap_or_else(|| "media".into()),
+            ClipPayload::Text { content, .. } => {
+                let t = content.trim();
+                if t.is_empty() {
+                    "Text".into()
+                } else if t.chars().count() > 24 {
+                    format!("{}…", t.chars().take(24).collect::<String>())
+                } else {
+                    t.to_string()
+                }
+            }
+            ClipPayload::Subtitles { .. } => "Subtitles".into(),
+            ClipPayload::Generator { generator_id, .. } => generator_id.clone(),
+            ClipPayload::Avatar { .. } => "Avatar".into(),
+        }
+    }
 }
 
 fn default_speed() -> f64 {
@@ -407,6 +447,7 @@ impl Clip {
             audio: AudioProps::default(),
             transition_in: None,
             label_color: None,
+            name: None,
             group: None,
         }
     }
@@ -427,6 +468,7 @@ impl Clip {
             audio: AudioProps { muted: true, ..Default::default() },
             transition_in: None,
             label_color: None,
+            name: None,
             group: None,
         }
     }
@@ -443,6 +485,7 @@ impl Clip {
             audio: AudioProps::default(),
             transition_in: None,
             label_color: None,
+            name: None,
             group: None,
         }
     }

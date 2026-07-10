@@ -1572,6 +1572,7 @@ pub(crate) fn add_subtitles_clip_impl(state: &AppState, id: Id) -> Res<Id> {
         audio: Default::default(),
         transition_in: None,
         label_color: None,
+        name: None,
         group: None,
     };
     let clip_id = clip.id;
@@ -2025,6 +2026,7 @@ fn add_avatar_clip(state: State<AppState>, clip_id: String, config_path: String)
         audio: Default::default(),
         transition_in: None,
         label_color: None,
+        name: None,
         group: None,
     };
     store.insert_clip(track_id, clip, InsertMode::Strict).map_err(|e| e.to_string())?;
