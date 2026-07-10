@@ -1,12 +1,12 @@
-//! ue-export v0: exportación real del timeline a MP4 vía un único proceso
-//! ffmpeg con filter_complex.
+//! ue-export v0: real export of the timeline to MP4 via a single ffmpeg
+//! process with filter_complex.
 //!
-//! Alcance v0 (documentado en PLAN §5.6; el grafo wgpu lo sustituirá):
-//! - Video: EDL plana "gana el clip de la pista superior" por tramo; huecos → negro.
-//!   Texto/efectos/transform aún no se queman (Fase 2).
-//! - Audio: todos los clips con audio (pistas de audio y video) con ganancia,
-//!   fades y volumen de pista; mezcla con amix.
-//! - speed != 1.0 no soportado todavía (error explícito).
+//! v0 scope (documented in PLAN §5.6; the wgpu graph will replace it):
+//! - Video: flat EDL "the clip on the top track wins" per segment; gaps → black.
+//!   Text/effects/transform are not burned in yet (Phase 2).
+//! - Audio: all clips with audio (audio and video tracks) with gain,
+//!   fades and track volume; mixed with amix.
+//! - speed != 1.0 not supported yet (explicit error).
 
 pub mod edl;
 pub mod graph;
@@ -21,17 +21,17 @@ use ue_core::model::{Id, Project};
 
 #[derive(Debug, Error)]
 pub enum ExportError {
-    #[error("secuencia {0} no existe")]
+    #[error("sequence {0} does not exist")]
     NoSequence(Id),
-    #[error("no hay nada que exportar (timeline vacío)")]
+    #[error("nothing to export (empty timeline)")]
     EmptyTimeline,
-    #[error("asset {0} no existe en el pool")]
+    #[error("asset {0} does not exist in the pool")]
     MissingAsset(Id),
-    #[error("no se pudo ejecutar ffmpeg: {0}")]
+    #[error("could not run ffmpeg: {0}")]
     Spawn(String),
-    #[error("ffmpeg falló:\n{0}")]
+    #[error("ffmpeg failed:\n{0}")]
     Ffmpeg(String),
-    #[error("exportación cancelada")]
+    #[error("export cancelled")]
     Cancelled,
 }
 
@@ -41,25 +41,25 @@ pub type ExportResult<T> = Result<T, ExportError>;
 pub enum ExportFormat {
     #[default]
     Mp4,
-    /// Solo audio AAC en contenedor .m4a.
+    /// AAC audio only in an .m4a container.
     M4a,
-    /// GIF animado (paleta optimizada, sin audio).
+    /// Animated GIF (optimized palette, no audio).
     Gif,
 }
 
 #[derive(Debug, Clone)]
 pub struct ExportSettings {
     pub format: ExportFormat,
-    /// Altura máxima de salida (None = resolución de la secuencia).
+    /// Maximum output height (None = sequence resolution).
     pub max_height: Option<u32>,
     pub crf: u8,
     pub preset: String,
     pub audio_bitrate_k: u32,
-    /// Normalización de sonoridad R128 (loudnorm -14 LUFS) al final del máster.
+    /// R128 loudness normalization (loudnorm -14 LUFS) at the end of the master.
     pub loudnorm: bool,
-    /// Exportar solo [in, out) del timeline (µs). None = todo.
+    /// Export only [in, out) of the timeline (µs). None = everything.
     pub range: Option<(ue_core::TimeUs, ue_core::TimeUs)>,
-    /// Packs de efectos de usuario (se fusionan sobre los core).
+    /// User effect packs (merged on top of the core ones).
     pub extra_packs: Vec<ue_render::EffectDef>,
 }
 
@@ -78,7 +78,7 @@ impl Default for ExportSettings {
     }
 }
 
-/// Exporta la secuencia activa a `output` (mp4). Bloqueante.
+/// Exports the active sequence to `output` (mp4). Blocking.
 pub fn export_sequence(
     project: &Project,
     sequence_id: Id,
@@ -90,8 +90,8 @@ pub fn export_sequence(
     export_sequence_with_progress(project, sequence_id, base_dir, output, settings, |_| {}, &never)
 }
 
-/// Exportación con progreso (0..1) y cancelación cooperativa.
-/// Al cancelar se mata ffmpeg y se borra el archivo parcial.
+/// Export with progress (0..1) and cooperative cancellation.
+/// On cancel, ffmpeg is killed and the partial file is removed.
 pub fn export_sequence_with_progress(
     project: &Project,
     sequence_id: Id,
@@ -104,7 +104,7 @@ pub fn export_sequence_with_progress(
     let plan = graph::build_ffmpeg_args(project, sequence_id, base_dir, output, settings)?;
     let total_us = plan.duration_us.max(1);
 
-    // -progress pipe:1 emite líneas clave=valor por stdout
+    // -progress pipe:1 emits key=value lines on stdout
     let mut args: Vec<String> =
         vec!["-progress".into(), "pipe:1".into(), "-nostats".into()];
     args.extend(plan.args.iter().cloned());
@@ -117,7 +117,7 @@ pub fn export_sequence_with_progress(
         .spawn()
         .map_err(|e| ExportError::Spawn(e.to_string()))?;
 
-    // drenar stderr en paralelo (evita bloqueo del pipe y conserva el error)
+    // drain stderr in parallel (avoids pipe deadlock and keeps the error)
     let mut stderr = child.stderr.take().expect("stderr piped");
     let stderr_thread = std::thread::spawn(move || {
         let mut s = String::new();

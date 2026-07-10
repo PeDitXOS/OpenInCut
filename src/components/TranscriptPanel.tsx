@@ -5,9 +5,9 @@ import { assetName, wordTimelineRange, wordsToCutRanges } from "../engine/types"
 import { useStore } from "../state/store";
 
 /**
- * Edición basada en texto (PLAN §7.B): click marca/desmarca palabras,
- * doble click hace seek. "Cortar seleccionadas" corta esos rangos del
- * timeline (con padding y fusión) en una sola acción de deshacer.
+ * Text-based editing (PLAN §7.B): click marks/unmarks words,
+ * double-click seeks. "Cut selected" cuts those ranges from the
+ * timeline (with padding and merging) in a single undo action.
  */
 export function TranscriptPanel() {
   const project = useStore((s) => s.project);
@@ -22,13 +22,13 @@ export function TranscriptPanel() {
   if (!transcripts.length) {
     return (
       <div className="px-3 py-4 text-[11px] leading-relaxed text-ink-faint">
-        <p className="mb-2 font-medium text-ink-dim">Sin transcripciones todavía.</p>
+        <p className="mb-2 font-medium text-ink-dim">No transcripts yet.</p>
         <p>
-          Pulsa el botón <span className="rounded border border-line px-1">T</span> de un medio
-          con audio en la pestaña Medios para transcribirlo con Whisper (palabra por palabra).
+          Press the <span className="rounded border border-line px-1">T</span> button on a media
+          item with audio in the Media tab to transcribe it with Whisper (word by word).
         </p>
         <p className="mt-2">
-          Después podrás editar el video borrando texto: marca palabras y córtalas.
+          Then you can edit the video by deleting text: mark words and cut them.
         </p>
       </div>
     );
@@ -56,11 +56,11 @@ export function TranscriptPanel() {
 
   const moveSelectedToPlayhead = async () => {
     const words = [...selected].sort((a, b) => a - b).map((i) => doc.words[i]);
-    // sin padding: mover exactamente el material de las palabras
+    // no padding: move exactly the material of the words
     const ranges = wordsToCutRanges(project, doc.asset_id, words, 0, 150_000);
     if (ranges.length !== 1) {
       useStore.setState({
-        lastActionLabel: "⚠ para mover, selecciona palabras contiguas (un solo bloque)",
+        lastActionLabel: "⚠ to move, select contiguous words (a single block)",
       });
       return;
     }
@@ -78,7 +78,7 @@ export function TranscriptPanel() {
             setAssetSel(e.target.value);
             setSelected(new Set());
           }}
-          title="Transcripción a mostrar"
+          title="Transcript to show"
         >
           {transcripts.map((t) => (
             <option key={t.id} value={t.asset_id}>
@@ -110,7 +110,7 @@ export function TranscriptPanel() {
           </p>
         ))}
         <div className="mt-2 font-[var(--font-mono)] text-[10px] text-ink-faint">
-          {doc.words.length} palabras · modelo {doc.model}
+          {doc.words.length} words · model {doc.model}
           {asset && ` · ${assetName(asset)}`}
         </div>
       </div>
@@ -121,28 +121,28 @@ export function TranscriptPanel() {
             className="focus-ring flex-1 rounded-md bg-danger/80 px-2 py-1.5 text-[12px] font-medium text-white enabled:hover:bg-danger disabled:opacity-40"
             disabled={selected.size === 0}
             onClick={() => void cutSelected()}
-            title="Corta las palabras marcadas del video (cierra huecos; 1 deshacer)"
+            title="Cut the marked words from the video (closes gaps; 1 undo)"
           >
-            ✂ Cortar {selected.size > 0 ? `${selected.size} palabra(s)` : "selección"}
+            ✂ Cut {selected.size > 0 ? `${selected.size} word(s)` : "selection"}
           </button>
           <button
             className="focus-ring rounded-md border border-line px-2 py-1.5 text-[12px] text-ink-dim enabled:hover:text-ink disabled:opacity-40"
             disabled={selected.size === 0}
             onClick={() => void moveSelectedToPlayhead()}
-            title="Mueve las palabras marcadas (contiguas) al playhead"
+            title="Move the marked (contiguous) words to the playhead"
           >
-            ⇢ Mover
+            ⇢ Move
           </button>
           <button
             className="focus-ring rounded-md border border-line px-2 py-1.5 text-[12px] text-ink-dim enabled:hover:text-ink disabled:opacity-40"
             disabled={selected.size === 0}
             onClick={() => setSelected(new Set())}
           >
-            Limpiar
+            Clear
           </button>
         </div>
         <p className="mt-1.5 text-[10px] leading-snug text-ink-faint">
-          Click marca una palabra · doble click salta a ella en el timeline
+          Click marks a word · double-click jumps to it in the timeline
         </p>
       </div>
     </div>

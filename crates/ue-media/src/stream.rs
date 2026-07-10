@@ -1,7 +1,7 @@
-//! Sesión de decode continuo: un proceso ffmpeg persistente que emite MJPEG
-//! por stdout. Leer el siguiente frame es barato (decode secuencial), a
-//! diferencia de `frame::render_frame` que arranca un proceso por frame.
-//! Es el "DecodePool v0" del PLAN §5.2; el upgrade a libav mantiene esta API.
+//! Continuous decode session: a persistent ffmpeg process that emits MJPEG
+//! over stdout. Reading the next frame is cheap (sequential decode), unlike
+//! `frame::render_frame` which starts a process per frame.
+//! It's the "DecodePool v0" from PLAN §5.2; the libav upgrade keeps this API.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -20,9 +20,9 @@ pub struct MjpegSession {
 }
 
 impl MjpegSession {
-    /// Abre una sesión que decodifica `path` desde `start_src_us`, reescalada
-    /// a `max_width` y re-muestreada a `fps` constantes. `extra_vf` = cadena
-    /// de efectos del clip.
+    /// Opens a session that decodes `path` from `start_src_us`, rescaled to
+    /// `max_width` and resampled to a constant `fps`. `extra_vf` = the clip's
+    /// effects chain.
     pub fn open(
         path: &Path,
         start_src_us: i64,
@@ -57,12 +57,12 @@ impl MjpegSession {
         })
     }
 
-    /// Tiempo fuente del PRÓXIMO frame que devolvería `next_frame`.
+    /// Source time of the NEXT frame that `next_frame` would return.
     pub fn next_src_us(&self) -> i64 {
         self.start_src_us + self.frames_read * 1_000_000 / self.fps as i64
     }
 
-    /// Lee el siguiente JPEG del stream. `None` = fin del archivo.
+    /// Reads the next JPEG from the stream. `None` = end of file.
     pub fn next_frame(&mut self) -> MediaResult<Option<Vec<u8>>> {
         let mut chunk = [0u8; 64 * 1024];
         loop {
@@ -86,10 +86,10 @@ impl Drop for MjpegSession {
     }
 }
 
-/// Extrae el primer JPEG completo (FFD8 … FFD9) del acumulador, si lo hay.
-/// El escaneo de FFD9 es seguro en MJPEG de ffmpeg: dentro de los datos
-/// entrópicos los 0xFF van escapados (FF00) y los únicos marcadores sueltos
-/// son los de restart (FFD0–FFD7).
+/// Extracts the first complete JPEG (FFD8 … FFD9) from the accumulator, if any.
+/// Scanning for FFD9 is safe in ffmpeg's MJPEG: inside the entropy-coded data
+/// the 0xFF bytes are escaped (FF00) and the only loose markers are the
+/// restart ones (FFD0–FFD7).
 pub fn extract_jpeg(buf: &mut Vec<u8>) -> Option<Vec<u8>> {
     let start = buf.windows(2).position(|w| w == [0xFF, 0xD8])?;
     let end_rel = buf[start..].windows(2).position(|w| w == [0xFF, 0xD9])?;
@@ -108,22 +108,22 @@ mod tests {
         let jpeg_a: Vec<u8> = [0xFF, 0xD8, 1, 2, 3, 0xFF, 0xD9].to_vec();
         let jpeg_b: Vec<u8> = [0xFF, 0xD8, 9, 8, 0xFF, 0x00, 0xD9, 7, 0xFF, 0xD9].to_vec();
 
-        // parcial: sin FFD9 todavía → None y el buffer queda intacto
+        // partial: no FFD9 yet → None and the buffer stays intact
         let mut buf = jpeg_a[..4].to_vec();
         assert!(extract_jpeg(&mut buf).is_none());
         assert_eq!(buf.len(), 4);
 
-        // completo + siguiente parcial
+        // complete + next partial
         let mut buf = [jpeg_a.clone(), jpeg_b[..3].to_vec()].concat();
         assert_eq!(extract_jpeg(&mut buf).unwrap(), jpeg_a);
         assert!(extract_jpeg(&mut buf).is_none());
 
-        // el resto de b llega → se extrae b entero (con FF00 escapado dentro)
+        // the rest of b arrives → the whole b is extracted (with FF00 escaped inside)
         buf.extend_from_slice(&jpeg_b[3..]);
         assert_eq!(extract_jpeg(&mut buf).unwrap(), jpeg_b);
         assert!(buf.is_empty());
 
-        // basura antes del SOI se descarta
+        // garbage before the SOI is discarded
         let mut buf = [vec![0u8, 1, 2], jpeg_a.clone()].concat();
         assert_eq!(extract_jpeg(&mut buf).unwrap(), jpeg_a);
     }

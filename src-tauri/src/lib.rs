@@ -1,6 +1,6 @@
-//! Backend Tauri: expone el ProjectStore de ue-core como comandos IPC.
-//! El frontend consulta el estado tras cada mutación (v0); los eventos
-//! `state.patch` llegarán cuando el volumen de datos lo justifique.
+//! Tauri backend: exposes ue-core's ProjectStore as IPC commands.
+//! The frontend queries the state after each mutation (v0); `state.patch`
+//! events will arrive when the data volume justifies it.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,7 +25,7 @@ pub struct AppState {
     pub player: Mutex<Option<Player>>,
     pub frames: Mutex<Option<FrameService>>,
     pub export_cancel: Arc<AtomicBool>,
-    /// Registro efectivo (core + packs de usuario) y packs de usuario crudos.
+    /// Effective registry (core + user packs) and raw user packs.
     pub registry: Mutex<Arc<Vec<ue_render::EffectDef>>>,
     pub user_packs: Mutex<Vec<ue_render::EffectDef>>,
     pub effects_dir: Mutex<Option<PathBuf>>,
@@ -33,16 +33,16 @@ pub struct AppState {
     pub mcp_shutdown: AtomicBool,
     pub mcp_token: Mutex<String>,
     pub models_dir: Mutex<Option<PathBuf>>,
-    /// Cachés de visuales del timeline (por asset).
+    /// Timeline visual caches (per asset).
     pub peaks_cache: Mutex<std::collections::HashMap<Id, Arc<Vec<f32>>>>,
     pub thumbs_cache: Mutex<std::collections::HashMap<Id, ue_media::thumbs::ThumbStrip>>,
 }
 
 impl AppState {
-    /// Estado inicial (también usado por los tests del servidor MCP).
+    /// Initial state (also used by the MCP server tests).
     pub fn new_default() -> Self {
         AppState {
-            store: Mutex::new(ProjectStore::new(Project::new("Proyecto sin título"))),
+            store: Mutex::new(ProjectStore::new(Project::new("Untitled project"))),
             path: Mutex::new(None),
             cache_dir: Mutex::new(None),
             player: Mutex::new(None),
@@ -61,8 +61,8 @@ impl AppState {
     }
 }
 
-/// Recarga los packs de usuario desde disco y reconstruye el registro.
-/// Devuelve los errores de manifests inválidos (no rompen nada).
+/// Reloads the user packs from disk and rebuilds the registry.
+/// Returns errors from invalid manifests (they break nothing).
 fn reload_packs(state: &AppState) -> Vec<String> {
     let dir = state.effects_dir.lock().unwrap().clone();
     let (user, errors) = match dir {
@@ -75,8 +75,8 @@ fn reload_packs(state: &AppState) -> Vec<String> {
     errors
 }
 
-/// Servicio de frames de reproducción: un hilo sigue al reloj de audio con una
-/// sesión MJPEG persistente y publica el último frame decodificado.
+/// Playback frame service: a thread follows the audio clock with a persistent
+/// MJPEG session and publishes the latest decoded frame.
 pub struct FrameService {
     pub latest: Arc<Mutex<Vec<u8>>>,
     pub running: Arc<AtomicBool>,
@@ -124,13 +124,13 @@ fn frame_service_loop(app: tauri::AppHandle, latest: Arc<Mutex<Vec<u8>>>, runnin
                 .sequence(store.project.active_sequence)
                 .map(|s| s.resolution)
         };
-        // vf canónico (tvar="t") solo para COMPARAR: no cambia con el playhead
+        // canonical vf (tvar="t") only to COMPARE: it does not change with the playhead
         let (av_canonical, av_open) = {
             let store = state.store.lock().unwrap();
             let seq_id = store.project.active_sequence;
             (
                 avatar_vf_stream_suffix(&store.project, seq_id, 0, 1.0, PLAYBACK_MAX_W),
-                // tl0 = posición de timeline en este tick (t=0 de la sesión nueva)
+                // tl0 = timeline position at this tick (t=0 of the new session)
                 avatar_vf_stream_suffix(&store.project, seq_id, t, r.speed, PLAYBACK_MAX_W),
             )
         };
@@ -139,20 +139,20 @@ fn frame_service_loop(app: tauri::AppHandle, latest: Arc<Mutex<Vec<u8>>>, runnin
             vf = Some(format!("{}{}", vf.as_deref().unwrap_or("null"), av));
         }
 
-        // ¿sirve la sesión actual? (mismo archivo, misma cadena de efectos,
-        // posición alcanzable hacia delante)
+        // is the current session usable? (same file, same effect chain,
+        // position reachable going forward)
         let reusable = session.as_ref().is_some_and(|s| {
             s.asset_path == path
                 && session_vf == vf
-                // hacia atrás (shuttle J): tolerar hasta 400 ms sin reabrir para
-                // no lanzar un ffmpeg por tick; el frame se congela ese margen
+                // going backward (shuttle J): tolerate up to 400 ms without reopening
+                // so we don't spawn one ffmpeg per tick; the frame freezes that margin
                 && src_t >= s.next_src_us() - 400_000
                 && src_t <= s.next_src_us() + 1_500_000
         });
         if !reusable {
-            // el stream corre con -ss: t=0 en el punto de apertura, a ritmo de
-            // FUENTE → tiempo de clip = t/speed + offset_al_abrir. Así las
-            // curvas de transform ANIMAN también durante la reproducción.
+            // the stream runs with -ss: t=0 at the open point, at SOURCE
+            // rate → clip time = t/speed + offset_at_open. This way the
+            // transform curves ANIMATE during playback too.
             let rel0 = r.clip_rel_us as f64 / 1_000_000.0;
             let tvar = if (r.speed - 1.0).abs() > 1e-9 {
                 format!("(t/{}+{rel0:.6})", r.speed)
@@ -197,7 +197,7 @@ fn start_frame_service(app: &tauri::AppHandle) {
     let mut guard = state.frames.lock().unwrap();
     if let Some(fs) = guard.as_ref() {
         if fs.running.load(Ordering::SeqCst) {
-            return; // ya corre
+            return; // already running
         }
     }
     let latest = Arc::new(Mutex::new(Vec::new()));
@@ -213,16 +213,16 @@ fn stop_frame_service(state: &AppState) {
     }
 }
 
-/// Ruta del autosave: junto al .uep si existe, si no en app_data.
+/// Autosave path: next to the .uep if it exists, otherwise in app_data.
 fn autosave_path(project_path: Option<&Path>, data_dir: Option<&Path>) -> Option<PathBuf> {
     match project_path {
         Some(p) => Some(p.with_extension("uep.autosave")),
-        None => data_dir.map(|d| d.join("recuperacion.uep.autosave")),
+        None => data_dir.map(|d| d.join("recovery.uep.autosave")),
     }
 }
 
-/// Hilo de autoguardado: cada `settings.autosave_secs`, si hay cambios sin
-/// guardar escribe una copia de recuperación (atómica, portable).
+/// Autosave thread: every `settings.autosave_secs`, if there are unsaved
+/// changes it writes a recovery copy (atomic, portable).
 fn autosave_loop(app: tauri::AppHandle, data_dir: Option<PathBuf>) {
     let mut last_version: u64 = 0;
     loop {
@@ -237,7 +237,7 @@ fn autosave_loop(app: tauri::AppHandle, data_dir: Option<PathBuf>) {
                 state.path.lock().unwrap().clone(),
             )
         };
-        // respetar la cadencia configurada muestreando cada 5 s
+        // respect the configured cadence by sampling every 5 s
         static TICKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let t = TICKS.fetch_add(5, Ordering::Relaxed) + 5;
         if t % secs.max(5) >= 5 || !dirty || version == last_version {
@@ -260,8 +260,8 @@ fn autosave_loop(app: tauri::AppHandle, data_dir: Option<PathBuf>) {
     }
 }
 
-/// Copia del proyecto lista para disco: rutas de media relativas al .uep
-/// cuando sea posible y SIN cachés locales (son de esta máquina).
+/// Project copy ready for disk: media paths relative to the .uep when
+/// possible and WITHOUT local caches (they belong to this machine).
 pub fn make_portable(project: &Project, dir: Option<&Path>) -> Project {
     let mut portable = project.clone();
     for asset in &mut portable.assets {
@@ -281,7 +281,7 @@ pub fn make_portable(project: &Project, dir: Option<&Path>) -> Project {
     portable
 }
 
-/// Resuelve rutas relativas contra la carpeta del proyecto y marca offline.
+/// Resolves relative paths against the project folder and marks offline.
 pub fn resolve_project_paths(project: &mut Project, dir: Option<&Path>) {
     for asset in &mut project.assets {
         let p = Path::new(&asset.path);
@@ -294,13 +294,13 @@ pub fn resolve_project_paths(project: &mut Project, dir: Option<&Path>) {
     }
 }
 
-/// Ruta del WAV conformado de un asset en la caché de la app.
+/// Path of an asset's conformed WAV in the app cache.
 fn conform_target(cache_dir: &Path, content_hash: &str) -> PathBuf {
     cache_dir.join(content_hash.replace(':', "-")).join("audio.wav")
 }
 
-/// Sincroniza los items del mezclador con el estado actual (si cambió).
-/// Orden de locks SIEMPRE: store → player.
+/// Syncs the mixer items with the current state (if it changed).
+/// Lock order ALWAYS: store → player.
 fn sync_player(state: &AppState) -> Result<(), String> {
     let store = state.store.lock().unwrap();
     let mut player_guard = state.player.lock().unwrap();
@@ -308,7 +308,7 @@ fn sync_player(state: &AppState) -> Result<(), String> {
         *player_guard = Some(Player::new().map_err(|e| e.to_string())?);
     }
     let player = player_guard.as_ref().unwrap();
-    // versión+1 para distinguir del 0 inicial del player
+    // version+1 to distinguish from the player's initial 0
     if player.items_version() != store.version + 1 {
         let specs = collect_specs(&store.project, store.project.active_sequence);
         let (items, _skipped) =
@@ -340,7 +340,7 @@ fn snapshot(store: &ProjectStore) -> StateSnapshot {
 }
 
 fn parse_id(s: &str) -> Result<Id, String> {
-    s.parse::<Id>().map_err(|e| format!("id inválido '{s}': {e}"))
+    s.parse::<Id>().map_err(|e| format!("invalid id '{s}': {e}"))
 }
 
 type Res<T> = Result<T, String>;
@@ -421,7 +421,7 @@ fn cut_ranges(
     Ok(snapshot(&store))
 }
 
-/// Fuentes del sistema (familia, ruta) para el selector de texto.
+/// System fonts (family, path) for the text picker.
 #[tauri::command]
 fn list_fonts() -> Vec<(String, String)> {
     ue_export::graph::list_system_fonts()
@@ -433,7 +433,7 @@ fn templates_path(state: &AppState) -> Option<PathBuf> {
     })
 }
 
-/// Plantillas de título guardadas (nombre → estilo).
+/// Saved title templates (name → style).
 #[tauri::command]
 fn list_text_templates(state: State<AppState>) -> Res<serde_json::Value> {
     let Some(path) = templates_path(&state) else { return Ok(serde_json::json!({})) };
@@ -449,7 +449,7 @@ fn save_text_template(
     name: String,
     style: ue_core::model::TextStyle,
 ) -> Res<serde_json::Value> {
-    let Some(path) = templates_path(&state) else { return Err("sin carpeta de config".into()) };
+    let Some(path) = templates_path(&state) else { return Err("no config folder".into()) };
     let mut all: serde_json::Map<String, serde_json::Value> = std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -460,20 +460,20 @@ fn save_text_template(
     Ok(serde_json::Value::Object(all))
 }
 
-/// Rompe el enlace video↔audio de un clip (todo su grupo, 1 undo).
+/// Breaks a clip's video↔audio link (its whole group, 1 undo).
 #[tauri::command]
 fn unlink_clip(state: State<AppState>, clip_id: String) -> Res<StateSnapshot> {
     let mut store = state.store.lock().unwrap();
     let id = parse_id(&clip_id)?;
     let members = ue_core::ops::linked_ids(&store.project, id);
     if members.len() < 2 {
-        return Err("el clip no está enlazado".into());
+        return Err("the clip is not linked".into());
     }
     let actions = members
         .into_iter()
         .map(|clip_id| ue_core::Action::SetClipGroup { clip_id, group: None })
         .collect();
-    store.dispatch("Desenlazar clips", actions).map_err(|e| e.to_string())?;
+    store.dispatch("Unlink clips", actions).map_err(|e| e.to_string())?;
     Ok(snapshot(&store))
 }
 
@@ -488,14 +488,14 @@ fn set_subtitles_props(
     let id = parse_id(&clip_id)?;
     store
         .dispatch(
-            "Editar subtítulos",
+            "Edit subtitles",
             vec![ue_core::Action::SetClipSubtitles { clip_id: id, style, mode }],
         )
         .map_err(|e| e.to_string())?;
     Ok(snapshot(&store))
 }
 
-/// Cambia la velocidad de un clip (rate stretch, pitch preservado en export).
+/// Changes a clip's speed (rate stretch, pitch preserved on export).
 #[tauri::command]
 fn set_clip_speed(state: State<AppState>, clip_id: String, speed: f64) -> Res<StateSnapshot> {
     let mut store = state.store.lock().unwrap();
@@ -503,7 +503,7 @@ fn set_clip_speed(state: State<AppState>, clip_id: String, speed: f64) -> Res<St
     Ok(snapshot(&store))
 }
 
-/// Mueve un rango del timeline a otro punto (todas las pistas, 1 undo).
+/// Moves a timeline range to another point (all tracks, 1 undo).
 #[tauri::command]
 fn move_range(
     state: State<AppState>,
@@ -539,7 +539,7 @@ fn set_clip_audio(state: State<AppState>, clip_id: String, audio: AudioProps) ->
     let id = parse_id(&clip_id)?;
     store
         .dispatch(
-            "Editar audio",
+            "Edit audio",
             vec![ue_core::Action::SetClipAudio { clip_id: id, audio }],
         )
         .map_err(|e| e.to_string())?;
@@ -556,16 +556,16 @@ fn set_clip_transform(
     let id = parse_id(&clip_id)?;
     store
         .dispatch(
-            "Editar transformación",
+            "Edit transform",
             vec![ue_core::Action::SetClipTransform { clip_id: id, transform }],
         )
         .map_err(|e| e.to_string())?;
     Ok(snapshot(&store))
 }
 
-/// Importa archivos al pool (probe + hash). No entra al historial (PLAN §6.10).
-/// El conformado de audio se lanza en segundo plano; al terminar se emite
-/// `state-changed` para que la UI refresque.
+/// Imports files into the pool (probe + hash). Does not enter the history (PLAN §6.10).
+/// The audio conform runs in the background; when done it emits
+/// `state-changed` so the UI refreshes.
 #[tauri::command]
 fn import_media(
     app: tauri::AppHandle,
@@ -579,7 +579,7 @@ fn import_media(
     for p in &paths {
         match ue_media::import_file(Path::new(p)) {
             Ok(asset) => {
-                // re-import del mismo contenido → no duplicar
+                // re-import of the same content → don't duplicate
                 if !store.project.assets.iter().any(|a| a.content_hash == asset.content_hash) {
                     if let Some(cache) = &cache_dir {
                         if asset.probe.audio_channels > 0 {
@@ -627,9 +627,9 @@ fn spawn_conform_job(app: &tauri::AppHandle, asset: &ue_core::model::MediaAsset,
     });
 }
 
-/// Genera el proxy de preview en segundo plano para videos grandes.
+/// Generates the preview proxy in the background for large videos.
 fn spawn_proxy_job(app: &tauri::AppHandle, asset: &ue_core::model::MediaAsset, cache: &Path) {
-    // solo vale la pena si el original es más ancho que el proxy
+    // only worth it if the original is wider than the proxy
     if asset.kind != ue_core::model::MediaKind::Video
         || asset.probe.width <= ue_media::proxy::PROXY_MAX_W
     {
@@ -651,7 +651,7 @@ fn spawn_proxy_job(app: &tauri::AppHandle, asset: &ue_core::model::MediaAsset, c
                     }
                     store.version += 1;
                 }
-                // el FrameService detecta el cambio de ruta y reabre la sesión
+                // the FrameService detects the path change and reopens the session
                 let _ = app.emit("state-changed", ());
             }
             Err(e) => eprintln!("[proxy] {src:?}: {e}"),
@@ -659,7 +659,7 @@ fn spawn_proxy_job(app: &tauri::AppHandle, asset: &ue_core::model::MediaAsset, c
     });
 }
 
-// ---- transporte (el audio es el reloj maestro) ----
+// ---- transport (audio is the master clock) ----
 
 #[tauri::command]
 fn playback_play(app: tauri::AppHandle, state: State<AppState>, from_us: TimeUs) -> Res<()> {
@@ -678,11 +678,11 @@ fn playback_pause(state: State<AppState>) -> Res<TimeUs> {
     let guard = state.player.lock().unwrap();
     match guard.as_ref() {
         Some(p) => Ok(p.pause()),
-        None => Err("sin reproductor".into()),
+        None => Err("no player".into()),
     }
 }
 
-/// Último frame del stream de reproducción (vacío = sin señal todavía).
+/// Latest frame of the playback stream (empty = no signal yet).
 #[tauri::command]
 fn playback_frame(state: State<AppState>) -> Res<tauri::ipc::Response> {
     let bytes = match state.frames.lock().unwrap().as_ref() {
@@ -692,11 +692,11 @@ fn playback_frame(state: State<AppState>) -> Res<tauri::ipc::Response> {
     Ok(tauri::ipc::Response::new(bytes))
 }
 
-/// Picos de audio reales del asset (25 bins/s, mezcla mono), para la waveform
-/// del timeline. Cachea en memoria y en disco junto al conformado.
+/// Real audio peaks of the asset (25 bins/s, mono mix), for the timeline
+/// waveform. Caches in memory and on disk next to the conform.
 #[tauri::command]
 async fn get_audio_peaks(state: State<'_, AppState>, asset_id: String) -> Res<Vec<f32>> {
-    let id: Id = asset_id.parse().map_err(|_| "id inválido")?;
+    let id: Id = asset_id.parse().map_err(|_| "invalid id")?;
     if let Some(p) = state.peaks_cache.lock().unwrap().get(&id) {
         return Ok(p.as_ref().clone());
     }
@@ -705,10 +705,10 @@ async fn get_audio_peaks(state: State<'_, AppState>, asset_id: String) -> Res<Ve
         store
             .project
             .asset(id)
-            .ok_or("asset no encontrado")?
+            .ok_or("asset not found")?
             .audio_conform
             .clone()
-            .ok_or("audio sin conformar todavía")?
+            .ok_or("audio not conformed yet")?
     };
     let peaks = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<f32>, String> {
         let disk = PathBuf::from(format!("{conform}.peaks"));
@@ -722,7 +722,7 @@ async fn get_audio_peaks(state: State<'_, AppState>, asset_id: String) -> Res<Ve
             ue_audio::wav::WavMap::open(Path::new(&conform)).map_err(|e| e.to_string())?;
         let peaks = ue_audio::wav::compute_peaks(&wav, 25);
         let bytes: Vec<u8> = peaks.iter().flat_map(|f| f.to_le_bytes()).collect();
-        let _ = std::fs::write(&disk, bytes); // caché best-effort
+        let _ = std::fs::write(&disk, bytes); // best-effort cache
         Ok(peaks)
     })
     .await
@@ -731,23 +731,23 @@ async fn get_audio_peaks(state: State<'_, AppState>, asset_id: String) -> Res<Ve
     Ok(peaks)
 }
 
-/// Genera (o devuelve del caché) la tira de miniaturas del asset.
+/// Generates (or returns from cache) the asset's thumbnail strip.
 #[tauri::command]
 async fn ensure_thumbs(
     state: State<'_, AppState>,
     asset_id: String,
 ) -> Res<ue_media::thumbs::ThumbStrip> {
-    let id: Id = asset_id.parse().map_err(|_| "id inválido")?;
+    let id: Id = asset_id.parse().map_err(|_| "invalid id")?;
     if let Some(t) = state.thumbs_cache.lock().unwrap().get(&id) {
         return Ok(t.clone());
     }
     let (src, dur, hash, cache_dir) = {
         let store = state.store.lock().unwrap();
-        let asset = store.project.asset(id).ok_or("asset no encontrado")?;
+        let asset = store.project.asset(id).ok_or("asset not found")?;
         if asset.kind == ue_core::model::MediaKind::Audio {
-            return Err("los assets de audio no llevan miniaturas".into());
+            return Err("audio assets have no thumbnails".into());
         }
-        let cache = state.cache_dir.lock().unwrap().clone().ok_or("sin caché")?;
+        let cache = state.cache_dir.lock().unwrap().clone().ok_or("no cache")?;
         (
             PathBuf::from(&asset.path),
             asset.probe.duration_us.max(1_000_000),
@@ -765,23 +765,23 @@ async fn ensure_thumbs(
     Ok(strip)
 }
 
-/// Bytes JPEG de la tira de miniaturas ya generada.
+/// JPEG bytes of the already-generated thumbnail strip.
 #[tauri::command]
 fn get_thumb_strip(state: State<AppState>, asset_id: String) -> Res<tauri::ipc::Response> {
-    let id: Id = asset_id.parse().map_err(|_| "id inválido")?;
+    let id: Id = asset_id.parse().map_err(|_| "invalid id")?;
     let path = state
         .thumbs_cache
         .lock()
         .unwrap()
         .get(&id)
         .map(|t| t.path.clone())
-        .ok_or("miniaturas no generadas (llama ensure_thumbs)")?;
+        .ok_or("thumbnails not generated (call ensure_thumbs)")?;
     let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
-/// Shuttle JKL: fija la velocidad de reproducción (negativa = reversa).
-/// Si no estaba sonando, arranca desde el playhead dado.
+/// Shuttle JKL: sets the playback rate (negative = reverse).
+/// If it wasn't playing, starts from the given playhead.
 #[tauri::command]
 fn playback_set_rate(
     app: tauri::AppHandle,
@@ -792,7 +792,7 @@ fn playback_set_rate(
     sync_player(&state)?;
     {
         let guard = state.player.lock().unwrap();
-        let p = guard.as_ref().ok_or("sin reproductor")?;
+        let p = guard.as_ref().ok_or("no player")?;
         if !p.is_playing() {
             p.play(from_us);
         }
@@ -810,23 +810,23 @@ fn playback_seek(state: State<AppState>, t_us: TimeUs) -> Res<()> {
     Ok(())
 }
 
-/// (posición µs, reproduciendo). También re-sincroniza los items si el
-/// proyecto cambió durante la reproducción (editar mientras suena).
+/// (position µs, playing). Also re-syncs the items if the project changed
+/// during playback (editing while it plays).
 #[tauri::command]
 fn playback_position(state: State<AppState>) -> Res<(TimeUs, bool, f32, f32)> {
-    let _ = sync_player(&state); // barato si no cambió la versión
+    let _ = sync_player(&state); // cheap if the version didn't change
     let guard = state.player.lock().unwrap();
     match guard.as_ref() {
         Some(p) => {
             let (ml, mr) = p.meters();
             Ok((p.position_us(), p.is_playing(), ml, mr))
         }
-        None => Err("sin reproductor".into()),
+        None => Err("no player".into()),
     }
 }
 
-/// Añade un clip del asset a la primera pista compatible: en `at_us` si cabe,
-/// si no al final de la pista.
+/// Adds a clip of the asset to the first compatible track: at `at_us` if it
+/// fits, otherwise at the end of the track.
 #[tauri::command]
 fn add_clip(state: State<AppState>, asset_id: String, at_us: TimeUs) -> Res<StateSnapshot> {
     let mut store = state.store.lock().unwrap();
@@ -834,37 +834,54 @@ fn add_clip(state: State<AppState>, asset_id: String, at_us: TimeUs) -> Res<Stat
     let asset = store
         .project
         .asset(asset_id)
-        .ok_or_else(|| format!("asset {asset_id} no existe"))?
+        .ok_or_else(|| format!("asset {asset_id} does not exist"))?
         .clone();
     let duration = ue_media::default_clip_duration(&asset);
     if duration <= 0 {
-        return Err("el archivo no tiene duración utilizable".into());
+        return Err("the file has no usable duration".into());
     }
-    let want_kind = if asset.kind == MediaKind::Audio { TrackKind::Audio } else { TrackKind::Video };
-    let seq_id = store.project.active_sequence;
-    let seq = store.project.sequence(seq_id).ok_or("secuencia activa no existe")?;
-    let track = seq
-        .tracks
-        .iter()
-        .find(|t| t.kind == want_kind && !t.locked)
-        .ok_or("no hay pista compatible desbloqueada")?;
-    let track_id = track.id;
     let at = at_us.max(0);
-    let fits = !track.collides(at, duration, None);
-    let start = if fits {
-        at
+
+    // video WITH audio → linked pair: video clip (embedded audio muted) on a
+    // video track + a separate audio clip on an audio track, same group, so
+    // they behave as one (split/move/trim/speed/delete propagate).
+    if asset.kind == MediaKind::Video && asset.probe.audio_channels > 0 {
+        let vtrack = ensure_free_video_track(&mut store, at, duration)?;
+        let atrack = ensure_free_audio_track(&mut store, at, duration)?;
+        let group = Id::new();
+        let mut vclip = Clip::new_media(asset.id, 0, duration, at);
+        vclip.audio.muted = true;
+        vclip.group = Some(group);
+        let mut aclip = Clip::new_media(asset.id, 0, duration, at);
+        aclip.group = Some(group);
+        store
+            .dispatch(
+                "Add clip",
+                vec![
+                    ue_core::Action::InsertClip { track_id: vtrack, clip: vclip },
+                    ue_core::Action::InsertClip { track_id: atrack, clip: aclip },
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        return Ok(snapshot(&store));
+    }
+
+    // single clip (audio-only, image, or video without audio)
+    let want_kind = if asset.kind == MediaKind::Audio { TrackKind::Audio } else { TrackKind::Video };
+    let track_id = if want_kind == TrackKind::Audio {
+        ensure_free_audio_track(&mut store, at, duration)?
     } else {
-        track.clips.iter().map(|c| c.end()).max().unwrap_or(0)
+        ensure_free_video_track(&mut store, at, duration)?
     };
-    let clip = Clip::new_media(asset.id, 0, duration, start);
+    let clip = Clip::new_media(asset.id, 0, duration, at);
     store
         .insert_clip(track_id, clip, InsertMode::Strict)
         .map_err(|e| e.to_string())?;
     Ok(snapshot(&store))
 }
 
-/// Overlay del avatar activo en `t` para el frame pausado: sufijo -vf con
-/// movie+overlay (estático, sin shake: es un frame quieto).
+/// Overlay of the active avatar at `t` for the paused frame: -vf suffix with
+/// movie+overlay (static, no shake: it's a still frame).
 fn avatar_vf_suffix(
     project: &Project,
     seq_id: Id,
@@ -882,7 +899,7 @@ fn avatar_vf_suffix(
                 continue;
             }
             let default = avatars.keys().next()?.clone();
-            // emoción del segmento activo (o default)
+            // emotion of the active segment (or default)
             let emotion = project
                 .transcripts
                 .iter()
@@ -901,7 +918,7 @@ fn avatar_vf_suffix(
             }
             let aw = (((out_w as f64) * scale.clamp(0.05, 1.0)) as u32) & !1;
             let escaped = path.replace('\\', "/").replace(':', "\\\\:").replace('\'', "\\\\'");
-            // escalar el main ANTES del overlay para que aw sea proporcional
+            // scale the main BEFORE the overlay so aw is proportional
             return Some(format!(
                 ",scale='min({out_w},iw)':-2[main];movie=filename='{escaped}',\
                  scale={aw}:-2[av];[main][av]overlay=W-w-16:H-h-16"
@@ -911,14 +928,14 @@ fn avatar_vf_suffix(
     None
 }
 
-/// Overlays de avatar para el STREAM de reproducción. A diferencia del export
-/// (un overlay por segmento), agrupa por EMOCIÓN — una sola instancia de
-/// `movie` por video de avatar — y enciende cada una con ventanas `enable`
-/// expresadas en el dominio t de la sesión: t corre en segundos de FUENTE
-/// desde el punto de -ss, así que timeline = tl0 + t/speed ⇒ una ventana
-/// [from,to] de timeline es [(from-tl0)·speed, (to-tl0)·speed] en t.
-/// Con `tl0_us=0, speed=1` produce la forma CANÓNICA (estable entre ticks)
-/// que el FrameService usa para decidir si reabre la sesión.
+/// Avatar overlays for the playback STREAM. Unlike the export (one overlay
+/// per segment), it groups by EMOTION — a single `movie` instance per avatar
+/// video — and turns each one on with `enable` windows expressed in the
+/// session's t domain: t runs in SOURCE seconds from the -ss point, so
+/// timeline = tl0 + t/speed ⇒ a timeline window [from,to] is
+/// [(from-tl0)·speed, (to-tl0)·speed] in t. With `tl0_us=0, speed=1` it
+/// produces the CANONICAL form (stable across ticks) that the FrameService
+/// uses to decide whether to reopen the session.
 pub fn avatar_vf_stream_suffix(
     project: &Project,
     seq_id: Id,
@@ -935,7 +952,7 @@ pub fn avatar_vf_stream_suffix(
                 continue;
             };
             let default = avatars.keys().next()?.clone();
-            // tramos (emoción, from_tl, to_tl) rellenando huecos con la default
+            // spans (emotion, from_tl, to_tl) filling gaps with the default
             let ce = clip.end();
             let mut spans: Vec<(String, TimeUs, TimeUs)> = vec![];
             let mut cursor = clip.start;
@@ -960,7 +977,7 @@ pub fn avatar_vf_stream_suffix(
             if cursor < ce {
                 spans.push((default.clone(), cursor, ce));
             }
-            // agrupar ventanas por video de avatar (emociones sin video → default)
+            // group windows by avatar video (emotions with no video → default)
             let mut windows: BTreeMap<String, Vec<(TimeUs, TimeUs)>> = BTreeMap::new();
             for (emotion, from, to) in spans {
                 let key = if avatars.contains_key(&emotion) { emotion } else { default.clone() };
@@ -988,7 +1005,7 @@ pub fn avatar_vf_stream_suffix(
                     })
                     .collect::<Vec<_>>()
                     .join("+");
-                // loop=0 = infinito; setpts monótono para que overlay no se atasque
+                // loop=0 = infinite; monotonic setpts so overlay doesn't stall
                 out.push_str(&format!(
                     ";movie=filename='{escaped}':loop=0,setpts=N/(FRAME_RATE*TB),\
                      scale={aw}:-2[ave{stage}]"
@@ -1012,7 +1029,7 @@ pub fn avatar_vf_stream_suffix(
     None
 }
 
-/// Tiempo de asset → timeline (helper compartido con avatar_vf_suffix).
+/// Asset time → timeline (helper shared with avatar_vf_suffix).
 pub(crate) fn asset_tl(
     _project: &Project,
     seq: &ue_core::model::Sequence,
@@ -1032,7 +1049,7 @@ pub(crate) fn asset_tl(
     None
 }
 
-/// Frame real JPEG del tiempo dado (bytes crudos; vacío = sin señal).
+/// Real JPEG frame at the given time (raw bytes; empty = no signal).
 #[tauri::command]
 fn render_frame(
     state: State<AppState>,
@@ -1049,15 +1066,14 @@ fn render_frame(
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
         (store.project.clone(), store.project.active_sequence, base)
-    }; // soltar el lock antes de invocar ffmpeg
+    }; // release the lock before invoking ffmpeg
     let reg = state.registry.lock().unwrap().clone();
     let canvas = project.sequence(seq_id).map(|s| s.resolution);
-    // scrub animado: evaluar las curvas del transform en el tiempo del clip
-    let mut vf = ue_media::frame::resolve_top_video(&project, seq_id, t_us)
-        .and_then(|r| {
-            ue_render::clip_vf(&reg, &r.effects, &r.transform.sampled(r.clip_rel_us), canvas)
-        });
-    // avatar sobre el frame pausado (grafo movie+overlay en el mismo -vf)
+    // animated scrub: evaluate transform AND effect curves at the clip time
+    let mut vf = ue_media::frame::resolve_top_video(&project, seq_id, t_us).and_then(|r| {
+        ue_render::clip_vf_sampled(&reg, &r.effects, &r.transform, canvas, r.clip_rel_us)
+    });
+    // avatar over the paused frame (movie+overlay graph in the same -vf)
     if let Some(suffix) = avatar_vf_suffix(&project, seq_id, t_us, max_width) {
         vf = Some(format!("{}{}", vf.unwrap_or_else(|| "null".into()), suffix));
     }
@@ -1068,13 +1084,13 @@ fn render_frame(
     Ok(tauri::ipc::Response::new(bytes))
 }
 
-/// Catálogo de efectos disponibles (para la UI y MCP).
+/// Catalog of available effects (for the UI and MCP).
 #[tauri::command]
 fn get_effects_catalog(state: State<AppState>) -> serde_json::Value {
     ue_render::catalog_json(&state.registry.lock().unwrap())
 }
 
-/// Recarga los packs de usuario desde disco (carpeta effects/ de la config).
+/// Reloads the user packs from disk (effects/ folder in the config).
 #[tauri::command]
 fn reload_effect_packs(state: State<AppState>) -> Res<serde_json::Value> {
     let errors = reload_packs(&state);
@@ -1095,14 +1111,14 @@ fn set_clip_effects(
     let id = parse_id(&clip_id)?;
     store
         .dispatch(
-            "Editar efectos",
+            "Edit effects",
             vec![ue_core::Action::SetClipEffects { clip_id: id, effects }],
         )
         .map_err(|e| e.to_string())?;
     Ok(snapshot(&store))
 }
 
-/// Duplica una secuencia con IDs nuevos (los ids son únicos globalmente).
+/// Duplicates a sequence with new IDs (ids are globally unique).
 fn duplicate_sequence(seq: &ue_core::model::Sequence) -> ue_core::model::Sequence {
     let mut copy = seq.clone();
     copy.id = Id::new();
@@ -1118,18 +1134,34 @@ fn duplicate_sequence(seq: &ue_core::model::Sequence) -> ue_core::model::Sequenc
     copy
 }
 
-/// Genera la versión vertical (1080x1920) de la secuencia activa: nueva
-/// secuencia con el efecto core.vertical_fill en cada clip de video (el look
-/// fondo-desenfocado del toolkit). Una sola entrada de undo.
+/// Generates the vertical version (1080x1920) of the active sequence: a new
+/// sequence with the core.vertical_fill effect on each video clip (the
+/// blurred-background look from the toolkit). A single undo entry.
 pub(crate) fn generate_vertical_impl(state: &AppState) -> Result<String, String> {
     use ue_core::model::{ClipPayload, EffectInstance};
     let mut store = state.store.lock().unwrap();
     let seq = store
         .project
         .sequence(store.project.active_sequence)
-        .ok_or("sin secuencia activa")?;
+        .ok_or("no active sequence")?;
+    // already portrait? refuse instead of stacking "(Vertical) (Vertical)"
+    if seq.resolution.1 > seq.resolution.0 {
+        return Err("the active sequence is already vertical".into());
+    }
+    // a vertical twin already exists → just switch to it
+    let twin_name = format!("{} (Vertical)", seq.name);
+    if let Some(existing) = store.project.sequences.iter().find(|s| s.name == twin_name) {
+        let id = existing.id;
+        store
+            .dispatch(
+                "Switch to vertical",
+                vec![ue_core::Action::SetActiveSequence { sequence_id: id }],
+            )
+            .map_err(|e| e.to_string())?;
+        return Ok(id.to_string());
+    }
     let mut vertical = duplicate_sequence(seq);
-    vertical.name = format!("{} (Vertical)", seq.name);
+    vertical.name = twin_name;
     vertical.resolution = (1080, 1920);
     for track in vertical.tracks.iter_mut().filter(|t| t.kind == TrackKind::Video) {
         for clip in &mut track.clips {
@@ -1146,7 +1178,7 @@ pub(crate) fn generate_vertical_impl(state: &AppState) -> Result<String, String>
     let new_id = vertical.id;
     store
         .dispatch(
-            "Generar vertical",
+            "Generate vertical",
             vec![
                 ue_core::Action::AddSequence { sequence: vertical },
                 ue_core::Action::SetActiveSequence { sequence_id: new_id },
@@ -1162,28 +1194,56 @@ fn generate_vertical(state: State<AppState>) -> Res<StateSnapshot> {
     Ok(snapshot(&state.store.lock().unwrap()))
 }
 
+/// Delete a sequence (never the last one). If it is active, switches to the
+/// first remaining sequence first. Single undo entry.
+#[tauri::command]
+fn remove_sequence(state: State<AppState>, sequence_id: String) -> Res<StateSnapshot> {
+    let mut store = state.store.lock().unwrap();
+    let id = parse_id(&sequence_id)?;
+    if store.project.sequences.len() <= 1 {
+        return Err("cannot delete the last sequence".into());
+    }
+    if store.project.sequence(id).is_none() {
+        return Err("sequence not found".into());
+    }
+    let mut actions = vec![];
+    if store.project.active_sequence == id {
+        let fallback = store
+            .project
+            .sequences
+            .iter()
+            .find(|s| s.id != id)
+            .map(|s| s.id)
+            .ok_or("no remaining sequence")?;
+        actions.push(ue_core::Action::SetActiveSequence { sequence_id: fallback });
+    }
+    actions.push(ue_core::Action::RemoveSequence { sequence_id: id });
+    store.dispatch("Delete sequence", actions).map_err(|e| e.to_string())?;
+    Ok(snapshot(&store))
+}
+
 #[tauri::command]
 fn set_active_sequence(state: State<AppState>, sequence_id: String) -> Res<StateSnapshot> {
     let id = parse_id(&sequence_id)?;
     let mut store = state.store.lock().unwrap();
     store
         .dispatch(
-            "Cambiar secuencia",
+            "Change sequence",
             vec![ue_core::Action::SetActiveSequence { sequence_id: id }],
         )
         .map_err(|e| e.to_string())?;
     Ok(snapshot(&store))
 }
 
-/// Crea un clip de subtítulos automáticos sobre un clip de media transcrito.
+/// Creates an auto-subtitles clip over a transcribed media clip.
 #[tauri::command]
 fn add_subtitles_clip(state: State<AppState>, clip_id: String) -> Res<StateSnapshot> {
     use ue_core::model::{ClipPayload, SubtitleMode, TextStyle};
     let id = parse_id(&clip_id)?;
     let mut store = state.store.lock().unwrap();
-    let media = store.project.clip(id).ok_or("clip no encontrado")?.clone();
+    let media = store.project.clip(id).ok_or("clip not found")?.clone();
     let ClipPayload::Media { asset_id, .. } = media.payload else {
-        return Err("el clip no es de media".into());
+        return Err("the clip is not media".into());
     };
     let transcript_id = store
         .project
@@ -1191,9 +1251,9 @@ fn add_subtitles_clip(state: State<AppState>, clip_id: String) -> Res<StateSnaps
         .iter()
         .find(|t| t.asset_id == asset_id)
         .map(|t| t.id)
-        .ok_or("el medio no tiene transcripción; transcríbelo primero (botón T)")?;
+        .ok_or("the media has no transcript; transcribe it first (T button)")?;
     let track_id = ensure_free_video_track(&mut store, media.start, media.duration)?;
-    // tercio inferior a 1080p
+    // lower third at 1080p
     let style = TextStyle { size: 48.0, y_offset: 380.0, ..Default::default() };
     let clip = Clip {
         id: ue_core::model::Id::new(),
@@ -1212,16 +1272,16 @@ fn add_subtitles_clip(state: State<AppState>, clip_id: String) -> Res<StateSnaps
     Ok(snapshot(&store))
 }
 
-/// Crea un clip de Avatar sobre un clip de media transcrito, a partir de un
-/// config.json compatible con el avatar_config del Youtubers-toolkit.
-/// Clasifica emociones (API OpenAI-compatible si hay OPENAI_API_KEY, si no
-/// heurística offline) y mide volúmenes por segmento.
+/// Creates an Avatar clip over a transcribed media clip, from a config.json
+/// compatible with the Youtubers-toolkit avatar_config. Classifies emotions
+/// (OpenAI-compatible API if OPENAI_API_KEY is set, otherwise offline
+/// heuristic) and measures volumes per segment.
 #[tauri::command]
 fn add_avatar_clip(state: State<AppState>, clip_id: String, config_path: String) -> Res<StateSnapshot> {
     use ue_core::model::ClipPayload;
     let id = parse_id(&clip_id)?;
 
-    // 1. parsear config del toolkit
+    // 1. parse the toolkit config
     let raw = std::fs::read_to_string(&config_path).map_err(|e| e.to_string())?;
     let cfg: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
     let base = Path::new(&config_path).parent().unwrap_or(Path::new("."));
@@ -1229,43 +1289,43 @@ fn add_avatar_clip(state: State<AppState>, clip_id: String, config_path: String)
     for (emotion, p) in cfg
         .get("avatars")
         .and_then(|v| v.as_object())
-        .ok_or("config sin mapa 'avatars'")?
+        .ok_or("config without 'avatars' map")?
     {
-        let path = p.as_str().ok_or("ruta de avatar inválida")?;
+        let path = p.as_str().ok_or("invalid avatar path")?;
         let abs = {
             let pp = Path::new(path);
             if pp.is_absolute() { pp.to_path_buf() } else { base.join(pp.file_name().unwrap_or_default()) }
         };
-        // el config del toolkit usa rutas tipo "avatar_config/x.mp4": probar tal cual y por basename
+        // the toolkit config uses paths like "avatar_config/x.mp4": try as-is and by basename
         let candidate = if abs.exists() { abs } else { base.join(path) };
         if candidate.exists() {
             avatars.insert(emotion.clone(), candidate.to_string_lossy().into_owned());
         }
     }
     if avatars.is_empty() {
-        return Err("ningún archivo de avatar del config existe en disco".into());
+        return Err("no avatar file from the config exists on disk".into());
     }
     let shake_factor = cfg.get("shake_factor").and_then(|v| v.as_f64()).unwrap_or(1.0);
 
     let mut store = state.store.lock().unwrap();
-    let media = store.project.clip(id).ok_or("clip no encontrado")?.clone();
+    let media = store.project.clip(id).ok_or("clip not found")?.clone();
     let ClipPayload::Media { asset_id, .. } = media.payload else {
-        return Err("el clip no es de media".into());
+        return Err("the clip is not media".into());
     };
     let conform = store
         .project
         .asset(asset_id)
         .and_then(|a| a.audio_conform.clone())
-        .ok_or("el audio aún se está preparando (conformado)")?;
+        .ok_or("the audio is still being prepared (conform)")?;
 
-    // 2. análisis: volúmenes + emociones sobre el transcript existente
+    // 2. analysis: volumes + emotions over the existing transcript
     {
         let doc = store
             .project
             .transcripts
             .iter_mut()
             .find(|t| t.asset_id == asset_id)
-            .ok_or("el medio no tiene transcripción; transcríbelo primero (botón T)")?;
+            .ok_or("the media has no transcript; transcribe it first (T button)")?;
         let wav = ue_audio::wav::WavMap::open(Path::new(&conform)).map_err(|e| e.to_string())?;
         ue_ai::emotion::measure_volumes(doc, &wav);
         let api = ue_ai::emotion::ApiConfig::from_env();
@@ -1273,7 +1333,7 @@ fn add_avatar_clip(state: State<AppState>, clip_id: String, config_path: String)
         store.version += 1;
     }
 
-    // 3. clip Avatar en una pista de video libre (se crea si hace falta)
+    // 3. Avatar clip in a free video track (created if needed)
     let track_id = ensure_free_video_track(&mut store, media.start, media.duration)?;
     let clip = Clip {
         id: Id::new(),
@@ -1297,8 +1357,8 @@ fn add_avatar_clip(state: State<AppState>, clip_id: String, config_path: String)
     Ok(snapshot(&store))
 }
 
-/// Transcribe un asset con Whisper (word-level) en segundo plano.
-/// Descarga el modelo ggml si hace falta. Al terminar emite state-changed.
+/// Transcribes an asset with Whisper (word-level) in the background.
+/// Downloads the ggml model if needed. Emits state-changed when done.
 #[tauri::command]
 fn transcribe_asset(
     app: tauri::AppHandle,
@@ -1309,20 +1369,20 @@ fn transcribe_asset(
     let id = parse_id(&asset_id)?;
     let (conform, models_dir) = {
         let store = state.store.lock().unwrap();
-        let asset = store.project.asset(id).ok_or("asset no encontrado")?;
+        let asset = store.project.asset(id).ok_or("asset not found")?;
         if asset.probe.audio_channels == 0 {
-            return Err("el archivo no tiene audio".into());
+            return Err("the file has no audio".into());
         }
         let conform = asset
             .audio_conform
             .clone()
-            .ok_or("el audio aún se está preparando (conformado); prueba en unos segundos")?;
+            .ok_or("the audio is still being prepared (conform); try again in a few seconds")?;
         let models = state
             .models_dir
             .lock()
             .unwrap()
             .clone()
-            .ok_or("sin carpeta de modelos")?;
+            .ok_or("no models folder")?;
         (PathBuf::from(conform), models)
     };
     let (settings_model, settings_lang) = {
@@ -1357,8 +1417,8 @@ fn transcribe_asset(
     Ok(())
 }
 
-/// Elimina los silencios de un clip (corta y cierra huecos en TODAS las
-/// pistas: una sola entrada de undo). Requiere el audio conformado.
+/// Removes the silences from a clip (cuts and closes gaps on ALL tracks: a
+/// single undo entry). Requires the conformed audio.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 fn remove_silences(
@@ -1371,15 +1431,15 @@ fn remove_silences(
 ) -> Res<serde_json::Value> {
     let id = parse_id(&clip_id)?;
     let mut store = state.store.lock().unwrap();
-    let clip = store.project.clip(id).ok_or("clip no encontrado")?.clone();
+    let clip = store.project.clip(id).ok_or("clip not found")?.clone();
     let ue_core::model::ClipPayload::Media { asset_id, src_in, src_out } = clip.payload else {
-        return Err("el clip no es de media".into());
+        return Err("the clip is not media".into());
     };
-    let asset = store.project.asset(asset_id).ok_or("asset no encontrado")?;
+    let asset = store.project.asset(asset_id).ok_or("asset not found")?;
     let conform = asset
         .audio_conform
         .clone()
-        .ok_or("el audio aún se está preparando (conformado); prueba en unos segundos")?;
+        .ok_or("the audio is still being prepared (conform); try again in a few seconds")?;
     let wav = ue_audio::wav::WavMap::open(Path::new(&conform)).map_err(|e| e.to_string())?;
     let mut params = ue_ai::silence::SilenceParams::default();
     if let Some(db) = threshold_db {
@@ -1403,6 +1463,10 @@ fn remove_silences(
         Some("speedup") => {
             store.speedup_ranges(seq_id, &ranges, 4.0).map_err(|e| e.to_string())?;
         }
+        Some("split") => {
+            // segment only: split at every silence edge, delete nothing
+            store.split_ranges(seq_id, &ranges).map_err(|e| e.to_string())?;
+        }
         _ => {
             store.cut_ranges(seq_id, &ranges, true).map_err(|e| e.to_string())?;
         }
@@ -1414,16 +1478,51 @@ fn remove_silences(
     }))
 }
 
-/// Pista de video con hueco libre en [start, start+duration); si no existe,
-/// añade una pista nueva encima (dentro de la MISMA transacción del caller no:
-/// se despacha aparte con su propio undo agrupado por el label).
+/// Video track with a free gap in [start, start+duration); if none exists,
+/// adds a new track on top (not within the caller's SAME transaction:
+/// it's dispatched separately with its own undo grouped by the label).
+/// First unlocked audio track with room at [start, start+duration), or a new
+/// A(n+1) if none. Mirror of ensure_free_video_track.
+fn ensure_free_audio_track(
+    store: &mut ProjectStore,
+    start: TimeUs,
+    duration: TimeUs,
+) -> Result<Id, String> {
+    let seq_id = store.project.active_sequence;
+    let seq = store.project.sequence(seq_id).ok_or("no active sequence")?;
+    if let Some(t) = seq
+        .tracks
+        .iter()
+        .find(|t| t.kind == TrackKind::Audio && !t.locked && !t.collides(start, duration, None))
+    {
+        return Ok(t.id);
+    }
+    let n = seq.tracks.iter().filter(|t| t.kind == TrackKind::Audio).count();
+    let track = ue_core::model::Track::new(TrackKind::Audio, &format!("A{}", n + 1));
+    let track_id = track.id;
+    // keep audio tracks grouped at the start of the vec
+    let index = seq
+        .tracks
+        .iter()
+        .rposition(|t| t.kind == TrackKind::Audio)
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    store
+        .dispatch(
+            "Add track",
+            vec![ue_core::Action::AddTrack { sequence_id: seq_id, index, track }],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(track_id)
+}
+
 fn ensure_free_video_track(
     store: &mut ProjectStore,
     start: TimeUs,
     duration: TimeUs,
 ) -> Result<Id, String> {
     let seq_id = store.project.active_sequence;
-    let seq = store.project.sequence(seq_id).ok_or("sin secuencia activa")?;
+    let seq = store.project.sequence(seq_id).ok_or("no active sequence")?;
     if let Some(t) = seq
         .tracks
         .iter()
@@ -1432,21 +1531,21 @@ fn ensure_free_video_track(
     {
         return Ok(t.id);
     }
-    // crear V(n+1) encima de todo
+    // create V(n+1) on top of everything
     let n = seq.tracks.iter().filter(|t| t.kind == TrackKind::Video).count();
     let track = ue_core::model::Track::new(TrackKind::Video, &format!("V{}", n + 1));
     let track_id = track.id;
     let index = seq.tracks.len();
     store
         .dispatch(
-            "Añadir pista",
+            "Add track",
             vec![ue_core::Action::AddTrack { sequence_id: seq_id, index, track }],
         )
         .map_err(|e| e.to_string())?;
     Ok(track_id)
 }
 
-/// Añade un clip de texto (título) en la pista de video superior.
+/// Adds a text (title) clip on the top video track.
 #[tauri::command]
 fn add_text_clip(state: State<AppState>, content: String, at_us: TimeUs) -> Res<StateSnapshot> {
     let mut store = state.store.lock().unwrap();
@@ -1458,14 +1557,14 @@ fn add_text_clip(state: State<AppState>, content: String, at_us: TimeUs) -> Res<
     Ok(snapshot(&store))
 }
 
-/// Catálogo de generadores (manifests core) para la UI.
+/// Catalog of generators (core manifests) for the UI.
 #[tauri::command]
 fn get_generators() -> serde_json::Value {
     ue_render::generators_catalog_json(&ue_render::core_generators())
 }
 
-/// Añade un clip generador (rectángulo, degradado, …) en el playhead, en una
-/// pista de video libre (se crea si hace falta).
+/// Adds a generator clip (rectangle, gradient, …) at the playhead, in a free
+/// video track (created if needed).
 #[tauri::command]
 fn add_generator_clip(
     state: State<AppState>,
@@ -1473,7 +1572,7 @@ fn add_generator_clip(
     at_us: TimeUs,
 ) -> Res<StateSnapshot> {
     if ue_render::find_generator(&ue_render::core_generators(), &generator_id).is_none() {
-        return Err(format!("generador desconocido: {generator_id}"));
+        return Err(format!("unknown generator: {generator_id}"));
     }
     let mut store = state.store.lock().unwrap();
     let duration = 4_000_000;
@@ -1484,7 +1583,7 @@ fn add_generator_clip(
     Ok(snapshot(&store))
 }
 
-/// Edita los parámetros de un generador (deshacible).
+/// Edits a generator's parameters (undoable).
 #[tauri::command]
 fn set_clip_generator(
     state: State<AppState>,
@@ -1497,7 +1596,7 @@ fn set_clip_generator(
     let id = parse_id(&clip_id)?;
     store
         .dispatch(
-            "Editar generador",
+            "Edit generator",
             vec![ue_core::Action::SetClipGenerator {
                 clip_id: id,
                 generator_id,
@@ -1520,7 +1619,7 @@ fn set_clip_text(
     let id = parse_id(&clip_id)?;
     store
         .dispatch(
-            "Editar texto",
+            "Edit text",
             vec![ue_core::Action::SetClipText { clip_id: id, content, style }],
         )
         .map_err(|e| e.to_string())?;
@@ -1541,15 +1640,15 @@ fn set_track_prop(
         "muted" => TrackProp::Muted(value),
         "solo" => TrackProp::Solo(value),
         "locked" => TrackProp::Locked(value),
-        other => return Err(format!("propiedad desconocida: {other}")),
+        other => return Err(format!("unknown property: {other}")),
     };
     store
-        .dispatch("Pista", vec![ue_core::Action::SetTrackProp { track_id: id, prop }])
+        .dispatch("Track", vec![ue_core::Action::SetTrackProp { track_id: id, prop }])
         .map_err(|e| e.to_string())?;
     Ok(snapshot(&store))
 }
 
-/// Añade una pista al final de su grupo (video arriba, audio abajo). Deshacible.
+/// Adds a track at the end of its group (video on top, audio below). Undoable.
 #[tauri::command]
 fn add_track(state: State<AppState>, kind: String) -> Res<StateSnapshot> {
     let mut store = state.store.lock().unwrap();
@@ -1557,53 +1656,53 @@ fn add_track(state: State<AppState>, kind: String) -> Res<StateSnapshot> {
     let kind = match kind.as_str() {
         "video" => TrackKind::Video,
         "audio" => TrackKind::Audio,
-        other => return Err(format!("tipo de pista desconocido: {other}")),
+        other => return Err(format!("unknown track kind: {other}")),
     };
-    let seq = store.project.sequence(seq_id).ok_or("sin secuencia")?;
+    let seq = store.project.sequence(seq_id).ok_or("no sequence")?;
     let n = seq.tracks.iter().filter(|t| t.kind == kind).count();
     let prefix = if kind == TrackKind::Video { "V" } else { "A" };
     let track = ue_core::model::Track::new(kind, &format!("{prefix}{}", n + 1));
-    // video: al final del vec (se dibuja arriba); audio: también al final
+    // video: at the end of the vec (drawn on top); audio: also at the end
     let index = seq.tracks.len();
     store
         .dispatch(
-            "Añadir pista",
+            "Add track",
             vec![ue_core::Action::AddTrack { sequence_id: seq_id, index, track }],
         )
         .map_err(|e| e.to_string())?;
     Ok(snapshot(&store))
 }
 
-/// Elimina una pista (los clips que tuviera se van con ella; 1 undo la restaura).
+/// Removes a track (any clips it held go with it; 1 undo restores it).
 #[tauri::command]
 fn remove_track(state: State<AppState>, track_id: String) -> Res<StateSnapshot> {
     let mut store = state.store.lock().unwrap();
     let id = parse_id(&track_id)?;
     let seq_id = store.project.active_sequence;
-    let seq = store.project.sequence(seq_id).ok_or("sin secuencia")?;
-    // no dejar la secuencia sin pistas de un tipo
-    let kind = seq.tracks.iter().find(|t| t.id == id).ok_or("pista no encontrada")?.kind;
+    let seq = store.project.sequence(seq_id).ok_or("no sequence")?;
+    // don't leave the sequence without tracks of a kind
+    let kind = seq.tracks.iter().find(|t| t.id == id).ok_or("track not found")?.kind;
     if seq.tracks.iter().filter(|t| t.kind == kind).count() <= 1 {
-        return Err("no se puede eliminar la última pista de su tipo".into());
+        return Err("cannot remove the last track of its kind".into());
     }
     store
-        .dispatch("Eliminar pista", vec![ue_core::Action::RemoveTrack { track_id: id }])
+        .dispatch("Delete track", vec![ue_core::Action::RemoveTrack { track_id: id }])
         .map_err(|e| e.to_string())?;
     Ok(snapshot(&store))
 }
 
-/// Renombra una pista (deshacible).
+/// Renames a track (undoable).
 #[tauri::command]
 fn rename_track(state: State<AppState>, track_id: String, name: String) -> Res<StateSnapshot> {
     let mut store = state.store.lock().unwrap();
     let id = parse_id(&track_id)?;
     let name = name.trim().to_string();
     if name.is_empty() || name.len() > 24 {
-        return Err("nombre de pista inválido".into());
+        return Err("invalid track name".into());
     }
     store
         .dispatch(
-            "Renombrar pista",
+            "Rename track",
             vec![ue_core::Action::SetTrackProp {
                 track_id: id,
                 prop: ue_core::action::TrackProp::Name(name),
@@ -1613,14 +1712,14 @@ fn rename_track(state: State<AppState>, track_id: String, name: String) -> Res<S
     Ok(snapshot(&store))
 }
 
-/// Volumen de pista en dB (deshacible).
+/// Track volume in dB (undoable).
 #[tauri::command]
 fn set_track_volume(state: State<AppState>, track_id: String, db: f32) -> Res<StateSnapshot> {
     let mut store = state.store.lock().unwrap();
     let id = parse_id(&track_id)?;
     store
         .dispatch(
-            "Volumen de pista",
+            "Track volume",
             vec![ue_core::Action::SetTrackProp {
                 track_id: id,
                 prop: ue_core::action::TrackProp::VolumeDb(db.clamp(-60.0, 12.0)),
@@ -1640,14 +1739,14 @@ fn set_clip_transition(
     let id = parse_id(&clip_id)?;
     store
         .dispatch(
-            "Editar transición",
+            "Edit transition",
             vec![ue_core::Action::SetClipTransition { clip_id: id, transition }],
         )
         .map_err(|e| e.to_string())?;
     Ok(snapshot(&store))
 }
 
-/// (puerto, token) del servidor MCP embebido (None si no pudo arrancar).
+/// (port, token) of the embedded MCP server (None if it couldn't start).
 #[tauri::command]
 fn mcp_status(state: State<AppState>) -> Option<(u16, String)> {
     let port = (*state.mcp_port.lock().unwrap())?;
@@ -1660,8 +1759,8 @@ fn cancel_export(state: State<AppState>) -> Res<()> {
     Ok(())
 }
 
-/// Exporta la secuencia activa a MP4 (bloqueante en un hilo aparte).
-/// Emite eventos `export-progress` (0..1); `cancel_export` la aborta.
+/// Exports the active sequence to MP4 (blocking on a separate thread).
+/// Emits `export-progress` events (0..1); `cancel_export` aborts it.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 async fn export_video(
@@ -1701,7 +1800,7 @@ async fn export_video(
         None | Some("mp4") => ue_export::ExportFormat::Mp4,
         Some("m4a") => ue_export::ExportFormat::M4a,
         Some("gif") => ue_export::ExportFormat::Gif,
-        Some(other) => return Err(format!("formato desconocido: {other}")),
+        Some(other) => return Err(format!("unknown format: {other}")),
     };
     let settings = ue_export::ExportSettings {
         format,
@@ -1732,7 +1831,7 @@ async fn export_video(
     Ok(path)
 }
 
-/// ¿Hay un autosave más reciente que el proyecto dado (o huérfano)? → su ruta.
+/// Is there an autosave newer than the given project (or orphaned)? → its path.
 #[tauri::command]
 fn check_recovery(app: tauri::AppHandle, state: State<AppState>, path: Option<String>) -> Res<Option<String>> {
     let data_dir = app.path().app_data_dir().ok();
@@ -1750,12 +1849,12 @@ fn check_recovery(app: tauri::AppHandle, state: State<AppState>, path: Option<St
             };
             matches!((ma.modified(), mp.modified()), (Ok(a), Ok(b)) if a > b)
         }
-        _ => true, // proyecto nunca guardado: cualquier autosave cuenta
+        _ => true, // project never saved: any autosave counts
     };
     Ok(newer.then(|| auto.display().to_string()))
 }
 
-/// Elimina el autosave activo (tras guardar o descartar la recuperación).
+/// Removes the active autosave (after saving or discarding the recovery).
 #[tauri::command]
 fn discard_recovery(app: tauri::AppHandle, state: State<AppState>) -> Res<()> {
     let data_dir = app.path().app_data_dir().ok();
@@ -1763,15 +1862,15 @@ fn discard_recovery(app: tauri::AppHandle, state: State<AppState>) -> Res<()> {
     if let Some(auto) = autosave_path(project_path.as_deref(), data_dir.as_deref()) {
         let _ = std::fs::remove_file(auto);
     }
-    // el autosave huérfano también, por si acaba de guardarse con nombre
+    // the orphan autosave too, in case it was just saved with a name
     if let Some(d) = app.path().app_data_dir().ok() {
-        let _ = std::fs::remove_file(d.join("recuperacion.uep.autosave"));
+        let _ = std::fs::remove_file(d.join("recovery.uep.autosave"));
     }
     Ok(())
 }
 
-/// Carga una copia de recuperación conservando la ruta del proyecto original
-/// (el siguiente Guardar escribe el .uep de verdad) y marcando cambios.
+/// Loads a recovery copy keeping the original project's path (the next Save
+/// writes the real .uep) and marking changes.
 #[tauri::command]
 fn recover_project(
     app: tauri::AppHandle,
@@ -1814,17 +1913,17 @@ fn save_project(state: State<AppState>, path: Option<String>) -> Res<String> {
     let mut stored_path = state.path.lock().unwrap();
     let target = match path.map(PathBuf::from).or_else(|| stored_path.clone()) {
         Some(p) => p,
-        None => return Err("no hay ruta de guardado; pasa una ruta".into()),
+        None => return Err("no save path; pass a path".into()),
     };
-    // PORTABILIDAD: serializar con rutas relativas al .uep cuando sea posible
+    // PORTABILITY: serialize with paths relative to the .uep when possible
     let portable = make_portable(&store.project, target.parent());
     let json = portable.to_json().map_err(|e| e.to_string())?;
-    // escritura atómica: tmp + rename
+    // atomic write: tmp + rename
     let tmp = target.with_extension("uep.tmp");
     std::fs::write(&tmp, &json).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, &target).map_err(|e| e.to_string())?;
     store.dirty = false;
-    // el guardado real invalida las copias de recuperación
+    // the real save invalidates the recovery copies
     let _ = std::fs::remove_file(target.with_extension("uep.autosave"));
     *stored_path = Some(target.clone());
     Ok(target.display().to_string())
@@ -1840,10 +1939,10 @@ fn open_project(
     let mut project = Project::from_json(&json).map_err(|e| e.to_string())?;
     let issues = ue_core::validate::validate(&project);
     if !issues.is_empty() {
-        return Err(format!("proyecto inválido: {}", issues.join("; ")));
+        return Err(format!("invalid project: {}", issues.join("; ")));
     }
-    // resolver rutas relativas contra la carpeta del .uep y marcar offline;
-    // re-derivar cachés locales por hash y relanzar conformado si falta
+    // resolve relative paths against the .uep folder and mark offline;
+    // re-derive local caches by hash and relaunch conform if missing
     let dir = Path::new(&path).parent().map(|d| d.to_path_buf());
     resolve_project_paths(&mut project, dir.as_deref());
     let cache_dir = state.cache_dir.lock().unwrap().clone();
@@ -1869,7 +1968,7 @@ fn open_project(
     Ok(snapshot(&store))
 }
 
-/// Relocaliza un medio offline: nueva ruta, re-probe y conformado.
+/// Relinks an offline media: new path, re-probe and conform.
 #[tauri::command]
 fn relink_asset(
     app: tauri::AppHandle,
@@ -1886,7 +1985,7 @@ fn relink_asset(
         .assets
         .iter_mut()
         .find(|a| a.id == id)
-        .ok_or("asset no encontrado")?;
+        .ok_or("asset not found")?;
     asset.path = new_path;
     asset.content_hash = fresh.content_hash;
     asset.probe = fresh.probe;
@@ -1930,7 +2029,7 @@ pub fn run() {
                 *state.effects_dir.lock().unwrap() = Some(effects);
                 let errors = reload_packs(&state);
                 for e in errors {
-                    eprintln!("[packs] manifest inválido: {e}");
+                    eprintln!("[packs] invalid manifest: {e}");
                 }
             }
             if let Ok(dir) = app.path().app_data_dir() {
@@ -1943,10 +2042,10 @@ pub fn run() {
                     *state.mcp_port.lock().unwrap() = Some(port);
                     let token = state.mcp_token.lock().unwrap().clone();
                     eprintln!(
-                        "[mcp] escuchando en http://127.0.0.1:{port}/mcp (token: {token})"
+                        "[mcp] listening on http://127.0.0.1:{port}/mcp (token: {token})"
                     );
                 }
-                None => eprintln!("[mcp] no se pudo abrir el puerto {}", mcp::MCP_PORT),
+                None => eprintln!("[mcp] could not open port {}", mcp::MCP_PORT),
             }
             let data_dir = app.path().app_data_dir().ok();
             let handle = app.handle().clone();
@@ -1995,6 +2094,7 @@ pub fn run() {
             add_subtitles_clip,
             generate_vertical,
             set_active_sequence,
+            remove_sequence,
             add_avatar_clip,
             export_video,
             cancel_export,
@@ -2016,5 +2116,5 @@ pub fn run() {
             new_project,
         ])
         .run(tauri::generate_context!())
-        .expect("error al arrancar UberEditor");
+        .expect("failed to start UberEditor");
 }

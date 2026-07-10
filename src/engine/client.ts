@@ -14,20 +14,20 @@ import type {
 } from "./types";
 
 /**
- * Contrato del motor de edición. Dos implementaciones:
- * - TauriEngine: la app de escritorio real (ue-core vía IPC).
- * - MockEngine: navegador, para desarrollo de UI y pruebas visuales.
+ * Editing engine contract. Two implementations:
+ * - TauriEngine: the real desktop app (ue-core via IPC).
+ * - MockEngine: browser, for UI development and visual checks.
  */
-/** Opciones de export elegidas en el diálogo (subset de ExportSettings). */
+/** Export options chosen in the dialog (a subset of ExportSettings). */
 export interface ExportUiSettings {
-  /** Contenedor de salida. */
+  /** Output container. */
   format: "mp4" | "m4a" | "gif";
   maxHeight: number | null;
   crf: number;
   preset: string;
   audioBitrateK: number;
   loudnorm: boolean;
-  /** Rango I-O en µs, o null para exportar todo. */
+  /** I-O range in µs, or null to export everything. */
   rangeInUs: number | null;
   rangeOutUs: number | null;
 }
@@ -50,64 +50,64 @@ export interface EngineClient {
   setClipAudio(clipId: Id, audio: AudioProps): Promise<StateSnapshot>;
   setClipTransform(clipId: Id, transform: Transform2D): Promise<StateSnapshot>;
 
-  /** Diálogo nativo de selección de archivos (null si no está disponible). */
+  /** Native file picker dialog (null if not available). */
   pickMediaFiles(): Promise<string[] | null>;
   importMedia(paths: string[]): Promise<StateSnapshot>;
-  /** Añade un clip del asset al timeline (playhead o final de pista). */
+  /** Adds a clip from the asset to the timeline (playhead or end of track). */
   addClip(assetId: Id, atUs: TimeUs): Promise<StateSnapshot>;
 
-  /** Frame real JPEG del tiempo dado, o null si no hay señal / no soportado. */
+  /** Real JPEG frame at the given time, or null if there is no signal / unsupported. */
   renderFrame(tUs: TimeUs, maxWidth: number): Promise<Uint8Array | null>;
 
-  /** Diálogo nativo "guardar como" (null si el usuario cancela o no hay soporte). */
+  /** Native "save as" dialog (null if the user cancels or it's unsupported). */
   pickSavePath(defaultName: string, extension?: string): Promise<string | null>;
-  /** Exporta la secuencia activa a MP4. Devuelve la ruta escrita. */
+  /** Exports the active sequence to MP4. Returns the written path. */
   exportVideo(path: string, settings?: ExportUiSettings): Promise<string>;
 
-  // -- transporte con el audio como reloj maestro (solo escritorio) --
-  /** Arranca la reproducción de audio desde `fromUs`. Rechaza si no hay dispositivo. */
+  // -- transport with audio as the master clock (desktop only) --
+  /** Starts audio playback from `fromUs`. Rejects if there is no device. */
   playbackPlay(fromUs: TimeUs): Promise<void>;
-  /** Pausa y devuelve la posición exacta del reloj de audio. */
+  /** Pauses and returns the exact position of the audio clock. */
   playbackPause(): Promise<TimeUs>;
   playbackSeek(tUs: TimeUs): Promise<void>;
-  /** [posición µs, reproduciendo] según el reloj de audio. */
-  /** Ruta del autosave más reciente que el proyecto, o null. */
+  /** [position µs, playing] according to the audio clock. */
+  /** Path of the autosave newer than the project, or null. */
   checkRecovery(): Promise<string | null>;
-  /** Carga la copia de recuperación (conserva la ruta del proyecto real). */
+  /** Loads the recovery copy (keeps the real project's path). */
   recoverProject(autosave: string, original: string | null): Promise<StateSnapshot>;
-  /** Descarta la copia de recuperación activa. */
+  /** Discards the active recovery copy. */
   discardRecovery(): Promise<void>;
-  /** Picos de audio reales (25 bins/s) del asset, o null si no aplica. */
+  /** Real audio peaks (25 bins/s) for the asset, or null if not applicable. */
   getAudioPeaks(assetId: Id): Promise<number[] | null>;
-  /** Genera/recupera la tira de miniaturas del asset (solo escritorio). */
+  /** Generates/retrieves the asset's thumbnail strip (desktop only). */
   ensureThumbs(assetId: Id): Promise<ThumbStrip | null>;
-  /** Bytes JPEG de la tira ya generada. */
+  /** JPEG bytes of the already-generated strip. */
   getThumbStrip(assetId: Id): Promise<Uint8Array | null>;
-  /** Shuttle JKL: velocidad con signo; arranca desde fromUs si estaba pausado. */
+  /** JKL shuttle: signed rate; starts from fromUs if it was paused. */
   playbackSetRate(rate: number, fromUs: TimeUs): Promise<void>;
-  /** (posición, reproduciendo, RMS izq 0..1, RMS der 0..1). */
+  /** (position, playing, RMS left 0..1, RMS right 0..1). */
   playbackPosition(): Promise<[TimeUs, boolean, number, number]>;
 
-  /** Suscripción a cambios de estado originados en el backend (jobs). */
+  /** Subscription to state changes originating in the backend (jobs). */
   onStateChanged(cb: () => void): Promise<() => void>;
 
-  // -- proyecto en disco (solo escritorio) --
-  /** Guarda a la ruta dada (o a la última usada si es null). Devuelve la ruta. */
+  // -- project on disk (desktop only) --
+  /** Saves to the given path (or the last one used if null). Returns the path. */
   saveProject(path: string | null): Promise<string>;
   openProject(path: string): Promise<StateSnapshot>;
   pickProjectSavePath(defaultName: string): Promise<string | null>;
   pickProjectOpenPath(): Promise<string | null>;
 
-  /** Último frame JPEG del stream de reproducción (vacío = sin señal). */
+  /** Latest JPEG frame from the playback stream (empty = no signal). */
   playbackFrame(): Promise<Uint8Array | null>;
 
-  // -- efectos modulares --
+  // -- modular effects --
   getEffectsCatalog(): Promise<EffectDef[]>;
-  /** Recarga packs de usuario desde disco; devuelve el catálogo actualizado. */
+  /** Reloads user packs from disk; returns the updated catalog. */
   reloadEffectPacks(): Promise<{ catalog: EffectDef[]; errors: string[]; dir: string | null }>;
   setClipEffects(clipId: Id, effects: EffectInstance[]): Promise<StateSnapshot>;
   setClipTransition(clipId: Id, transition: TransitionRef | null): Promise<StateSnapshot>;
-  /** Añade un clip de título en la pista de video superior. */
+  /** Adds a title clip on the top video track. */
   addTextClip(content: string, atUs: TimeUs): Promise<StateSnapshot>;
   setClipText(clipId: Id, content: string, style: TextStyle): Promise<StateSnapshot>;
   setSubtitlesProps(
@@ -115,19 +115,19 @@ export interface EngineClient {
     style: TextStyle,
     mode: "phrase" | "word" | "karaoke",
   ): Promise<StateSnapshot>;
-  /** Fuentes del sistema (familia, ruta) para el selector de texto. */
+  /** System fonts (family, path) for the text picker. */
   listFonts(): Promise<[string, string][]>;
   listTextTemplates(): Promise<Record<string, TextStyle>>;
   saveTextTemplate(name: string, style: TextStyle): Promise<Record<string, TextStyle>>;
 
-  /** Relocaliza un medio offline con una ruta nueva. */
+  /** Relinks an offline media with a new path. */
   relinkAsset(assetId: Id, newPath: string): Promise<StateSnapshot>;
-  /** Crea un proyecto vacío nuevo. */
+  /** Creates a new empty project. */
   newProject(name: string): Promise<StateSnapshot>;
 
-  /** Rompe el enlace video↔audio del grupo del clip. */
+  /** Breaks the video↔audio link of the clip's group. */
   unlinkClip(clipId: Id): Promise<StateSnapshot>;
-  /** Catálogo de generadores (manifests). */
+  /** Generator catalog (manifests). */
   getGenerators(): Promise<GeneratorDef[]>;
   addGeneratorClip(generatorId: string, atUs: TimeUs): Promise<StateSnapshot>;
   setClipGenerator(
@@ -137,6 +137,8 @@ export interface EngineClient {
     colorParams: Record<string, string>,
   ): Promise<StateSnapshot>;
   addTrack(kind: "video" | "audio"): Promise<StateSnapshot>;
+  /** Delete a sequence (never the last one; switches away if active). */
+  removeSequence(sequenceId: Id): Promise<StateSnapshot>;
   removeTrack(trackId: Id): Promise<StateSnapshot>;
   renameTrack(trackId: Id, name: string): Promise<StateSnapshot>;
   setTrackVolume(trackId: Id, db: number): Promise<StateSnapshot>;
@@ -146,7 +148,7 @@ export interface EngineClient {
     value: boolean,
   ): Promise<StateSnapshot>;
 
-  /** Mueve un rango del timeline a otro punto (reordenar material). */
+  /** Moves a timeline range to another point (reorder material). */
   moveRange(
     sequenceId: Id,
     fromUs: TimeUs,
@@ -154,42 +156,42 @@ export interface EngineClient {
     destUs: TimeUs,
   ): Promise<StateSnapshot>;
 
-  /** Corta rangos del timeline en todas las pistas (ripple opcional). */
+  /** Cuts timeline ranges across all tracks (optional ripple). */
   cutRanges(
     sequenceId: Id,
     ranges: [TimeUs, TimeUs][],
     ripple: boolean,
   ): Promise<StateSnapshot>;
 
-  /** Crea un clip de Avatar sobre un clip transcrito, desde un config.json del toolkit. */
+  /** Creates an Avatar clip over a transcribed clip, from a toolkit config.json. */
   addAvatarClip(clipId: Id, configPath: string): Promise<StateSnapshot>;
   pickAvatarConfig(): Promise<string | null>;
 
-  /** Genera la secuencia vertical 1080x1920 (fondo desenfocado) y la activa. */
+  /** Generates the 1080x1920 vertical sequence (blurred background) and activates it. */
   generateVertical(): Promise<StateSnapshot>;
   setActiveSequence(sequenceId: Id): Promise<StateSnapshot>;
 
-  /** Crea un clip de subtítulos automáticos sobre un clip de media transcrito. */
+  /** Creates an auto-subtitles clip over a transcribed media clip. */
   addSubtitlesClip(clipId: Id): Promise<StateSnapshot>;
 
-  /** Lanza la transcripción Whisper de un asset (job en segundo plano). */
+  /** Launches the Whisper transcription of an asset (background job). */
   transcribeAsset(assetId: Id, model?: string): Promise<void>;
 
-  /** Cambia la velocidad de un clip (0.05–20; el export preserva el pitch). */
+  /** Changes a clip's speed (0.05–20; export preserves the pitch). */
   setClipSpeed(clipId: Id, speed: number): Promise<StateSnapshot>;
 
-  /** Silencios de un clip: mode "delete" corta, "speedup" acelera 4x. */
+  /** Clip silences: mode "delete" cuts, "speedup" speeds up 4x. */
   removeSilences(
     clipId: Id,
-    mode: "delete" | "speedup",
+    mode: "delete" | "speedup" | "split",
     params?: { thresholdDb?: number; minSilenceMs?: number; padMs?: number },
   ): Promise<{ removed: number; removed_us: number; snapshot: StateSnapshot }>;
 
-  /** (puerto, token) del servidor MCP embebido (null si no está activo). */
+  /** (port, token) of the embedded MCP server (null if not active). */
   mcpStatus(): Promise<[number, string] | null>;
   setProjectSettings(whisperLanguage: string, whisperModel: string): Promise<StateSnapshot>;
 
-  // -- progreso de export --
+  // -- export progress --
   cancelExport(): Promise<void>;
   onExportProgress(cb: (progress: number) => void): Promise<() => void>;
 }

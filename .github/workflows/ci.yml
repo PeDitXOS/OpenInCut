@@ -18,7 +18,7 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Dependencias de sistema (Tauri en Linux)
+      - name: System dependencies (Tauri on Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update

@@ -6,14 +6,14 @@ import { paramValue } from "../engine/types";
 import { frameToUs, hash32, usToTimecode } from "../lib/time";
 import { engine, useStore } from "../state/store";
 
-/** RMS → posición 0..1 en escala dB (-60..0). */
+/** RMS → position 0..1 on a dB scale (-60..0). */
 function meterFill(rms: number): number {
   if (rms <= 0) return 0;
   const db = 20 * Math.log10(rms);
   return Math.min(1, Math.max(0, (db + 60) / 60));
 }
 
-/** Indicador JKL cuando la velocidad no es 1× (J reversa, L acelera, K para). */
+/** JKL indicator when speed is not 1× (J reverse, L faster, K stop). */
 function ShuttleBadge() {
   const rate = useStore((s) => s.shuttleRate);
   const playing = useStore((s) => s.playing);
@@ -25,12 +25,12 @@ function ShuttleBadge() {
   );
 }
 
-/** Medidores L/R compactos (escala dB, rojo por encima de -6 dB). */
+/** Compact L/R meters (dB scale, red above -6 dB). */
 function AudioMeters() {
   const meterL = useStore((s) => s.meterL);
   const meterR = useStore((s) => s.meterR);
   return (
-    <div className="flex w-24 flex-col gap-0.5" title="Nivel RMS (dBFS)">
+    <div className="flex w-24 flex-col gap-0.5" title="RMS level (dBFS)">
       {[meterL, meterR].map((m, i) => {
         const fill = meterFill(m);
         return (
@@ -53,11 +53,11 @@ function AudioMeters() {
 }
 
 /**
- * Monitor de programa. Dos modos:
- * - Escritorio (Tauri): frame REAL extraído por ffmpeg (ue-media) + overlays.
- * - Navegador (mock): representación esquemática del clip activo.
- * En ambos, los textos activos y las guías se dibujan encima; el motor wgpu
- * de la Fase 2 sustituirá la fuente del frame, no este componente.
+ * Program monitor. Two modes:
+ * - Desktop (Tauri): REAL frame extracted by ffmpeg (ue-media) + overlays.
+ * - Browser (mock): schematic representation of the active clip.
+ * In both, the active texts and guides are drawn on top; the Phase 2 wgpu
+ * engine will replace the frame source, not this component.
  */
 
 function activeClips(project: Project, playheadUs: number) {
@@ -74,13 +74,13 @@ function activeClips(project: Project, playheadUs: number) {
   return {
     video: videoClips.find((c) => c.payload.type === "media"),
     texts: videoClips.filter((c) => c.payload.type === "text"),
-    // de abajo hacia arriba, como compone el export
+    // bottom to top, the way the export composes
     generators: videoClips.filter((c) => c.payload.type === "generator").reverse(),
     subtitles,
   };
 }
 
-/** Dibuja los clips generadores (rect/degradado) con su transform muestreado. */
+/** Draws the generator clips (rect/gradient) with their sampled transform. */
 function drawGenerators(
   ctx: CanvasRenderingContext2D,
   w: number,
@@ -131,7 +131,7 @@ function drawOverlays(
     spans?: { text: string; active: boolean }[];
   }[] = [],
 ) {
-  // regla de tercios, sutil
+  // rule of thirds, subtle
   ctx.strokeStyle = "rgba(255,255,255,0.05)";
   ctx.lineWidth = 1;
   for (const f of [1 / 3, 2 / 3]) {
@@ -153,7 +153,7 @@ function drawOverlays(
     ctx.shadowColor = "rgba(0,0,0,0.85)";
     ctx.shadowBlur = 8;
     if (sub.spans?.length) {
-      // karaoke: frase centrada, palabras encendidas a su tiempo
+      // karaoke: centered phrase, words lit up at their time
       const space = ctx.measureText(" ").width;
       const widths = sub.spans.map((sp) => ctx.measureText(sp.text).width);
       const total = widths.reduce((a, b) => a + b, 0) + space * (sub.spans.length - 1);
@@ -225,7 +225,7 @@ function drawMockVideo(
     ctx.fillStyle = "rgba(164,155,143,0.35)";
     ctx.font = `500 ${Math.round(h * 0.05)}px "Space Grotesk", sans-serif`;
     ctx.textAlign = "center";
-    ctx.fillText("Sin señal en este punto", w / 2, h / 2);
+    ctx.fillText("No signal at this point", w / 2, h / 2);
   }
 }
 
@@ -297,8 +297,8 @@ export function Preview() {
     return () => obs.disconnect();
   }, []);
 
-  // Frame real (solo escritorio).
-  // Reproduciendo: stream continuo del FrameService a ~24 fps (playback_frame).
+  // Real frame (desktop only).
+  // Playing: continuous stream from the FrameService at ~24 fps (playback_frame).
   useEffect(() => {
     if (engine.kind !== "tauri" || !playing) return;
     let alive = true;
@@ -308,7 +308,7 @@ export function Preview() {
         if (!alive) return;
         if (bytes) setRealFrame(await toBitmap(bytes));
       } catch {
-        /* mantener el último frame */
+        /* keep the last frame */
       }
     }, 1000 / 24);
     return () => {
@@ -317,14 +317,14 @@ export function Preview() {
     };
   }, [playing]);
 
-  // En pausa/seek: un frame de alta calidad con debounce corto (render_frame).
+  // On pause/seek: a high-quality frame with a short debounce (render_frame).
   useEffect(() => {
     if (engine.kind !== "tauri" || playing) return;
     const req = ++frameReqRef.current;
     const handle = window.setTimeout(async () => {
       try {
         const bytes = await engine.renderFrame(playheadUs, 1280);
-        if (frameReqRef.current !== req) return; // llegó tarde
+        if (frameReqRef.current !== req) return; // arrived late
         if (!bytes) {
           setRealFrame(null);
           return;
@@ -338,7 +338,7 @@ export function Preview() {
     return () => window.clearTimeout(handle);
   }, [playheadUs, version, playing]);
 
-  // Dibujo
+  // Drawing
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || parentSize.w === 0) return;
@@ -362,26 +362,26 @@ export function Preview() {
     const { video, texts, generators, subtitles } = activeClips(project, playheadUs);
 
     if (engine.kind === "tauri" && realFrame) {
-      // frame real letterboxeado
+      // real frame, letterboxed
       ctx.fillStyle = "#000";
       ctx.fillRect(0, 0, w, h);
       const scale = Math.min(w / realFrame.width, h / realFrame.height);
       const dw = realFrame.width * scale;
       const dh = realFrame.height * scale;
       ctx.drawImage(realFrame, (w - dw) / 2, (h - dh) / 2, dw, dh);
-      badge(ctx, w, h, "FRAME REAL");
+      badge(ctx, w, h, "REAL FRAME");
     } else if (engine.kind === "tauri" && !video) {
       ctx.fillStyle = "#0a0908";
       ctx.fillRect(0, 0, w, h);
       ctx.fillStyle = "rgba(164,155,143,0.35)";
       ctx.font = `500 ${Math.round(h * 0.05)}px "Space Grotesk", sans-serif`;
       ctx.textAlign = "center";
-      ctx.fillText("Sin señal en este punto", w / 2, h / 2);
+      ctx.fillText("No signal at this point", w / 2, h / 2);
     } else if (engine.kind === "tauri") {
-      // hay clip pero el frame aún no llegó
+      // there's a clip but the frame hasn't arrived yet
       ctx.fillStyle = "#000";
       ctx.fillRect(0, 0, w, h);
-      badge(ctx, w, h, "CARGANDO…");
+      badge(ctx, w, h, "LOADING…");
     } else {
       drawMockVideo(ctx, w, h, project, video);
       badge(ctx, w, h, "PREVIEW ½");
@@ -399,10 +399,10 @@ export function Preview() {
       </div>
 
       <div className="flex items-center gap-4 border-t border-line-soft px-4 py-2.5">
-        {/* Firma: el timecode manda. Ámbar, mono, grande. */}
+        {/* Signature: the timecode rules. Amber, mono, large. */}
         <div
           className="font-[var(--font-mono)] text-[26px] font-medium tabular-nums tracking-tight text-accent"
-          title="Posición actual"
+          title="Current position"
         >
           {usToTimecode(playheadUs, fps)}
         </div>
@@ -410,18 +410,18 @@ export function Preview() {
         <div className="flex-1" />
 
         <div className="flex items-center gap-1">
-          <TransportButton label="⏮" title="Ir al inicio (Inicio)" onClick={() => seek(0)} />
-          <TransportButton label="◀︎" title="Frame anterior (←)" onClick={() => frameStep(-1)} />
+          <TransportButton label="⏮" title="Go to start (Home)" onClick={() => seek(0)} />
+          <TransportButton label="◀︎" title="Previous frame (←)" onClick={() => frameStep(-1)} />
           <TransportButton
             label={playing ? "❚❚" : "▶"}
-            title="Reproducir/Pausa (Espacio)"
+            title="Play/Pause (Space)"
             onClick={togglePlay}
             primary
           />
-          <TransportButton label="▶︎" title="Frame siguiente (→)" onClick={() => frameStep(1)} />
+          <TransportButton label="▶︎" title="Next frame (→)" onClick={() => frameStep(1)} />
           <TransportButton
             label="⏭"
-            title="Ir al final"
+            title="Go to end"
             onClick={() => {
               const seq = activeSequence(project);
               const end = Math.max(
@@ -439,7 +439,7 @@ export function Preview() {
           <ShuttleBadge />
           {engine.kind === "tauri" && <AudioMeters />}
           <span className="rounded-md border border-line px-2 py-1">
-            {engine.kind === "tauri" ? "Motor: escritorio" : "Motor: navegador"}
+            {engine.kind === "tauri" ? "Engine: desktop" : "Engine: browser"}
           </span>
           <span className="font-[var(--font-mono)]">0 drops</span>
         </div>

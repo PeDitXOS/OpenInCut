@@ -1,4 +1,4 @@
-//! Lector mmap de WAV PCM s16le estéreo (el formato que produce el conformado).
+//! mmap reader for stereo WAV PCM s16le (the format produced by conforming).
 
 use std::fs::File;
 use std::path::Path;
@@ -29,7 +29,7 @@ impl WavMap {
         let map = unsafe { Mmap::map(&file)? };
         let b = &map[..];
         if b.len() < 44 || &b[0..4] != b"RIFF" || &b[8..12] != b"WAVE" {
-            return Err(AudioError::BadWav(name, "cabecera RIFF/WAVE".into()));
+            return Err(AudioError::BadWav(name, "RIFF/WAVE header".into()));
         }
         let mut off = 12usize;
         let mut fmt: Option<(u16, u16, u32, u16)> = None; // format, channels, rate, bits
@@ -53,17 +53,17 @@ impl WavMap {
                 b"data" => data = Some((body, size)),
                 _ => {}
             }
-            off = body + size + (size & 1); // padding a par
+            off = body + size + (size & 1); // pad to even
         }
         let (format, channels, sample_rate, bits) =
-            fmt.ok_or_else(|| AudioError::BadWav(name.clone(), "sin chunk fmt".into()))?;
+            fmt.ok_or_else(|| AudioError::BadWav(name.clone(), "no fmt chunk".into()))?;
         let (data_offset, data_len) =
-            data.ok_or_else(|| AudioError::BadWav(name.clone(), "sin chunk data".into()))?;
+            data.ok_or_else(|| AudioError::BadWav(name.clone(), "no data chunk".into()))?;
         if format != 1 || bits != 16 {
-            return Err(AudioError::BadWav(name, format!("se espera PCM s16, fue fmt={format} bits={bits}")));
+            return Err(AudioError::BadWav(name, format!("expected PCM s16, got fmt={format} bits={bits}")));
         }
         if channels == 0 || channels > 2 {
-            return Err(AudioError::BadWav(name, format!("canales no soportados: {channels}")));
+            return Err(AudioError::BadWav(name, format!("unsupported channel count: {channels}")));
         }
         let frames = (data_len / (2 * channels as usize)) as i64;
         Ok(WavMap { map, data_offset, frames, channels, sample_rate })
@@ -73,8 +73,8 @@ impl WavMap {
         self.frames
     }
 
-    /// Frame estéreo en f32 [-1, 1]. Fuera de rango → silencio.
-    /// Mono se duplica a ambos canales.
+    /// Stereo frame as f32 [-1, 1]. Out of range → silence.
+    /// Mono is duplicated to both channels.
     #[inline]
     pub fn frame(&self, idx: i64) -> (f32, f32) {
         if idx < 0 || idx >= self.frames {
@@ -90,8 +90,8 @@ impl WavMap {
     }
 }
 
-/// Picos |amplitud| por bin (mezcla mono de L/R), `per_sec` bins por segundo.
-/// Para dibujar waveforms reales en el timeline.
+/// |amplitude| peaks per bin (mono mix of L/R), `per_sec` bins per second.
+/// For drawing real waveforms on the timeline.
 pub fn compute_peaks(wav: &WavMap, per_sec: u32) -> Vec<f32> {
     let bin = (crate::RATE / per_sec.max(1)).max(1) as i64;
     let frames = wav.frames();
@@ -100,7 +100,7 @@ pub fn compute_peaks(wav: &WavMap, per_sec: u32) -> Vec<f32> {
     for b in 0..n_bins {
         let mut peak = 0.0f32;
         let end = ((b + 1) * bin).min(frames);
-        // paso 4: submuestreo dentro del bin (suficiente para picos visuales)
+        // step 4: subsampling within the bin (enough for visual peaks)
         let mut i = b * bin;
         while i < end {
             let (l, r) = wav.frame(i);

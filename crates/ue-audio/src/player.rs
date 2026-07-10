@@ -1,6 +1,6 @@
-//! Salida cpal. Un hilo dedicado posee el stream (cpal::Stream no es Send);
-//! el control viaja por atomics compartidos. El audio es el reloj maestro:
-//! la posición se deriva de los frames servidos al dispositivo.
+//! cpal output. A dedicated thread owns the stream (cpal::Stream is not Send);
+//! control travels through shared atomics. Audio is the master clock:
+//! the position is derived from the frames served to the device.
 
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -10,18 +10,18 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crate::mixer::{mix_frame, MixItem};
 use crate::{frames_to_us, us_to_frames, AudioError, AudioResult, RATE};
 
-/// Posición en punto fijo 48k-frames << 16 (para pasos fraccionales al
-/// convertir la tasa del dispositivo).
+/// Position in fixed-point 48k-frames << 16 (for fractional steps when
+/// converting the device rate).
 const FP: i64 = 1 << 16;
 
 struct Shared {
     playing: AtomicBool,
-    /// Velocidad de shuttle en punto fijo <<16 (negativa = reversa).
+    /// Shuttle speed in fixed-point <<16 (negative = reverse).
     rate_fp: AtomicI64,
     pos_fp: AtomicI64,
     items: Mutex<Arc<Vec<MixItem>>>,
     items_version: AtomicU64,
-    /// RMS del último buffer servido, por canal (bits de f32).
+    /// RMS of the last served buffer, per channel (f32 bits).
     meter_l: AtomicU32,
     meter_r: AtomicU32,
 }
@@ -53,11 +53,11 @@ impl Player {
                 match stream_result {
                     Ok((stream, rate)) => {
                         if stream.play().is_err() {
-                            let _ = tx.send(Err(AudioError::Cpal("stream.play() falló".into())));
+                            let _ = tx.send(Err(AudioError::Cpal("stream.play() failed".into())));
                             return;
                         }
                         let _ = tx.send(Ok(rate));
-                        // mantener vivo el stream para siempre
+                        // keep the stream alive forever
                         let _stream = stream;
                         loop {
                             std::thread::park();
@@ -72,7 +72,7 @@ impl Player {
 
         let device_rate = rx
             .recv()
-            .map_err(|_| AudioError::Cpal("el hilo de audio murió".into()))??;
+            .map_err(|_| AudioError::Cpal("the audio thread died".into()))??;
         Ok(Player { shared, _thread: thread, device_rate })
     }
 
@@ -82,7 +82,7 @@ impl Player {
         self.shared.playing.store(true, Ordering::SeqCst);
     }
 
-    /// Velocidad de shuttle JKL (±0.25..±8). El pitch cambia (sin WSOLA aún).
+    /// JKL shuttle speed (±0.25..±8). Pitch changes (no WSOLA yet).
     pub fn set_rate(&self, rate: f64) {
         let clamped = rate.clamp(-8.0, 8.0);
         self.shared.rate_fp.store((clamped * FP as f64) as i64, Ordering::SeqCst);
@@ -118,7 +118,7 @@ impl Player {
         self.shared.items_version.load(Ordering::SeqCst)
     }
 
-    /// RMS (0..1) por canal del último buffer de audio servido.
+    /// RMS (0..1) per channel of the last served audio buffer.
     pub fn meters(&self) -> (f32, f32) {
         (
             f32::from_bits(self.shared.meter_l.load(Ordering::Relaxed)),
@@ -135,7 +135,7 @@ fn build_stream(shared: Arc<Shared>) -> AudioResult<(cpal::Stream, u32)> {
         .map_err(|e| AudioError::Cpal(e.to_string()))?;
     let rate = config.sample_rate().0;
     let channels = config.channels() as usize;
-    // paso fraccional: cuántos frames fuente (48k) avanza cada frame del dispositivo
+    // fractional step: how many source frames (48k) each device frame advances
     let step_fp = (RATE as i64 * FP) / rate as i64;
 
     let stream = device
@@ -177,7 +177,7 @@ fn build_stream(shared: Arc<Shared>) -> AudioResult<(cpal::Stream, u32)> {
                     shared.meter_r.store(rms_r.to_bits(), Ordering::Relaxed);
                 }
             },
-            |err| eprintln!("[ue-audio] error de stream: {err}"),
+            |err| eprintln!("[ue-audio] stream error: {err}"),
             None,
         )
         .map_err(|e| AudioError::Cpal(e.to_string()))?;

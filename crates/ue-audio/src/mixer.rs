@@ -1,5 +1,5 @@
-//! Mezclador puro: dado un conjunto de items y un frame del timeline, produce
-//! la muestra estéreo mezclada. Sin IO, sin dispositivos: 100% testeable.
+//! Pure mixer: given a set of items and a timeline frame, produces
+//! the mixed stereo sample. No IO, no devices: 100% testable.
 
 use ue_core::keyframe::KeyframeCurve;
 
@@ -8,22 +8,22 @@ use crate::wav::WavMap;
 
 pub struct MixItem {
     pub wav: WavMap,
-    /// Posición del clip en el timeline, en frames de 48 kHz.
+    /// The clip's position on the timeline, in 48 kHz frames.
     pub timeline_start: i64,
-    /// Offset dentro del WAV donde empieza el clip (frames).
+    /// Offset within the WAV where the clip begins (frames).
     pub src_in: i64,
-    /// Duración del clip en frames (de TIMELINE, ya dividida por speed).
+    /// Clip duration in frames (TIMELINE, already divided by speed).
     pub len: i64,
-    /// Velocidad del clip: la fuente se lee a este ritmo. En vivo cambia el
-    /// pitch (remuestreo simple); el export preserva pitch con atempo.
+    /// Clip speed: the source is read at this rate. Live it changes the
+    /// pitch (simple resampling); export preserves pitch with atempo.
     pub speed: f64,
-    /// Ganancia lineal estática (gain_db const del clip + volumen de pista).
+    /// Static linear gain (clip's const gain_db + track volume).
     pub gain: f32,
-    /// Curva de ganancia en dB, tiempos relativos al inicio del clip (µs de
-    /// timeline). Si existe, se multiplica sobre `gain` frame a frame.
+    /// Gain curve in dB, times relative to the clip start (timeline µs).
+    /// If present, it multiplies over `gain` frame by frame.
     pub gain_curve: Option<KeyframeCurve>,
-    /// Balance -1 (todo izquierda) .. 1 (todo derecha): atenúa el canal
-    /// contrario sin tocar el propio (centro = unidad).
+    /// Pan -1 (full left) .. 1 (full right): attenuates the opposite
+    /// channel without touching its own (center = unity).
     pub pan: f32,
     pub fade_in: i64,
     pub fade_out: i64,
@@ -33,7 +33,7 @@ pub fn db_to_linear(db: f64) -> f32 {
     10f64.powf(db / 20.0) as f32
 }
 
-/// Ley de balance: (gan_izq, gan_der) para pan en [-1, 1].
+/// Pan law: (left_gain, right_gain) for pan in [-1, 1].
 #[inline]
 pub fn pan_gains(pan: f32) -> (f32, f32) {
     let p = pan.clamp(-1.0, 1.0);
@@ -60,8 +60,8 @@ impl MixItem {
     }
 }
 
-/// Mezcla la muestra del frame `pos` del timeline. Clamp duro a [-1, 1]
-/// (limiter suave: backlog).
+/// Mixes the sample at timeline frame `pos`. Hard clamp to [-1, 1]
+/// (soft limiter: backlog).
 #[inline]
 pub fn mix_frame(items: &[MixItem], pos: i64) -> (f32, f32) {
     let mut acc = (0.0f32, 0.0f32);
@@ -84,7 +84,7 @@ pub fn mix_frame(items: &[MixItem], pos: i64) -> (f32, f32) {
     (acc.0.clamp(-1.0, 1.0), acc.1.clamp(-1.0, 1.0))
 }
 
-/// Rellena un buffer intercalado estéreo contiguo desde `pos`.
+/// Fills a contiguous interleaved stereo buffer starting at `pos`.
 pub fn fill(items: &[MixItem], pos: i64, out: &mut [f32]) {
     for (i, chunk) in out.chunks_exact_mut(2).enumerate() {
         let (l, r) = mix_frame(items, pos + i as i64);

@@ -1,4 +1,4 @@
-//! Sondeo de archivos con ffprobe (-print_format json).
+//! File probing with ffprobe (-print_format json).
 
 use std::path::Path;
 use std::process::Command;
@@ -106,7 +106,7 @@ pub fn probe(path: &Path) -> MediaResult<(MediaKind, ProbeInfo)> {
         return Err(MediaError::Unsupported(path.display().to_string()));
     };
 
-    // duración: formato → stream de video → stream de audio
+    // duration: format → video stream → audio stream
     let duration_us = parsed
         .format
         .as_ref()
@@ -116,7 +116,7 @@ pub fn probe(path: &Path) -> MediaResult<(MediaKind, ProbeInfo)> {
         .or_else(|| audio.and_then(|s| s.duration.as_deref()).and_then(parse_secs))
         .unwrap_or(0);
 
-    // rotación desde side_data (displaymatrix)
+    // rotation from side_data (displaymatrix)
     let rotation = video
         .and_then(|s| s.side_data_list.as_ref())
         .and_then(|list| {
@@ -126,7 +126,7 @@ pub fn probe(path: &Path) -> MediaResult<(MediaKind, ProbeInfo)> {
         })
         .unwrap_or(0);
 
-    // VFR: avg y r difieren de verdad (no solo por representación)
+    // VFR: avg and r really differ (not just by representation)
     let fps = video.and_then(|s| s.avg_frame_rate.as_deref()).and_then(parse_rate);
     let r_fps = video.and_then(|s| s.r_frame_rate.as_deref()).and_then(parse_rate);
     let vfr = match (fps, r_fps) {

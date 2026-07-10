@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Capacidades de la ventana principal","local":true,"windows":["main"],"permissions":["core:default","dialog:default"]}}
+{"default":{"identifier":"default","description":"Main window capabilities","local":true,"windows":["main"],"permissions":["core:default","dialog:default"]}}

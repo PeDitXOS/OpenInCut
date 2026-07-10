@@ -1,11 +1,11 @@
 {
   "id": "core.solid",
-  "name": "Rectángulo sólido",
+  "name": "Solid rectangle",
   "params": [
     { "key": "color", "label": "Color", "type": "color", "default": "#ff3355" },
-    { "key": "width", "label": "Ancho", "type": "float", "default": 640, "min": 16, "max": 4096 },
-    { "key": "height", "label": "Alto", "type": "float", "default": 360, "min": 16, "max": 4096 }
+    { "key": "width", "label": "Width", "type": "float", "default": 640, "min": 16, "max": 4096 },
+    { "key": "height", "label": "Height", "type": "float", "default": 360, "min": 16, "max": 4096 }
   ],
   "source": "color=c={color}:s={width}x{height}:r={fps}:d={d}",
-  "notes": "Posición/escala/rotación/opacidad se controlan con la Transformación del clip."
+  "notes": "Position/scale/rotation/opacity are controlled by the clip's Transform."
 }

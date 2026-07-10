@@ -1,4 +1,4 @@
-//! Construcción de la línea de comandos de ffmpeg (inputs + filter_complex).
+//! Building the ffmpeg command line (inputs + filter_complex).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -23,27 +23,27 @@ fn resolve_path(base: &Path, p: &str) -> PathBuf {
     if path.is_absolute() { path.to_path_buf() } else { base.join(path) }
 }
 
-/// Clip audible: cualquier clip media (en pista de audio o video) cuyo asset
-/// tenga audio, sin mute de clip ni de pista.
+/// Audible clip: any media clip (on an audio or video track) whose asset
+/// has audio, with no clip or track mute.
 struct AudioItem {
     asset_id: Id,
     src_in: TimeUs,
     src_out: TimeUs,
     start: TimeUs,
     speed: f64,
-    /// Parte estática (const del clip + volumen de pista).
+    /// Static part (clip const + track volume).
     gain_db: f64,
-    /// Curva de ganancia en dB (tiempos relativos al inicio del clip).
+    /// Gain curve in dB (times relative to the clip start).
     gain_curve: Option<ue_core::keyframe::KeyframeCurve>,
-    /// Balance -1..1 (misma ley que el mezclador en vivo).
+    /// Balance -1..1 (same law as the live mixer).
     pan: f64,
     fade_in_us: TimeUs,
     fade_out_us: TimeUs,
 }
 
-/// Expresión del filtro `volume` (eval=frame) para una curva de dB: tramos
-/// Hold/Linear exactos; Smooth se linealiza entre keys (v0). `t` arranca en 0
-/// al inicio del clip (post atrim+asetpts+atempo). `offset_db` = pista + const.
+/// `volume` filter expression (eval=frame) for a dB curve: exact Hold/Linear
+/// segments; Smooth is linearized between keys (v0). `t` starts at 0 at the
+/// clip start (post atrim+asetpts+atempo). `offset_db` = track + const.
 fn volume_expr(curve: &ue_core::keyframe::KeyframeCurve, offset_db: f64) -> String {
     use ue_core::keyframe::Interp;
     let keys = &curve.keys;
@@ -52,7 +52,7 @@ fn volume_expr(curve: &ue_core::keyframe::KeyframeCurve, offset_db: f64) -> Stri
     }
     let lin = |db: f64| format!("pow(10,{:.4}/20)", db + offset_db);
     let ts = |us: TimeUs| format!("{:.6}", us as f64 / 1_000_000.0);
-    // de dentro hacia fuera: valor tras el último key
+    // from the inside out: value after the last key
     let mut expr = lin(keys[keys.len() - 1].value);
     for i in (0..keys.len().saturating_sub(1)).rev() {
         let (k0, k1) = (&keys[i], &keys[i + 1]);
@@ -71,8 +71,8 @@ fn volume_expr(curve: &ue_core::keyframe::KeyframeCurve, offset_db: f64) -> Stri
     format!("if(lt(t,{}),{},{expr})", ts(keys[0].t), lin(keys[0].value))
 }
 
-/// Cadena atempo (preserva el pitch). atempo acepta 0.5–2 por instancia:
-/// se encadenan varias para factores extremos.
+/// atempo chain (preserves pitch). atempo accepts 0.5–2 per instance:
+/// several are chained for extreme factors.
 fn atempo_chain(speed: f64) -> String {
     let mut parts: Vec<String> = vec![];
     let mut rest = speed;
@@ -129,15 +129,15 @@ fn collect_audio(project: &Project, sequence_id: Id) -> Vec<AudioItem> {
     items
 }
 
-/// Escapado para el valor text='…' de drawtext dentro de un filter_complex.
+/// Escaping for drawtext's text='…' value inside a filter_complex.
 fn escape_drawtext(text: &str) -> String {
     text.replace('\\', "\\\\\\\\")
-        .replace('\'', "\u{2019}") // comilla tipográfica: evita el infierno de quoting
+        .replace('\'', "\u{2019}") // typographic apostrophe: avoids quoting hell
         .replace(':', "\\:")
         .replace('%', "\\%")
 }
 
-/// Base de datos de fuentes del sistema (se carga una vez).
+/// System font database (loaded once).
 fn font_db() -> &'static fontdb::Database {
     static DB: std::sync::OnceLock<fontdb::Database> = std::sync::OnceLock::new();
     DB.get_or_init(|| {
@@ -147,7 +147,7 @@ fn font_db() -> &'static fontdb::Database {
     })
 }
 
-/// Fuentes del sistema disponibles: (familia, ruta) únicas y ordenadas.
+/// Available system fonts: unique, sorted (family, path).
 pub fn list_system_fonts() -> Vec<(String, String)> {
     let mut out: std::collections::BTreeMap<String, String> = Default::default();
     let db = font_db();
@@ -161,7 +161,7 @@ pub fn list_system_fonts() -> Vec<(String, String)> {
     out.into_iter().collect()
 }
 
-/// Resuelve una familia a su fontfile; None si no está.
+/// Resolves a family to its fontfile; None if not found.
 pub fn resolve_font_family(family: &str) -> Option<String> {
     let db = font_db();
     let query = fontdb::Query {
@@ -176,8 +176,8 @@ pub fn resolve_font_family(family: &str) -> Option<String> {
     }
 }
 
-/// Primera fuente del sistema disponible para drawtext (fontfile);
-/// si no hay ninguna, se confía en fontconfig (font=sans).
+/// First available system font for drawtext (fontfile);
+/// if none exist, we rely on fontconfig (font=sans).
 pub fn find_font() -> Option<&'static str> {
     const CANDIDATES: &[&str] = &[
         "/System/Library/Fonts/Supplemental/Arial.ttf",
@@ -189,15 +189,15 @@ pub fn find_font() -> Option<&'static str> {
     CANDIDATES.iter().copied().find(|p| Path::new(p).exists())
 }
 
-/// Un drawtext con estilo del proyecto, activo en [from, to) del timeline.
-/// fontfile del estilo (familia resuelta con fontdb) o el fallback global.
+/// A drawtext with the project's style, active in [from, to) of the timeline.
+/// The style's fontfile (family resolved with fontdb) or the global fallback.
 fn font_part_for(style: &ue_core::model::TextStyle, fallback: &str) -> String {
     resolve_font_family(&style.font)
         .map(|f| format!("fontfile={f}"))
         .unwrap_or_else(|| fallback.to_string())
 }
 
-/// Expresión x de drawtext según alineación y offset X del estilo.
+/// drawtext x expression based on the style's alignment and X offset.
 fn x_expr_for(style: &ue_core::model::TextStyle, scale: f64) -> String {
     use ue_core::model::TextAlign;
     let x_off = (style.x_offset as f64 * scale).round() as i64;
@@ -233,7 +233,7 @@ fn drawtext_for(
     )
 }
 
-/// drawtext con expresión x explícita (karaoke: posiciones precalculadas).
+/// drawtext with an explicit x expression (karaoke: precomputed positions).
 #[allow(clippy::too_many_arguments)]
 fn drawtext_at(
     font_part: &str,
@@ -257,7 +257,7 @@ fn drawtext_at(
     )
 }
 
-/// Ancho en px de `text` con la fuente `path` a tamaño `px` (suma de avances).
+/// Width in px of `text` with font `path` at size `px` (sum of advances).
 fn measure_text_px(path: &str, text: &str, px: f64) -> Option<f64> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
@@ -280,13 +280,13 @@ fn measure_text_px(path: &str, text: &str, px: f64) -> Option<f64> {
     for c in text.chars() {
         units += match face.glyph_index(c).and_then(|g| face.glyph_hor_advance(g)) {
             Some(adv) => adv as f64,
-            None => upem * 0.5, // glifo desconocido: media em
+            None => upem * 0.5, // unknown glyph: half em
         };
     }
     Some(units / upem * px)
 }
 
-/// Tiempo de asset → timeline via el primer clip media que lo contiene.
+/// Asset time → timeline via the first media clip that contains it.
 fn asset_time_to_timeline(
     seq: &ue_core::model::Sequence,
     asset_id: Id,
@@ -305,7 +305,7 @@ fn asset_time_to_timeline(
     None
 }
 
-/// Plan de export SOLO AUDIO (.m4a): mezcla las cadenas de audio sin video.
+/// AUDIO-ONLY export plan (.m4a): mixes the audio chains without video.
 fn build_audio_only_args(
     project: &Project,
     sequence_id: Id,
@@ -327,7 +327,7 @@ fn build_audio_only_args(
     let mut inputs: Vec<PathBuf> = vec![];
     let mut input_of = |asset_id: Id, project: &Project| -> usize {
         *input_index.entry(asset_id).or_insert_with(|| {
-            let asset = project.asset(asset_id).expect("validado al coleccionar");
+            let asset = project.asset(asset_id).expect("validated when collecting");
             inputs.push(resolve_path(base_dir, &asset.path));
             inputs.len() - 1
         })
@@ -426,9 +426,9 @@ fn build_audio_only_args(
     Ok(FfmpegPlan { args, duration_us })
 }
 
-/// Karaoke: por segmento, cada palabra en color tenue durante toda la frase y
-/// en color resaltado desde que se pronuncia hasta el final del segmento.
-/// None si no hay fontfile medible (el caller cae al modo palabra).
+/// Karaoke: per segment, each word in a dim color for the whole phrase and
+/// in a highlighted color from when it is spoken until the end of the segment.
+/// None if there is no measurable fontfile (the caller falls back to word mode).
 fn karaoke_overlays(
     seq: &ue_core::model::Sequence,
     doc: &ue_core::model::TranscriptDoc,
@@ -463,7 +463,7 @@ fn karaoke_overlays(
         if words.is_empty() {
             continue;
         }
-        // ventana del segmento en el timeline, recortada al clip
+        // segment window on the timeline, clamped to the clip
         let Some(seg_tl) = asset_time_to_timeline(seq, doc.asset_id, seg.start_us) else {
             continue;
         };
@@ -472,7 +472,7 @@ fn karaoke_overlays(
         if seg_to <= seg_from {
             continue;
         }
-        // layout de la línea: anchos por palabra + espacios
+        // line layout: per-word widths + spaces
         let widths: Vec<f64> = words
             .iter()
             .map(|w| measure_text_px(&font_path, &w.text, px).unwrap_or(px * 0.5))
@@ -485,12 +485,12 @@ fn karaoke_overlays(
             let word_tl = asset_time_to_timeline(seq, doc.asset_id, w.start_us)
                 .unwrap_or(seg_tl)
                 .max(clip.start);
-            // capa tenue (toda la frase visible durante el segmento)
+            // dim layer (whole phrase visible during the segment)
             out.push(drawtext_at(
                 &font_part, &w.text, fontsize, &base_color, &x_expr, y_off, scale, seg_from,
                 seg_to,
             ));
-            // capa resaltada (desde que suena la palabra)
+            // highlighted layer (from when the word plays)
             out.push(drawtext_at(
                 &font_part, &w.text, fontsize, &hi_color, &x_expr, y_off, scale,
                 word_tl.min(seg_to), seg_to,
@@ -501,8 +501,8 @@ fn karaoke_overlays(
     Some(out)
 }
 
-/// Cadena drawtext para títulos y subtítulos automáticos de la secuencia.
-/// El tamaño/offset del estilo está referido a 1080p y se escala a `out_h`.
+/// drawtext chain for the sequence's titles and automatic subtitles.
+/// The style's size/offset is referenced to 1080p and scaled to `out_h`.
 fn build_text_overlays(
     project: &Project,
     seq: &ue_core::model::Sequence,
@@ -538,8 +538,8 @@ fn build_text_overlays(
                         continue;
                     };
                     use ue_core::model::SubtitleMode;
-                    // karaoke: frase completa con la palabra actual resaltada
-                    // (relleno progresivo); necesita métricas de la fuente
+                    // karaoke: full phrase with the current word highlighted
+                    // (progressive fill); needs font metrics
                     if *mode == SubtitleMode::Karaoke {
                         if let Some(chains) =
                             karaoke_overlays(seq, doc, clip, style, &font_part, scale)
@@ -547,10 +547,10 @@ fn build_text_overlays(
                             parts.extend(chains);
                             continue;
                         }
-                        // sin métricas → cae al modo palabra
+                        // no metrics → falls back to word mode
                     }
-                    // modo frase: una línea por segmento; modo palabra:
-                    // una palabra grande cada vez (estilo shorts)
+                    // phrase mode: one line per segment; word mode:
+                    // one big word at a time (shorts style)
                     let items: Vec<(&str, i64, i64)> = match mode {
                         SubtitleMode::Phrase => doc
                             .segments
@@ -566,7 +566,7 @@ fn build_text_overlays(
                     };
                     let word_scale = match mode {
                         SubtitleMode::Phrase => 1.0,
-                        _ => 1.6, // palabras sueltas más grandes
+                        _ => 1.6, // single words larger
                     };
                     let mut wstyle = style.clone();
                     wstyle.size *= word_scale as f32;
@@ -576,7 +576,7 @@ fn build_text_overlays(
                         }
                         let Some(tl_start) = asset_time_to_timeline(seq, doc.asset_id, s_us)
                         else {
-                            continue; // ese trozo del asset no está en el timeline
+                            continue; // that slice of the asset is not on the timeline
                         };
                         let tl_end = tl_start + (e_us - s_us);
                         let from = tl_start.max(clip.start);
@@ -598,18 +598,18 @@ fn build_text_overlays(
     }
 }
 
-/// Tipos de transición soportados (id nuestro → transition de xfade).
+/// Supported transition kinds (our id → xfade transition).
 pub const TRANSITION_KINDS: &[(&str, &str, &str)] = &[
-    ("core.crossfade", "fade", "Fundido cruzado"),
-    ("core.wipeleft", "wipeleft", "Barrido ←"),
-    ("core.wiperight", "wiperight", "Barrido →"),
-    ("core.slideleft", "slideleft", "Deslizar ←"),
-    ("core.slideright", "slideright", "Deslizar →"),
-    ("core.slideup", "slideup", "Deslizar ↑"),
-    ("core.circleopen", "circleopen", "Círculo abrir"),
-    ("core.circleclose", "circleclose", "Círculo cerrar"),
-    ("core.dissolve", "dissolve", "Disolver"),
-    ("core.pixelize", "pixelize", "Pixelar"),
+    ("core.crossfade", "fade", "Cross fade"),
+    ("core.wipeleft", "wipeleft", "Wipe ←"),
+    ("core.wiperight", "wiperight", "Wipe →"),
+    ("core.slideleft", "slideleft", "Slide ←"),
+    ("core.slideright", "slideright", "Slide →"),
+    ("core.slideup", "slideup", "Slide ↑"),
+    ("core.circleopen", "circleopen", "Circle open"),
+    ("core.circleclose", "circleclose", "Circle close"),
+    ("core.dissolve", "dissolve", "Dissolve"),
+    ("core.pixelize", "pixelize", "Pixelize"),
     ("core.radial", "radial", "Radial"),
 ];
 
@@ -621,14 +621,14 @@ fn xfade_kind(effect_id: &str) -> &'static str {
         .unwrap_or("fade")
 }
 
-/// Escapado del filename del filtro movie (dentro de filter_complex).
+/// Escaping the movie filter's filename (inside filter_complex).
 fn escape_movie_path(p: &str) -> String {
     p.replace('\\', "/").replace(':', "\\\\:").replace('\'', "\\\\'")
 }
 
-/// Tramos (emoción, from, to) de un clip Avatar: los segmentos del transcript
-/// mapeados al timeline, con los huecos rellenos con la emoción por defecto
-/// (comportamiento de avatar_video_generation.py del toolkit).
+/// Spans (emotion, from, to) of an Avatar clip: the transcript segments
+/// mapped to the timeline, with gaps filled with the default emotion
+/// (behavior of the toolkit's avatar_video_generation.py).
 fn avatar_spans(
     project: &Project,
     seq: &ue_core::model::Sequence,
@@ -666,7 +666,7 @@ fn avatar_spans(
     spans
 }
 
-/// Cadenas movie+overlay para los clips Avatar. Devuelve (cadenas, etiqueta final).
+/// movie+overlay chains for Avatar clips. Returns (chains, final label).
 fn build_avatar_overlays(
     project: &Project,
     seq: &ue_core::model::Sequence,
@@ -686,7 +686,7 @@ fn build_avatar_overlays(
                 continue;
             };
             let Some(default_emotion) = avatars.keys().next().cloned() else { continue };
-            // ancho del avatar en px (par)
+            // avatar width in px (even)
             let aw = (((out_w as f64) * scale.clamp(0.05, 1.0)) as u32) & !1;
             let margin = 24;
             let base_x = out_w as i64 - aw as i64 - margin;
@@ -706,7 +706,7 @@ fn build_avatar_overlays(
                     if p.is_absolute() { p.to_path_buf() } else { base_dir.join(p) }
                 };
                 if !abs.exists() {
-                    continue; // avatar faltante: se omite ese tramo sin romper
+                    continue; // missing avatar: skip that span without breaking
                 }
                 let amp = (shake_factor * vol_ratio * 8.0).round();
                 let av = format!("av{n}");
@@ -746,8 +746,8 @@ pub fn build_ffmpeg_args(
         return build_audio_only_args(project, sequence_id, base_dir, output, settings);
     }
 
-    // MULTICAPA: la pista de video más baja (base) manda en la EDL; los clips
-    // media de pistas superiores se componen encima con overlay (+opacidad).
+    // MULTI-LAYER: the lowest video track (base) drives the EDL; media clips
+    // on upper tracks are composited on top with overlay (+opacity).
     let video_tracks: Vec<&ue_core::model::Track> = seq
         .tracks
         .iter()
@@ -769,7 +769,7 @@ pub fn build_ffmpeg_args(
     let mut layer_clips: Vec<LayerClip> = vec![];
     for track in video_tracks.iter().skip(1) {
         for clip in &track.clips {
-            // las capas corren en tiempo de timeline: t relativo al clip
+            // layers run in timeline time: t relative to the clip
             let tvar = format!("(t-{})", secs(clip.start));
             let vf = || {
                 ue_render::clip_vf_layer(
@@ -822,7 +822,7 @@ pub fn build_ffmpeg_args(
     }
     let multilayer = !layer_clips.is_empty();
     let edl = if multilayer {
-        // EDL solo con la pista base: silenciar (visualmente) las superiores
+        // EDL with only the base track: (visually) mute the upper ones
         let mut base_project = project.clone();
         if let Some(s) = base_project.sequence_mut(sequence_id) {
             let mut seen_base = false;
@@ -840,7 +840,7 @@ pub fn build_ffmpeg_args(
         build_video_edl_with(project, sequence_id, &settings.extra_packs)?
     };
     let base_dur = edl_duration(&edl);
-    // el master dura hasta el final de la capa más larga
+    // the master lasts until the end of the longest layer
     let layers_end = layer_clips.iter().map(|l| l.start + l.out_dur).max().unwrap_or(0);
     let total_us = base_dur.max(layers_end);
     let audio_items = collect_audio(project, sequence_id);
@@ -854,18 +854,18 @@ pub fn build_ffmpeg_args(
     }
     let fps = format!("{}/{}", seq.fps.0, seq.fps.1);
 
-    // inputs únicos por asset
+    // unique inputs per asset
     let mut input_index: BTreeMap<Id, usize> = BTreeMap::new();
     let mut inputs: Vec<PathBuf> = vec![];
     let mut input_of = |asset_id: Id, project: &Project| -> usize {
         *input_index.entry(asset_id).or_insert_with(|| {
-            let asset = project.asset(asset_id).expect("validado en la EDL");
+            let asset = project.asset(asset_id).expect("validated in the EDL");
             inputs.push(resolve_path(base_dir, &asset.path));
             inputs.len() - 1
         })
     };
 
-    // ---- cadenas de video ----
+    // ---- video chains ----
     let mut fc: Vec<String> = vec![];
     let norm = format!(
         "fps={fps},scale={out_w}:{out_h}:force_original_aspect_ratio=decrease,\
@@ -907,7 +907,7 @@ pub fn build_ffmpeg_args(
         }
     }
 
-    // Combinación secuencial: concat en cortes duros, xfade en transiciones.
+    // Sequential combination: concat on hard cuts, xfade on transitions.
     let mut current = "v0".to_string();
     let mut acc_dur = edl[0].duration();
     for (k, seg) in edl.iter().enumerate().skip(1) {
@@ -936,7 +936,7 @@ pub fn build_ffmpeg_args(
         }
         current = out_label;
     }
-    // si las capas duran más que la base, extender la base con negro
+    // if the layers last longer than the base, extend the base with black
     if multilayer && layers_end > base_dur {
         fc.push(format!(
             "color=black:size={out_w}x{out_h}:rate={fps}:duration={}[basetail]",
@@ -946,17 +946,17 @@ pub fn build_ffmpeg_args(
         current = "basefull".to_string();
     }
 
-    // ---- capas superiores: overlay en orden de pista (de abajo hacia arriba) ----
+    // ---- upper layers: overlay in track order (bottom to top) ----
     for (k, layer) in layer_clips.iter().enumerate() {
         let effects = match &layer.vf {
             Some(chain) => format!("{chain},"),
             None => String::new(),
         };
-        // el lienzo de la secuencia puede ser mayor que el archivo: limitar al canvas
+        // the sequence canvas may be larger than the file: clamp to the canvas
         let fit = format!(
             "scale='min({out_w},iw)':'min({out_h},ih)':force_original_aspect_ratio=decrease"
         );
-        // la opacidad (estática o animada) ya viene aplicada en el vf del clip
+        // opacity (static or animated) is already applied in the clip's vf
         let alpha = "format=rgba,".to_string();
         let start = layer.start;
         match &layer.src {
@@ -985,25 +985,25 @@ pub fn build_ffmpeg_args(
         current = out_label;
     }
     if multilayer {
-        // aplanar alpha acumulada antes de texto/avatares
+        // flatten accumulated alpha before text/avatars
         fc.push(format!("[{current}]format=yuv420p[flat]"));
         current = "flat".to_string();
     }
 
-    // avatares reactivos (movie+overlay por segmento)
+    // reactive avatars (movie+overlay per segment)
     let (avatar_chains, after_avatars) =
         build_avatar_overlays(project, seq, base_dir, &current, out_w);
     fc.extend(avatar_chains);
     current = after_avatars;
 
-    // quemar títulos y subtítulos sobre el video combinado
+    // burn titles and subtitles onto the combined video
     let text_chain = build_text_overlays(project, seq, out_h);
     match text_chain {
         Some(chain) => fc.push(format!("[{current}]{chain}[vout]")),
         None => fc.push(format!("[{current}]null[vout]")),
     }
 
-    // ---- cadenas de audio (el GIF no lleva) ----
+    // ---- audio chains (the GIF has none) ----
     let is_gif = settings.format == crate::ExportFormat::Gif;
     let mut alabels: Vec<String> = vec![];
     for (k, item) in audio_items.iter().enumerate().filter(|_| !is_gif) {
@@ -1057,7 +1057,7 @@ pub fn build_ffmpeg_args(
     let has_audio = !alabels.is_empty();
     if has_audio {
         let master = if settings.loudnorm {
-            // R128 una pasada (streaming): -14 LUFS estilo YouTube
+            // R128 single pass (streaming): -14 LUFS YouTube style
             ",loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000".to_string()
         } else {
             String::new()
@@ -1071,7 +1071,7 @@ pub fn build_ffmpeg_args(
         ));
     }
 
-    // ---- rango I-O: recortar el máster ya compuesto ----
+    // ---- I-O range: trim the already-composited master ----
     let mut vlabel = "[vout]".to_string();
     let mut alabel = "[aout]".to_string();
     let mut duration_us = total_us;
@@ -1097,7 +1097,7 @@ pub fn build_ffmpeg_args(
         }
     }
 
-    // ---- GIF: paleta optimizada sobre el máster ya recortado ----
+    // ---- GIF: optimized palette over the already-trimmed master ----
     if is_gif {
         fc.push(format!(
             "{vlabel}fps=12,scale='min(480,iw)':-2:flags=lanczos,split[gifa][gifb];\
@@ -1107,7 +1107,7 @@ pub fn build_ffmpeg_args(
         vlabel = "[gifout]".into();
     }
 
-    // ---- línea de comandos ----
+    // ---- command line ----
     let mut args: Vec<String> = vec!["-y".into(), "-v".into(), "error".into()];
     for input in &inputs {
         args.push("-i".into());

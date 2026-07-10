@@ -1,4 +1,4 @@
-//! Tests del dispatcher MCP (handle_rpc es puro sobre AppState: sin HTTP).
+//! MCP dispatcher tests (handle_rpc is pure over AppState: no HTTP).
 
 use serde_json::{json, Value};
 use ue_core::model::*;
@@ -10,15 +10,15 @@ const SEC: i64 = 1_000_000;
 
 fn rpc(state: &AppState, method: &str, params: Value) -> Value {
     let req = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
-    handle_rpc(state, &req).expect("con id siempre hay respuesta")
+    handle_rpc(state, &req).expect("with an id there is always a response")
 }
 
-/// Texto del primer content de un tool result, parseado como JSON.
+/// Text of the first content of a tool result, parsed as JSON.
 fn tool_json(resp: &Value) -> Value {
     let text = resp
         .pointer("/result/content/0/text")
         .and_then(|v| v.as_str())
-        .expect("tool result con texto");
+        .expect("tool result with text");
     serde_json::from_str(text).unwrap_or(Value::String(text.to_string()))
 }
 
@@ -77,15 +77,15 @@ fn initialize_and_tools_list() {
 
     let tools = rpc(&state, "tools/list", json!({}));
     let list = tools.pointer("/result/tools").unwrap().as_array().unwrap();
-    assert!(list.len() >= 10, "hay al menos 10 herramientas, fueron {}", list.len());
+    assert!(list.len() >= 10, "at least 10 tools, got {}", list.len());
     assert!(list.iter().any(|t| t["name"] == "split_clip"));
 
-    // notificación → sin respuesta
+    // notification → no response
     let note = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
     assert!(handle_rpc(&state, &note).is_none());
 
-    // método desconocido → error JSON-RPC
-    let err = rpc(&state, "no/existe", json!({}));
+    // unknown method → JSON-RPC error
+    let err = rpc(&state, "no/such/method", json!({}));
     assert_eq!(err.pointer("/error/code").unwrap(), -32601);
 }
 
@@ -122,7 +122,7 @@ fn split_edit_and_undo_via_mcp() {
         let store = state.store.lock().unwrap();
         let seq = store.project.sequence(store.project.active_sequence).unwrap();
         let total: usize = seq.tracks.iter().map(|t| t.clips.len()).sum();
-        assert_eq!(total, 2, "el split via MCP partió el clip");
+        assert_eq!(total, 2, "the split via MCP split the clip");
     }
 
     let resp = rpc(&state, "tools/call", json!({ "name": "undo", "arguments": {} }));
@@ -131,20 +131,20 @@ fn split_edit_and_undo_via_mcp() {
         let store = state.store.lock().unwrap();
         let seq = store.project.sequence(store.project.active_sequence).unwrap();
         let total: usize = seq.tracks.iter().map(|t| t.clips.len()).sum();
-        assert_eq!(total, 1, "undo via MCP restauró el clip");
+        assert_eq!(total, 1, "undo via MCP restored the clip");
     }
 
-    // errores de herramienta van como isError, no como error JSON-RPC
+    // tool errors come as isError, not as a JSON-RPC error
     let resp = rpc(
         &state,
         "tools/call",
-        json!({ "name": "split_clip", "arguments": { "clip_id": "no-es-un-id", "t_us": 1 } }),
+        json!({ "name": "split_clip", "arguments": { "clip_id": "not-an-id", "t_us": 1 } }),
     );
     assert_eq!(resp.pointer("/result/isError").unwrap(), true);
 }
 
-/// remove_silences de punta a punta: video con tono-silencio-tono real,
-/// conformado incluido. Verifica cortes y duración final.
+/// remove_silences end to end: video with real tone-silence-tone,
+/// conform included. Verifies cuts and final duration.
 #[test]
 fn remove_silences_via_mcp_cuts_the_gap() {
     let ff_ok = std::process::Command::new(ue_media::ffmpeg_bin())
@@ -153,13 +153,13 @@ fn remove_silences_via_mcp_cuts_the_gap() {
         .map(|o| o.status.success())
         .unwrap_or(false);
     if !ff_ok {
-        eprintln!("AVISO: sin ffmpeg; test saltado");
+        eprintln!("NOTE: no ffmpeg; test skipped");
         return;
     }
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-mcp-media");
     std::fs::create_dir_all(&dir).unwrap();
-    let src = dir.join("tono_silencio_tono.mp4");
-    // 2s tono + 2s silencio + 2s tono, con video de color
+    let src = dir.join("tone_silence_tone.mp4");
+    // 2s tone + 2s silence + 2s tone, with a color video
     let st = std::process::Command::new(ue_media::ffmpeg_bin())
         .args([
             "-y", "-v", "error",
@@ -179,7 +179,7 @@ fn remove_silences_via_mcp_cuts_the_gap() {
     {
         let mut store = state.store.lock().unwrap();
         let mut asset = ue_media::import_file(&src).unwrap();
-        // conformar el audio a mano (en la app lo hace el job de import)
+        // conform the audio by hand (in the app the import job does it)
         let conform = dir.join("conform.wav");
         ue_media::conform_audio(&src, &conform).unwrap();
         asset.audio_conform = Some(conform.to_string_lossy().into_owned());
@@ -205,19 +205,19 @@ fn remove_silences_via_mcp_cuts_the_gap() {
         json!({ "name": "remove_silences", "arguments": { "clip_id": clip_id.to_string() } }),
     );
     let result = tool_json(&resp);
-    assert_eq!(result["removed"], 1, "un silencio central: {result}");
+    assert_eq!(result["removed"], 1, "one central silence: {result}");
     let removed_us = result["removed_us"].as_i64().unwrap();
-    assert!((1_200_000..=2_200_000).contains(&removed_us), "≈2 s menos padding: {removed_us}");
+    assert!((1_200_000..=2_200_000).contains(&removed_us), "≈2 s minus padding: {removed_us}");
 
     let store = state.store.lock().unwrap();
     let seq = store.project.sequence(store.project.active_sequence).unwrap();
     let dur = seq.duration_us();
-    assert!((3_800_000..=4_900_000).contains(&dur), "duración final ≈ 6s - silencio: {dur}");
+    assert!((3_800_000..=4_900_000).contains(&dur), "final duration ≈ 6s - silence: {dur}");
     let clips: usize = seq.tracks.iter().map(|t| t.clips.len()).sum();
-    assert_eq!(clips, 2, "el clip quedó partido en dos alrededor del silencio");
+    assert_eq!(clips, 2, "the clip ended up split in two around the silence");
 }
 
-/// El desenlace rompe el grupo entero y es deshacible.
+/// Unlinking breaks the whole group and is undoable.
 #[test]
 fn unlink_breaks_group_with_undo() {
     let state = AppState::new_default();
@@ -261,7 +261,7 @@ fn unlink_breaks_group_with_undo() {
         store.insert_clip(vt, vc, InsertMode::Strict).unwrap();
         store.insert_clip(at, ac, InsertMode::Strict).unwrap();
     }
-    // desenlazar via las mismas acciones que usa el comando
+    // unlink via the same actions the command uses
     {
         let mut store = state.store.lock().unwrap();
         let members = ue_core::ops::linked_ids(&store.project, v_id);
@@ -270,21 +270,21 @@ fn unlink_breaks_group_with_undo() {
             .into_iter()
             .map(|clip_id| ue_core::Action::SetClipGroup { clip_id, group: None })
             .collect();
-        store.dispatch("Desenlazar clips", actions).unwrap();
-        assert_eq!(ue_core::ops::linked_ids(&store.project, v_id).len(), 1, "grupo roto");
+        store.dispatch("Unlink clips", actions).unwrap();
+        assert_eq!(ue_core::ops::linked_ids(&store.project, v_id).len(), 1, "group broken");
         store.undo().unwrap();
-        assert_eq!(ue_core::ops::linked_ids(&store.project, v_id).len(), 2, "undo re-enlaza");
+        assert_eq!(ue_core::ops::linked_ids(&store.project, v_id).len(), 2, "undo re-links");
     }
 }
 
-/// Portabilidad: guardar relativiza las rutas y limpia cachés; abrir resuelve
-/// contra la carpeta del proyecto y marca offline lo que no existe.
+/// Portability: saving relativizes the paths and clears caches; opening resolves
+/// against the project folder and marks offline what doesn't exist.
 #[test]
 fn portable_project_roundtrip() {
     use ue_tauri_lib::{make_portable, resolve_project_paths};
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-portable");
     std::fs::create_dir_all(dir.join("media")).unwrap();
-    let real = dir.join("media/existe.mp4");
+    let real = dir.join("media/exists.mp4");
     std::fs::write(&real, b"fake").unwrap();
 
     let mut project = ue_core::model::Project::new("portable");
@@ -312,28 +312,28 @@ fn portable_project_roundtrip() {
         offline: false,
     };
     project.assets.push(mk(real.to_string_lossy().into_owned()));
-    project.assets.push(mk("/no/existe/fuera.mp4".into()));
+    project.assets.push(mk("/nonexistent/outside.mp4".into()));
 
     let portable = make_portable(&project, Some(&dir));
-    assert_eq!(portable.assets[0].path, "media/existe.mp4", "bajo el proyecto → relativa");
-    assert_eq!(portable.assets[1].path, "/no/existe/fuera.mp4", "fuera → absoluta");
-    assert!(portable.assets[0].audio_conform.is_none(), "cachés no viajan");
+    assert_eq!(portable.assets[0].path, "media/exists.mp4", "under the project → relative");
+    assert_eq!(portable.assets[1].path, "/nonexistent/outside.mp4", "outside → absolute");
+    assert!(portable.assets[0].audio_conform.is_none(), "caches don't travel");
 
     let mut reopened = portable.clone();
     resolve_project_paths(&mut reopened, Some(&dir));
-    assert_eq!(reopened.assets[0].path, real.to_string_lossy(), "resuelta a absoluta");
-    assert!(!reopened.assets[0].offline, "existe → online");
-    assert!(reopened.assets[1].offline, "no existe → offline");
+    assert_eq!(reopened.assets[0].path, real.to_string_lossy(), "resolved to absolute");
+    assert!(!reopened.assets[0].offline, "exists → online");
+    assert!(reopened.assets[1].offline, "doesn't exist → offline");
 }
 
-/// El sufijo de avatar del stream agrupa por emoción y traduce las ventanas
-/// al dominio t de la sesión (timeline = tl0 + t/speed).
+/// The stream avatar suffix groups by emotion and translates the windows
+/// to the session's t domain (timeline = tl0 + t/speed).
 #[test]
 fn avatar_stream_suffix_groups_by_emotion_and_maps_time() {
     use ue_core::model::*;
     use ue_core::ops::InsertMode;
 
-    // dos "videos" de avatar en disco (basta con que existan)
+    // two avatar "videos" on disk (it's enough that they exist)
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-avatar-stream");
     std::fs::create_dir_all(&dir).unwrap();
     let calm = dir.join("calm.mp4");
@@ -343,7 +343,7 @@ fn avatar_stream_suffix_groups_by_emotion_and_maps_time() {
 
     let mut project = Project::new("avatar-stream");
     let seq_id = project.active_sequence;
-    // asset conductor ficticio + clip media que lo pone en el timeline 0..10s
+    // fictitious driver asset + media clip that places it on the timeline 0..10s
     let asset = MediaAsset {
         id: Id::new(),
         kind: MediaKind::Video,
@@ -378,7 +378,7 @@ fn avatar_stream_suffix_groups_by_emotion_and_maps_time() {
         words: vec![],
         segments: vec![
             Segment {
-                text: "tranquilo".into(),
+                text: "calm".into(),
                 start_us: 1_000_000,
                 end_us: 3_000_000,
                 word_range: (0, 0),
@@ -386,7 +386,7 @@ fn avatar_stream_suffix_groups_by_emotion_and_maps_time() {
                 volume_rms: 0.0,
             },
             Segment {
-                text: "furioso".into(),
+                text: "furious".into(),
                 start_us: 3_000_000,
                 end_us: 5_000_000,
                 word_range: (0, 0),
@@ -440,27 +440,27 @@ fn avatar_stream_suffix_groups_by_emotion_and_maps_time() {
         .unwrap();
     store.insert_clip(v2, av_clip, InsertMode::Strict).unwrap();
 
-    // forma canónica (tl0=0, speed=1): ventanas absolutas de timeline
+    // canonical form (tl0=0, speed=1): absolute timeline windows
     let canonical =
         ue_tauri_lib::avatar_vf_stream_suffix(&store.project, seq_id, 0, 1.0, 960).unwrap();
-    // una sola instancia de movie por emoción (2), no por segmento
+    // a single movie instance per emotion (2), not per segment
     assert_eq!(canonical.matches("movie=").count(), 2, "{canonical}");
     assert!(canonical.contains("between(t,1.0000,3.0000)"), "{canonical}");
     assert!(canonical.contains("between(t,3.0000,5.0000)"), "{canonical}");
-    // la emoción default (calm, primera) rellena los huecos 0-1 y 5-10
+    // the default emotion (calm, first) fills the gaps 0-1 and 5-10
     assert!(canonical.contains("between(t,0.0000,1.0000)"), "{canonical}");
     assert!(canonical.contains("between(t,5.0000,10.0000)"), "{canonical}");
 
-    // sesión abierta en tl0=2s a velocidad 2×: ventana [3,5] → [2,6] en t
+    // session opened at tl0=2s at 2× speed: window [3,5] → [2,6] in t
     let open =
         ue_tauri_lib::avatar_vf_stream_suffix(&store.project, seq_id, 2_000_000, 2.0, 960).unwrap();
     assert!(open.contains("between(t,2.0000,6.0000)"), "{open}");
-    // la ventana [1,3] queda [0,2] (el pasado se clampa a 0)
+    // the window [1,3] becomes [0,2] (the past is clamped to 0)
     assert!(open.contains("between(t,0.0000,2.0000)"), "{open}");
 }
 
-/// El grafo del avatar de reproducción corre en ffmpeg real: el avatar rojo
-/// aparece en la esquina inferior derecha del stream.
+/// The playback avatar graph runs in real ffmpeg: the red avatar appears
+/// in the bottom-right corner of the stream.
 #[test]
 fn avatar_stream_graph_runs_in_ffmpeg() {
     use std::process::Command;
@@ -470,7 +470,7 @@ fn avatar_stream_graph_runs_in_ffmpeg() {
     let ffmpeg = ue_media::ffmpeg_bin();
     if Command::new(&ffmpeg).arg("-version").output().map(|o| !o.status.success()).unwrap_or(true)
     {
-        eprintln!("AVISO: sin ffmpeg; test saltado");
+        eprintln!("NOTE: no ffmpeg; test skipped");
         return;
     }
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-avatar-e2e");
@@ -546,7 +546,7 @@ fn avatar_stream_graph_runs_in_ffmpeg() {
     let suffix =
         ue_tauri_lib::avatar_vf_stream_suffix(&store.project, seq_id, 0, 1.0, 640).unwrap();
     let vf = format!("null{suffix}");
-    // mismo -vf que usa la MjpegSession: un frame a t=1s y verificar la esquina
+    // same -vf that MjpegSession uses: a frame at t=1s and verify the corner
     let png = dir.join("frame.png");
     let out = Command::new(&ffmpeg)
         .args(["-y", "-v", "error", "-ss", "1", "-i"])
@@ -555,8 +555,8 @@ fn avatar_stream_graph_runs_in_ffmpeg() {
         .arg(&png)
         .output()
         .unwrap();
-    assert!(out.status.success(), "grafo inválido: {}", String::from_utf8_lossy(&out.stderr));
-    // píxel en la esquina inferior derecha (donde va el avatar 160x90 @16px)
+    assert!(out.status.success(), "invalid graph: {}", String::from_utf8_lossy(&out.stderr));
+    // pixel in the bottom-right corner (where the 160x90 @16px avatar goes)
     let probe = Command::new(&ffmpeg)
         .args(["-v", "error", "-i"])
         .arg(&png)
@@ -564,5 +564,5 @@ fn avatar_stream_graph_runs_in_ffmpeg() {
         .output()
         .unwrap();
     let px = &probe.stdout;
-    assert!(px.len() >= 3 && px[0] > 180 && px[1] < 80, "avatar rojo en la esquina: {px:?}");
+    assert!(px.len() >= 3 && px[0] > 180 && px[1] < 80, "red avatar in the corner: {px:?}");
 }

@@ -1,6 +1,6 @@
-//! ue-ai: análisis de contenido. v0: detección de silencios (PLAN §7.C).
-//! Port mejorado del `trim_by_silence` del Youtubers-toolkit: ventanas RMS
-//! finas, umbral dual con histéresis, duraciones mínimas y padding.
+//! ue-ai: content analysis. v0: silence detection (PLAN §7.C).
+//! Improved port of Youtubers-toolkit's `trim_by_silence`: fine RMS
+//! windows, dual threshold with hysteresis, minimum durations and padding.
 
 pub mod emotion;
 pub mod silence;

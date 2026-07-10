@@ -1,19 +1,19 @@
-//! Curvas de keyframes y evaluación. Tiempos relativos al inicio del clip (µs).
+//! Keyframe curves and evaluation. Times relative to the start of the clip (µs).
 
 use serde::{Deserialize, Serialize};
 
 use crate::time::TimeUs;
 
-/// Interpolación del SEGMENTO que empieza en este keyframe.
+/// Interpolation of the SEGMENT that starts at this keyframe.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum Interp {
-    /// Mantiene el valor hasta el siguiente key.
+    /// Holds the value until the next key.
     Hold,
-    /// Interpolación lineal.
+    /// Linear interpolation.
     Linear,
-    /// Hermite cúbico. Tangentes en unidades de valor/segundo; si faltan se
-    /// calculan automáticamente (estilo Catmull-Rom con extremos planos).
+    /// Cubic Hermite. Tangents in units of value/second; if missing they are
+    /// computed automatically (Catmull-Rom style with flat endpoints).
     Smooth {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tan_out: Option<f64>,
@@ -34,8 +34,8 @@ pub struct KeyframeCurve {
     pub keys: Vec<Keyframe>,
 }
 
-/// Parámetro animable: constante o curva.
-/// JSON: un número plano ⇔ Const; un objeto {keys: […]} ⇔ Curve.
+/// Animatable parameter: constant or curve.
+/// JSON: a plain number ⇔ Const; an object {keys: […]} ⇔ Curve.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Param {
@@ -63,8 +63,8 @@ impl KeyframeCurve {
         Self { keys }
     }
 
-    /// Evalúa la curva en `t` (µs relativos al clip).
-    /// Antes del primer key devuelve su valor; después del último, el del último.
+    /// Evaluates the curve at `t` (µs relative to the clip).
+    /// Before the first key it returns its value; after the last, the last one's.
     pub fn eval(&self, t: TimeUs) -> f64 {
         let keys = &self.keys;
         if keys.is_empty() {
@@ -77,7 +77,7 @@ impl KeyframeCurve {
         if t >= last.t {
             return last.value;
         }
-        // búsqueda binaria del segmento [i, i+1] con keys[i].t <= t < keys[i+1].t
+        // binary search for the segment [i, i+1] with keys[i].t <= t < keys[i+1].t
         let i = match keys.binary_search_by(|k| k.t.cmp(&t)) {
             Ok(exact) => return keys[exact].value,
             Err(ins) => ins - 1,
@@ -97,7 +97,7 @@ impl KeyframeCurve {
         }
     }
 
-    /// Tangente automática (Catmull-Rom; extremos planos), en valor/segundo.
+    /// Automatic tangent (Catmull-Rom; flat endpoints), in value/second.
     fn auto_tangent(&self, i: usize) -> f64 {
         let keys = &self.keys;
         if i == 0 || i + 1 >= keys.len() {
@@ -112,9 +112,9 @@ impl KeyframeCurve {
         (next.value - prev.value) / dt_s
     }
 
-    /// Divide la curva en `offset` (µs relativos al clip) para un split de clip.
-    /// Devuelve (izquierda, derecha-rebasada-a-0). Se insertan keys de frontera
-    /// con el valor evaluado para preservar la continuidad del valor.
+    /// Splits the curve at `offset` (µs relative to the clip) for a clip split.
+    /// Returns (left, right-rebased-to-0). Boundary keys are inserted with the
+    /// evaluated value to preserve value continuity.
     pub fn split(&self, offset: TimeUs) -> (KeyframeCurve, KeyframeCurve) {
         let boundary = self.eval(offset);
         let mut left: Vec<Keyframe> = self
@@ -129,7 +129,7 @@ impl KeyframeCurve {
             .filter(|k| k.t > offset)
             .map(|k| Keyframe { t: k.t - offset, ..k.clone() })
             .collect();
-        // key exacto en la frontera (si existía, se reparte a ambos lados)
+        // exact key at the boundary (if it existed, it's shared on both sides)
         let exact = self.keys.iter().find(|k| k.t == offset);
         let boundary_interp = exact.map(|k| k.interp).unwrap_or(Interp::Linear);
         left.push(Keyframe { t: offset, value: boundary, interp: boundary_interp });
@@ -149,7 +149,7 @@ fn hermite(p0: f64, m0: f64, p1: f64, m1: f64, u: f64, dt_s: f64) -> f64 {
 }
 
 impl Param {
-    /// Divide un parámetro para split de clip (Const se clona tal cual).
+    /// Splits a parameter for a clip split (Const is cloned as is).
     pub fn split(&self, offset: TimeUs) -> (Param, Param) {
         match self {
             Param::Const(v) => (Param::Const(*v), Param::Const(*v)),
@@ -197,9 +197,9 @@ mod tests {
         ]);
         assert_eq!(c.eval(0), 0.0);
         assert_eq!(c.eval(1_000_000), 10.0);
-        // con tangentes automáticas planas en extremos, el punto medio es 5 (simetría)
+        // with flat automatic tangents at the endpoints, the midpoint is 5 (symmetry)
         assert!((c.eval(500_000) - 5.0).abs() < 1e-9);
-        // ease: cerca del inicio va por debajo de la recta
+        // ease: near the start it stays below the straight line
         assert!(c.eval(150_000) < 1.5);
     }
 
@@ -209,7 +209,7 @@ mod tests {
         let (l, r) = c.split(500_000);
         assert!((l.eval(500_000) - 5.0).abs() < 1e-9);
         assert!((r.eval(0) - 5.0).abs() < 1e-9);
-        // y la mitad derecha sigue llegando a 20
+        // and the right half still reaches 20
         assert!((r.eval(1_500_000) - 20.0).abs() < 1e-9);
     }
 

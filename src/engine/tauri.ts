@@ -22,6 +22,9 @@ export function isTauri(): boolean {
   return "__TAURI_INTERNALS__" in window;
 }
 
+/** The backend takes integer µs (i64); UI math (px→time) produces floats. */
+const us = (t: TimeUs): TimeUs => Math.round(t);
+
 export class TauriEngine implements EngineClient {
   readonly kind = "tauri" as const;
 
@@ -29,7 +32,7 @@ export class TauriEngine implements EngineClient {
     return invoke("get_state");
   }
   splitClip(clipId: Id, tUs: TimeUs): Promise<StateSnapshot> {
-    return invoke("split_clip", { clipId, tUs });
+    return invoke("split_clip", { clipId, tUs: us(tUs) });
   }
   deleteClips(ids: Id[], ripple: boolean): Promise<StateSnapshot> {
     return invoke("delete_clips", { ids, ripple });
@@ -40,10 +43,10 @@ export class TauriEngine implements EngineClient {
     toStartUs: TimeUs,
     overwrite: boolean,
   ): Promise<StateSnapshot> {
-    return invoke("move_clip", { clipId, toTrack, toStartUs, overwrite });
+    return invoke("move_clip", { clipId, toTrack, toStartUs: us(toStartUs), overwrite });
   }
   trimClip(clipId: Id, left: boolean, newEdgeUs: TimeUs): Promise<StateSnapshot> {
-    return invoke("trim_clip", { clipId, left, newEdgeUs });
+    return invoke("trim_clip", { clipId, left, newEdgeUs: us(newEdgeUs) });
   }
   undo(): Promise<StateSnapshot> {
     return invoke("undo");
@@ -61,10 +64,10 @@ export class TauriEngine implements EngineClient {
   async pickMediaFiles(): Promise<string[] | null> {
     const picked = await open({
       multiple: true,
-      title: "Importar medios",
+      title: "Import media",
       filters: [
         {
-          name: "Medios",
+          name: "Media",
           extensions: [
             "mp4", "mov", "mkv", "webm", "avi", "m4v", "mts", "mpg",
             "wav", "mp3", "m4a", "aac", "flac", "ogg", "aiff",
@@ -81,18 +84,18 @@ export class TauriEngine implements EngineClient {
     return invoke("import_media", { paths });
   }
   addClip(assetId: Id, atUs: TimeUs): Promise<StateSnapshot> {
-    return invoke("add_clip", { assetId, atUs });
+    return invoke("add_clip", { assetId, atUs: us(atUs) });
   }
 
   async renderFrame(tUs: TimeUs, maxWidth: number): Promise<Uint8Array | null> {
-    const buf = await invoke<ArrayBuffer>("render_frame", { tUs, maxWidth });
+    const buf = await invoke<ArrayBuffer>("render_frame", { tUs: us(tUs), maxWidth });
     const bytes = new Uint8Array(buf);
     return bytes.length > 0 ? bytes : null;
   }
 
   async pickSavePath(defaultName: string, extension = "mp4"): Promise<string | null> {
     return save({
-      title: "Exportar",
+      title: "Export",
       defaultPath: defaultName,
       filters: [{ name: extension.toUpperCase(), extensions: [extension] }],
     });
@@ -106,23 +109,23 @@ export class TauriEngine implements EngineClient {
       preset: settings?.preset ?? null,
       audioBitrateK: settings?.audioBitrateK ?? null,
       loudnorm: settings?.loudnorm ?? null,
-      rangeInUs: settings?.rangeInUs ?? null,
-      rangeOutUs: settings?.rangeOutUs ?? null,
+      rangeInUs: settings?.rangeInUs != null ? us(settings.rangeInUs) : null,
+      rangeOutUs: settings?.rangeOutUs != null ? us(settings.rangeOutUs) : null,
       format: settings?.format ?? null,
     });
   }
 
   playbackPlay(fromUs: TimeUs): Promise<void> {
-    return invoke("playback_play", { fromUs });
+    return invoke("playback_play", { fromUs: us(fromUs) });
   }
   playbackPause(): Promise<TimeUs> {
     return invoke("playback_pause");
   }
   playbackSeek(tUs: TimeUs): Promise<void> {
-    return invoke("playback_seek", { tUs });
+    return invoke("playback_seek", { tUs: us(tUs) });
   }
   playbackSetRate(rate: number, fromUs: TimeUs): Promise<void> {
-    return invoke("playback_set_rate", { rate, fromUs });
+    return invoke("playback_set_rate", { rate, fromUs: us(fromUs) });
   }
   checkRecovery(): Promise<string | null> {
     return invoke("check_recovery", { path: null });
@@ -160,16 +163,16 @@ export class TauriEngine implements EngineClient {
   }
   async pickProjectSavePath(defaultName: string): Promise<string | null> {
     return save({
-      title: "Guardar proyecto",
+      title: "Save project",
       defaultPath: defaultName,
-      filters: [{ name: "Proyecto UberEditor", extensions: ["uep"] }],
+      filters: [{ name: "UberEditor project", extensions: ["uep"] }],
     });
   }
   async pickProjectOpenPath(): Promise<string | null> {
     const picked = await open({
-      title: "Abrir proyecto",
+      title: "Open project",
       multiple: false,
-      filters: [{ name: "Proyecto UberEditor", extensions: ["uep"] }],
+      filters: [{ name: "UberEditor project", extensions: ["uep"] }],
     });
     return typeof picked === "string" ? picked : null;
   }
@@ -193,7 +196,7 @@ export class TauriEngine implements EngineClient {
     return invoke("set_clip_transition", { clipId, transition });
   }
   addTextClip(content: string, atUs: TimeUs): Promise<StateSnapshot> {
-    return invoke("add_text_clip", { content, atUs });
+    return invoke("add_text_clip", { content, atUs: us(atUs) });
   }
   setClipText(clipId: Id, content: string, style: TextStyle): Promise<StateSnapshot> {
     return invoke("set_clip_text", { clipId, content, style });
@@ -229,7 +232,7 @@ export class TauriEngine implements EngineClient {
     return invoke("get_generators");
   }
   addGeneratorClip(generatorId: string, atUs: TimeUs): Promise<StateSnapshot> {
-    return invoke("add_generator_clip", { generatorId, atUs });
+    return invoke("add_generator_clip", { generatorId, atUs: us(atUs) });
   }
   setClipGenerator(
     clipId: Id,
@@ -238,6 +241,9 @@ export class TauriEngine implements EngineClient {
     colorParams: Record<string, string>,
   ): Promise<StateSnapshot> {
     return invoke("set_clip_generator", { clipId, generatorId, params, colorParams });
+  }
+  removeSequence(sequenceId: Id): Promise<StateSnapshot> {
+    return invoke("remove_sequence", { sequenceId });
   }
   addTrack(kind: "video" | "audio"): Promise<StateSnapshot> {
     return invoke("add_track", { kind });
@@ -265,7 +271,7 @@ export class TauriEngine implements EngineClient {
     toUs: TimeUs,
     destUs: TimeUs,
   ): Promise<StateSnapshot> {
-    return invoke("move_range", { sequenceId, fromUs, toUs, destUs });
+    return invoke("move_range", { sequenceId, fromUs: us(fromUs), toUs: us(toUs), destUs: us(destUs) });
   }
 
   cutRanges(
@@ -273,7 +279,11 @@ export class TauriEngine implements EngineClient {
     ranges: [TimeUs, TimeUs][],
     ripple: boolean,
   ): Promise<StateSnapshot> {
-    return invoke("cut_ranges", { sequenceId, ranges, ripple });
+    return invoke("cut_ranges", {
+      sequenceId,
+      ranges: ranges.map(([a, b]) => [us(a), us(b)]),
+      ripple,
+    });
   }
 
   addAvatarClip(clipId: Id, configPath: string): Promise<StateSnapshot> {
@@ -281,7 +291,7 @@ export class TauriEngine implements EngineClient {
   }
   async pickAvatarConfig(): Promise<string | null> {
     const picked = await open({
-      title: "Config de avatares (config.json del toolkit)",
+      title: "Avatar config (toolkit config.json)",
       multiple: false,
       filters: [{ name: "JSON", extensions: ["json"] }],
     });
@@ -309,7 +319,7 @@ export class TauriEngine implements EngineClient {
 
   removeSilences(
     clipId: Id,
-    mode: "delete" | "speedup",
+    mode: "delete" | "speedup" | "split",
     params?: { thresholdDb?: number; minSilenceMs?: number; padMs?: number },
   ): Promise<{ removed: number; removed_us: number; snapshot: StateSnapshot }> {
     return invoke("remove_silences", {

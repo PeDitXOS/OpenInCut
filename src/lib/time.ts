@@ -26,7 +26,7 @@ export function usToTimecode(us: number, fps: Fps): string {
   return `${pad(h)}:${pad(m)}:${pad(s)}:${pad(frame)}`;
 }
 
-/** M:SS o H:MM:SS para duraciones legibles */
+/** M:SS or H:MM:SS for readable durations */
 export function usToDuration(us: number): string {
   const totalSec = Math.round(us / US_PER_SEC);
   const h = Math.floor(totalSec / 3600);
@@ -36,7 +36,7 @@ export function usToDuration(us: number): string {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }
 
-/** hash determinista (para waveforms y filmstrips fake del mock) */
+/** deterministic hash (for the mock's fake waveforms and filmstrips) */
 export function hash32(str: string): number {
   let h = 2166136261;
   for (let i = 0; i < str.length; i++) {

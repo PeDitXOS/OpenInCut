@@ -1,5 +1,5 @@
-//! Test real de transcripción: voz generada con `say` (macOS) + modelo tiny.
-//! Se salta con aviso si falta `say`, `curl`, ffmpeg o la descarga del modelo.
+//! Real transcription test: speech generated with `say` (macOS) + tiny model.
+//! Skipped with a warning if `say`, `curl`, ffmpeg or the model download is missing.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -13,24 +13,24 @@ fn tool_ok(cmd: &str, arg: &str) -> bool {
 #[test]
 fn transcribes_real_speech_word_level() {
     if !tool_ok("say", "-v?") || !tool_ok(&ue_media::ffmpeg_bin(), "-version") {
-        eprintln!("AVISO: sin `say`/ffmpeg; test de whisper saltado");
+        eprintln!("WARNING: no `say`/ffmpeg; whisper test skipped");
         return;
     }
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("ue-whisper-tests");
     std::fs::create_dir_all(&dir).unwrap();
 
-    // modelo tiny (~75 MB, cacheado entre ejecuciones)
+    // tiny model (~75 MB, cached between runs)
     let models = dir.join("models");
     let model = match ensure_model(&models, "tiny.en") {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("AVISO: no se pudo descargar el modelo ({e}); test saltado");
+            eprintln!("WARNING: couldn't download the model ({e}); test skipped");
             return;
         }
     };
 
-    // voz sintética: "hello world this is a test"
-    let aiff = dir.join("voz.aiff");
+    // synthetic speech: "hello world this is a test"
+    let aiff = dir.join("voice.aiff");
     let st = Command::new("say")
         .args(["-o"])
         .arg(&aiff)
@@ -38,31 +38,31 @@ fn transcribes_real_speech_word_level() {
         .status()
         .unwrap();
     assert!(st.success());
-    // conformar a 48k estéreo (el formato del pipeline)
-    let wav = dir.join("voz48.wav");
+    // conform to 48k stereo (the pipeline format)
+    let wav = dir.join("voice48.wav");
     ue_media::conform_audio(&aiff, &wav).unwrap();
 
-    // decimación correcta: ~duración * 16000 muestras
+    // correct decimation: ~duration * 16000 samples
     let samples = wav_to_16k_mono(&wav).unwrap();
-    assert!(samples.len() > 16_000, "al menos 1 s de audio: {}", samples.len());
+    assert!(samples.len() > 16_000, "at least 1 s of audio: {}", samples.len());
 
     let doc = transcribe(&wav, &model, Some("en"), ue_core::model::Id::new()).unwrap();
-    assert!(!doc.words.is_empty(), "hay palabras");
+    assert!(!doc.words.is_empty(), "there are words");
     let joined = doc
         .words
         .iter()
         .map(|w| w.text.to_lowercase())
         .collect::<Vec<_>>()
         .join(" ");
-    eprintln!("transcripción: {joined}");
-    assert!(joined.contains("hello"), "reconoce 'hello': {joined}");
-    assert!(joined.contains("test"), "reconoce 'test': {joined}");
+    eprintln!("transcript: {joined}");
+    assert!(joined.contains("hello"), "recognizes 'hello': {joined}");
+    assert!(joined.contains("test"), "recognizes 'test': {joined}");
 
-    // timestamps crecientes y dentro del audio
+    // increasing timestamps within the audio
     for w in doc.words.windows(2) {
-        assert!(w[0].start_us <= w[1].start_us, "palabras ordenadas");
+        assert!(w[0].start_us <= w[1].start_us, "words ordered");
     }
     let total_us = (samples.len() as i64) * 1_000_000 / 16_000;
     assert!(doc.words.last().unwrap().end_us <= total_us + 1_500_000);
-    assert!(!doc.segments.is_empty(), "hay frases agrupadas");
+    assert!(!doc.segments.is_empty(), "there are grouped phrases");
 }

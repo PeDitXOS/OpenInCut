@@ -1,14 +1,14 @@
-// Caché de visuales del timeline (waveforms y miniaturas reales por asset).
-// Vive fuera de zustand: los datos son pesados y no serializables; el store
-// solo lleva un contador (visualsBump) para disparar el redibujado.
+// Timeline visuals cache (real waveforms and thumbnails per asset).
+// Lives outside zustand: the data is heavy and non-serializable; the store
+// only carries a counter (visualsBump) to trigger a redraw.
 
 import type { Id, Project, ThumbStrip } from "../engine/types";
 import { engine, useStore } from "./store";
 
 export interface AssetVisuals {
-  /** Picos |amp| 0..1 a 25 bins/s (mezcla mono). */
+  /** Peaks |amp| 0..1 at 25 bins/s (mono mix). */
   peaks?: Float32Array;
-  /** Tira de miniaturas decodificada + su meta. */
+  /** Decoded thumbnail strip + its meta. */
   strip?: ImageBitmap;
   stripMeta?: ThumbStrip;
 }
@@ -32,8 +32,8 @@ function merge(assetId: Id, patch: Partial<AssetVisuals>) {
 }
 
 /**
- * Pide (una sola vez por asset) los visuales que falten. Idempotente y barata:
- * llamar en cada render del timeline. Solo motor de escritorio.
+ * Requests (once per asset) the missing visuals. Idempotent and cheap:
+ * call it on every timeline render. Desktop engine only.
  */
 export function requestVisuals(project: Project) {
   if (engine.kind !== "tauri") return;
@@ -48,7 +48,7 @@ export function requestVisuals(project: Project) {
           if (peaks?.length) merge(key, { peaks: Float32Array.from(peaks) });
         })
         .catch(() => {
-          /* p. ej. conformado aún en curso: reintentar en el próximo render */
+          /* e.g. conform still in progress: retry on the next render */
           pending.delete(`${key}:p`);
         });
     }
@@ -65,7 +65,7 @@ export function requestVisuals(project: Project) {
           );
           merge(key, { strip: bitmap, stripMeta: meta });
         } catch {
-          /* sin miniaturas para este asset (no reintentar en bucle) */
+          /* no thumbnails for this asset (don't retry in a loop) */
         }
       })();
     }

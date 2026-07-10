@@ -1,8 +1,8 @@
-//! ue-whisper: transcripción word-level con whisper.cpp (PLAN §7.B).
+//! ue-whisper: word-level transcription with whisper.cpp (PLAN §7.B).
 //!
-//! Receta word-level de whisper.cpp: `token_timestamps + split_on_word +
-//! max_len=1` → un segmento por palabra. La entrada es el WAV conformado
-//! (48 kHz estéreo): se hace downmix y decimación exacta ×3 a 16 kHz mono.
+//! whisper.cpp word-level recipe: `token_timestamps + split_on_word +
+//! max_len=1` → one segment per word. The input is the conformed WAV
+//! (48 kHz stereo): downmix and exact ×3 decimation to 16 kHz mono.
 
 use std::path::{Path, PathBuf};
 
@@ -18,15 +18,15 @@ pub enum WhisperError {
     Audio(String),
     #[error("whisper: {0}")]
     Whisper(String),
-    #[error("modelo no encontrado en {0}; descárgalo primero (ensure_model)")]
+    #[error("model not found at {0}; download it first (ensure_model)")]
     NoModel(PathBuf),
-    #[error("descarga del modelo falló: {0}")]
+    #[error("model download failed: {0}")]
     Download(String),
 }
 
 pub type WhisperResult<T> = Result<T, WhisperError>;
 
-/// URL oficial de los modelos ggml de whisper.cpp.
+/// Official URL for the whisper.cpp ggml models.
 pub fn model_url(name: &str) -> String {
     format!("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{name}.bin")
 }
@@ -35,7 +35,7 @@ pub fn model_path(models_dir: &Path, name: &str) -> PathBuf {
     models_dir.join(format!("ggml-{name}.bin"))
 }
 
-/// Descarga el modelo si no existe (curl del sistema; atómico via .part).
+/// Downloads the model if it doesn't exist (system curl; atomic via .part).
 pub fn ensure_model(models_dir: &Path, name: &str) -> WhisperResult<PathBuf> {
     let target = model_path(models_dir, name);
     if target.exists() {
@@ -51,18 +51,18 @@ pub fn ensure_model(models_dir: &Path, name: &str) -> WhisperResult<PathBuf> {
         .map_err(|e| WhisperError::Download(e.to_string()))?;
     if !status.success() {
         let _ = std::fs::remove_file(&part);
-        return Err(WhisperError::Download(format!("curl terminó con {status}")));
+        return Err(WhisperError::Download(format!("curl exited with {status}")));
     }
     std::fs::rename(&part, &target).map_err(|e| WhisperError::Download(e.to_string()))?;
     Ok(target)
 }
 
-/// WAV conformado (48 kHz) → muestras f32 16 kHz mono (decimación ×3 con promedio).
+/// Conformed WAV (48 kHz) → f32 16 kHz mono samples (×3 decimation with averaging).
 pub fn wav_to_16k_mono(wav_path: &Path) -> WhisperResult<Vec<f32>> {
     let wav = ue_audio::wav::WavMap::open(wav_path).map_err(|e| WhisperError::Audio(e.to_string()))?;
     if wav.sample_rate != 48_000 {
         return Err(WhisperError::Audio(format!(
-            "se espera WAV conformado a 48 kHz, fue {}",
+            "expected a WAV conformed to 48 kHz, was {}",
             wav.sample_rate
         )));
     }
@@ -81,7 +81,7 @@ pub fn wav_to_16k_mono(wav_path: &Path) -> WhisperResult<Vec<f32>> {
     Ok(out)
 }
 
-/// Transcribe y devuelve un TranscriptDoc word-level (tiempos en µs del asset).
+/// Transcribes and returns a word-level TranscriptDoc (times in µs of the asset).
 pub fn transcribe(
     conform_wav: &Path,
     model: &Path,
@@ -104,7 +104,7 @@ pub fn transcribe(
     params.set_language(language.or(Some("auto")));
     params.set_token_timestamps(true);
     params.set_split_on_word(true);
-    params.set_max_len(1); // un segmento ≈ una palabra
+    params.set_max_len(1); // one segment ≈ one word
     params.set_print_progress(false);
     params.set_print_special(false);
     params.set_print_realtime(false);
@@ -124,7 +124,7 @@ pub fn transcribe(
         if text.is_empty() || text.starts_with('[') {
             continue; // [_BEG_], [BLANK_AUDIO], etc.
         }
-        // t0/t1 en centisegundos
+        // t0/t1 in centiseconds
         let t0 = state.full_get_segment_t0(i).map_err(|e| WhisperError::Whisper(e.to_string()))?;
         let t1 = state.full_get_segment_t1(i).map_err(|e| WhisperError::Whisper(e.to_string()))?;
         words.push(Word {
@@ -136,8 +136,8 @@ pub fn transcribe(
         });
     }
 
-    // Agrupar palabras en frases por pausas > 1 s (port de process_transcript
-    // del toolkit) para los segmentos.
+    // Group words into phrases by pauses > 1 s (port of the toolkit's
+    // process_transcript) for the segments.
     let mut segments: Vec<Segment> = vec![];
     let mut seg_start_idx = 0usize;
     for i in 0..words.len() {

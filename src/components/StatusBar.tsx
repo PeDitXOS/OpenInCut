@@ -12,13 +12,13 @@ export function StatusBar() {
 
   return (
     <footer className="flex h-7 shrink-0 items-center gap-4 border-t border-line bg-bg1 px-3 text-[10.5px] text-ink-faint">
-      <span>{dirty ? "Cambios sin guardar" : "Todo guardado"}</span>
-      {selectionCount > 1 && <span>· {selectionCount} clips seleccionados</span>}
+      <span>{dirty ? "Unsaved changes" : "All saved"}</span>
+      {selectionCount > 1 && <span>· {selectionCount} clips selected</span>}
       {lastAction && (
         <span className={isError ? "text-danger" : "text-ink-dim"}>· {lastAction}</span>
       )}
       <div className="flex-1" />
-      <span>{engine.kind === "tauri" ? "ue-core (escritorio)" : "motor mock (navegador)"}</span>
+      <span>{engine.kind === "tauri" ? "ue-core (desktop)" : "mock engine (browser)"}</span>
       <span className="font-[var(--font-mono)]">
         {seq.resolution[0]}×{seq.resolution[1]} · {Math.round(seq.fps[0] / seq.fps[1])} fps ·{" "}
         {(seq.sample_rate / 1000).toFixed(0)} kHz

@@ -1,5 +1,5 @@
-//! Hash de contenido rápido: xxh3 de los primeros y últimos 4 MB + tamaño.
-//! Suficiente para claves de caché y relink sin leer archivos gigantes.
+//! Fast content hash: xxh3 of the first and last 4 MB + size.
+//! Enough for cache keys and relink without reading huge files.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -40,8 +40,8 @@ mod tests {
         let dir = std::env::temp_dir();
         let a = dir.join("ue_hash_a.bin");
         let b = dir.join("ue_hash_b.bin");
-        std::fs::write(&a, b"hola mundo hola mundo").unwrap();
-        std::fs::write(&b, b"hola mundo hola mundX").unwrap();
+        std::fs::write(&a, b"hello world hello world").unwrap();
+        std::fs::write(&b, b"hello world hello worlX").unwrap();
         let ha1 = content_hash(&a).unwrap();
         let ha2 = content_hash(&a).unwrap();
         let hb = content_hash(&b).unwrap();

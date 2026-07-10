@@ -1,9 +1,9 @@
 {
   "id": "core.gaussian_blur",
-  "name": "Desenfoque gaussiano",
+  "name": "Gaussian blur",
   "category": "blur",
   "params": [
-    { "key": "sigma", "label": "Intensidad", "type": "float", "default": 8.0, "min": 0.1, "max": 60.0 }
+    { "key": "sigma", "label": "Strength", "type": "float", "default": 8.0, "min": 0.1, "max": 60.0 }
   ],
   "ffmpeg": "gblur=sigma={sigma}"
 }

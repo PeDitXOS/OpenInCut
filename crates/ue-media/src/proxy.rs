@@ -1,16 +1,16 @@
-//! Proxies de preview: copia h264 ligera (≤960 px de ancho, GOP corto) que el
-//! FrameService y render_frame decodifican en lugar del original. El export
-//! usa siempre el archivo original.
+//! Preview proxies: a light h264 copy (≤960 px wide, short GOP) that the
+//! FrameService and render_frame decode instead of the original. Export
+//! always uses the original file.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::{ffmpeg_bin, MediaError, MediaResult};
 
-/// Ancho máximo del proxy; por debajo de esto no vale la pena generar uno.
+/// Maximum proxy width; below this it's not worth generating one.
 pub const PROXY_MAX_W: u32 = 960;
 
-/// Genera (o reutiliza del caché por hash) el proxy de un video.
+/// Generates (or reuses from the hash cache) a video's proxy.
 pub fn generate_proxy(src: &Path, cache_dir: &Path, hash: &str) -> MediaResult<PathBuf> {
     let out = cache_dir.join(format!("{hash}.proxy.mp4"));
     if out.exists() {
@@ -30,7 +30,7 @@ pub fn generate_proxy(src: &Path, cache_dir: &Path, hash: &str) -> MediaResult<P
             "ultrafast",
             "-crf",
             "28",
-            // GOP corto: seeks del preview casi instantáneos
+            // short GOP: preview seeks are nearly instant
             "-g",
             "12",
             "-an",
@@ -42,7 +42,7 @@ pub fn generate_proxy(src: &Path, cache_dir: &Path, hash: &str) -> MediaResult<P
         .map_err(|e| MediaError::Spawn("ffmpeg".into(), e.to_string()))?;
     if !status.success() || !tmp.exists() {
         let _ = std::fs::remove_file(&tmp);
-        return Err(MediaError::Tool("ffmpeg".into(), "proxy falló".into()));
+        return Err(MediaError::Tool("ffmpeg".into(), "proxy failed".into()));
     }
     std::fs::rename(&tmp, &out)?;
     Ok(out)

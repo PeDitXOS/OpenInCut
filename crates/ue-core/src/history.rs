@@ -1,4 +1,4 @@
-//! Historial de undo/redo por transacciones.
+//! Transaction-based undo/redo history.
 
 use serde::{Deserialize, Serialize};
 
@@ -7,9 +7,9 @@ use crate::action::Action;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryEntry {
     pub label: String,
-    /// Acciones aplicadas (para redo), en orden.
+    /// Applied actions (for redo), in order.
     pub actions: Vec<Action>,
-    /// Inversas (para undo), alineadas 1:1 con `actions`.
+    /// Inverses (for undo), aligned 1:1 with `actions`.
     pub inverses: Vec<Action>,
 }
 
@@ -44,7 +44,7 @@ impl History {
         self.redo.pop()
     }
     pub fn push_undo_from_redo(&mut self, e: HistoryEntry) {
-        // vuelta de un redo: no borra la pila de redo restante
+        // returning from a redo: does not clear the remaining redo stack
         self.undo.push(e);
     }
 

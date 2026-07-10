@@ -1,5 +1,5 @@
-//! Tests de integración del ProjectStore: split/trim/move/delete/cut_ranges,
-//! atomicidad, undo/redo y propiedad "undo total ≡ estado inicial".
+//! ProjectStore integration tests: split/trim/move/delete/cut_ranges,
+//! atomicity, undo/redo, and the property "full undo ≡ initial state".
 
 use ue_core::action::{Action, TrackProp};
 use ue_core::keyframe::{Interp, Keyframe, KeyframeCurve, Param};
@@ -11,9 +11,9 @@ use ue_core::ProjectStore;
 
 const SEC: i64 = US_PER_SEC;
 
-/// Proyecto fixture: 1 asset de video de 60 s, 1 de audio de 120 s,
-/// secuencia 30 fps con V1/A1 (y el asset ya en el pool).
-/// Devuelve (store, seq_id, video_track, audio_track, video_asset, audio_asset).
+/// Fixture project: 1 video asset of 60 s, 1 audio asset of 120 s,
+/// a 30 fps sequence with V1/A1 (and the asset already in the pool).
+/// Returns (store, seq_id, video_track, audio_track, video_asset, audio_asset).
 fn fixture() -> (ProjectStore, Id, Id, Id, Id, Id) {
     let mut p = Project::new("Test");
     let seq_id = p.active_sequence;
@@ -76,7 +76,7 @@ fn fixture() -> (ProjectStore, Id, Id, Id, Id, Id) {
 fn media_src(clip: &Clip) -> (i64, i64) {
     match &clip.payload {
         ClipPayload::Media { src_in, src_out, .. } => (*src_in, *src_out),
-        _ => panic!("no es media"),
+        _ => panic!("not media"),
     }
 }
 
@@ -102,12 +102,12 @@ fn insert_split_undo_roundtrip() {
     }
 
     store.undo().unwrap();
-    assert_eq!(store.project, snapshot, "undo debe restaurar byte a byte");
+    assert_eq!(store.project, snapshot, "undo must restore byte for byte");
 
     store.redo().unwrap();
     let track = store.project.track(vtrack).unwrap();
     assert_eq!(track.clips.len(), 2);
-    assert_eq!(track.clips[0].id, l, "redo reusa los mismos ids");
+    assert_eq!(track.clips[0].id, l, "redo reuses the same ids");
 }
 
 #[test]
@@ -115,15 +115,15 @@ fn split_quantizes_to_frame() {
     let (mut store, _seq, vtrack, _at, va, _aa) = fixture();
     let clip = Clip::new_media(va, 0, 10 * SEC, 0);
     let clip_id = store.insert_clip(vtrack, clip, InsertMode::Strict).unwrap();
-    // 1.017 s no es frontera de frame a 30 fps → cuantiza al frame más cercano (31)
+    // 1.017 s is not a frame boundary at 30 fps → quantizes to the nearest frame (31)
     store.split_clip(clip_id, 1_017_000).unwrap();
     let track = store.project.track(vtrack).unwrap();
     let boundary = track.clips[1].start;
-    assert_eq!(boundary, ue_core::time::frame_to_time(31, (30, 1)), "corte en el frame 31");
+    assert_eq!(boundary, ue_core::time::frame_to_time(31, (30, 1)), "cut at frame 31");
     assert_eq!(
         ue_core::time::quantize_to_frame(boundary, (30, 1)),
         boundary,
-        "la frontera es idempotente bajo cuantización"
+        "the boundary is idempotent under quantization"
     );
 }
 
@@ -140,10 +140,10 @@ fn split_keyframes_preserve_boundary_value() {
     let track = store.project.track(vtrack).unwrap();
     let lc = track.clips.iter().find(|c| c.id == l).unwrap();
     let rc = track.clips.iter().find(|c| c.id == r).unwrap();
-    // en la frontera ambas mitades valen 0.4
+    // at the boundary both halves equal 0.4
     assert!((lc.transform.opacity.eval(4 * SEC) - 0.4).abs() < 1e-9);
     assert!((rc.transform.opacity.eval(0) - 0.4).abs() < 1e-9);
-    // y la derecha sigue llegando a 1.0 en su final
+    // and the right one still reaches 1.0 at its end
     assert!((rc.transform.opacity.eval(6 * SEC) - 1.0).abs() < 1e-9);
 }
 
@@ -154,7 +154,7 @@ fn ripple_delete_closes_gap() {
     let _b = store.insert_clip(vtrack, Clip::new_media(va, 0, 3 * SEC, 2 * SEC), InsertMode::Strict).unwrap();
     let c = store.insert_clip(vtrack, Clip::new_media(va, 0, 1 * SEC, 5 * SEC), InsertMode::Strict).unwrap();
 
-    // borrar el clip del medio con ripple
+    // delete the middle clip with ripple
     let b_id = store.project.track(vtrack).unwrap().clips[1].id;
     store.delete_clips(&[b_id], true).unwrap();
 
@@ -162,7 +162,7 @@ fn ripple_delete_closes_gap() {
     assert_eq!(track.clips.len(), 2);
     assert_eq!(track.clips[0].id, a);
     assert_eq!(track.clips[1].id, c);
-    assert_eq!(track.clips[1].start, 2 * SEC, "c se desplaza 3 s a la izquierda");
+    assert_eq!(track.clips[1].start, 2 * SEC, "c shifts 3 s to the left");
     assert!(validate(&store.project).is_empty());
 }
 
@@ -176,30 +176,30 @@ fn delete_without_ripple_leaves_gap() {
     let track = store.project.track(vtrack).unwrap();
     assert_eq!(track.clips.len(), 2);
     let cc = track.clips.iter().find(|cl| cl.id == c).unwrap();
-    assert_eq!(cc.start, 5 * SEC, "sin ripple, c no se mueve");
+    assert_eq!(cc.start, 5 * SEC, "without ripple, c doesn't move");
 }
 
 #[test]
 fn overwrite_insert_carves_middle() {
     let (mut store, _seq, vtrack, _at, va, _aa) = fixture();
-    // clip grande [0, 10s)
+    // large clip [0, 10s)
     store.insert_clip(vtrack, Clip::new_media(va, 0, 10 * SEC, 0), InsertMode::Strict).unwrap();
-    // overwrite en el medio [4s, 6s)
+    // overwrite in the middle [4s, 6s)
     let new_clip = Clip::new_media(va, 20 * SEC, 22 * SEC, 4 * SEC);
     let new_id = store.insert_clip(vtrack, new_clip, InsertMode::Overwrite).unwrap();
 
     let track = store.project.track(vtrack).unwrap();
-    assert_eq!(track.clips.len(), 3, "izquierda + nuevo + derecha");
+    assert_eq!(track.clips.len(), 3, "left + new + right");
     let (l, m, r) = (&track.clips[0], &track.clips[1], &track.clips[2]);
     assert_eq!((l.start, l.end()), (0, 4 * SEC));
     assert_eq!(m.id, new_id);
     assert_eq!((m.start, m.end()), (4 * SEC, 6 * SEC));
     assert_eq!((r.start, r.end()), (6 * SEC, 10 * SEC));
-    // el material fuente de la derecha avanzó: [6s, 10s) del archivo
+    // the right clip's source material advanced: [6s, 10s) of the file
     assert_eq!(media_src(r), (6 * SEC, 10 * SEC));
     assert!(validate(&store.project).is_empty());
 
-    // undo devuelve el clip único
+    // undo brings back the single clip
     store.undo().unwrap();
     assert_eq!(store.project.track(vtrack).unwrap().clips.len(), 1);
 }
@@ -209,7 +209,7 @@ fn overwrite_insert_trims_edges() {
     let (mut store, _seq, vtrack, _at, va, _aa) = fixture();
     store.insert_clip(vtrack, Clip::new_media(va, 0, 4 * SEC, 0), InsertMode::Strict).unwrap();
     store.insert_clip(vtrack, Clip::new_media(va, 0, 4 * SEC, 6 * SEC), InsertMode::Strict).unwrap();
-    // overwrite [3s, 7s): recorta el final del primero y el inicio del segundo
+    // overwrite [3s, 7s): trims the end of the first and the start of the second
     store
         .insert_clip(vtrack, Clip::new_media(va, 30 * SEC, 34 * SEC, 3 * SEC), InsertMode::Overwrite)
         .unwrap();
@@ -218,28 +218,28 @@ fn overwrite_insert_trims_edges() {
     assert_eq!((track.clips[0].start, track.clips[0].end()), (0, 3 * SEC));
     assert_eq!((track.clips[1].start, track.clips[1].end()), (3 * SEC, 7 * SEC));
     assert_eq!((track.clips[2].start, track.clips[2].end()), (7 * SEC, 10 * SEC));
-    // src_in del tercero avanzó 1 s
+    // the third clip's src_in advanced 1 s
     assert_eq!(media_src(&track.clips[2]).0, 1 * SEC);
 }
 
 #[test]
 fn trim_respects_source_material() {
     let (mut store, _seq, vtrack, _at, va, _aa) = fixture();
-    // clip que usa [5s, 10s) del archivo, colocado en t=20s
+    // clip that uses [5s, 10s) of the file, placed at t=20s
     let clip_id = store
         .insert_clip(vtrack, Clip::new_media(va, 5 * SEC, 10 * SEC, 20 * SEC), InsertMode::Strict)
         .unwrap();
-    // intentar extender el borde izquierdo hasta t=0: solo hay 5 s de handle → clampa a 15 s
+    // try to extend the left edge to t=0: only 5 s of handle → clamps to 15 s
     store.trim_clip(clip_id, true, 0).unwrap();
     let clip = store.project.clip(clip_id).unwrap();
-    assert_eq!(clip.start, 15 * SEC, "el borde se detiene donde se acaba el material");
-    assert_eq!(media_src(clip).0, 0, "src_in llegó al inicio del archivo");
+    assert_eq!(clip.start, 15 * SEC, "the edge stops where the material runs out");
+    assert_eq!(media_src(clip).0, 0, "src_in reached the start of the file");
     assert_eq!(clip.duration, 10 * SEC);
 
-    // extender el borde derecho más allá del archivo (60 s de asset)
+    // extend the right edge beyond the file (60 s asset)
     store.trim_clip(clip_id, false, 500 * SEC).unwrap();
     let clip = store.project.clip(clip_id).unwrap();
-    assert_eq!(media_src(clip).1, 60 * SEC, "src_out clampeado a la duración del asset");
+    assert_eq!(media_src(clip).1, 60 * SEC, "src_out clamped to the asset duration");
 }
 
 #[test]
@@ -248,14 +248,14 @@ fn cut_ranges_multitrack_ripple() {
     store.insert_clip(vtrack, Clip::new_media(va, 0, 10 * SEC, 0), InsertMode::Strict).unwrap();
     store.insert_clip(atrack, Clip::new_media(aa, 0, 10 * SEC, 0), InsertMode::Strict).unwrap();
 
-    // cortar [2s,3s) y [5s,6s) — solapa/fusiona incluido
+    // cut [2s,3s) and [5s,6s) — overlap/merge included
     store.cut_ranges(seq, &[(2 * SEC, 3 * SEC), (5 * SEC, 6 * SEC)], true).unwrap();
 
     for track_id in [vtrack, atrack] {
         let track = store.project.track(track_id).unwrap();
         let total: i64 = track.clips.iter().map(|c| c.duration).sum();
-        assert_eq!(total, 8 * SEC, "quedan 8 s de material en pista");
-        // contiguos sin huecos (ripple)
+        assert_eq!(total, 8 * SEC, "8 s of material remain on the track");
+        // contiguous with no gaps (ripple)
         let mut expected_start = 0;
         for c in &track.clips {
             assert_eq!(c.start, expected_start);
@@ -263,9 +263,9 @@ fn cut_ranges_multitrack_ripple() {
         }
     }
     assert!(validate(&store.project).is_empty());
-    assert_eq!(store.undo_labels().last().copied(), Some("Cortar 2 rango(s)"));
+    assert_eq!(store.undo_labels().last().copied(), Some("Cut 2 range(s)"));
 
-    // y es UNA entrada de undo
+    // and it's ONE undo entry
     store.undo().unwrap();
     let track = store.project.track(vtrack).unwrap();
     assert_eq!(track.clips.len(), 1);
@@ -276,19 +276,19 @@ fn cut_ranges_multitrack_ripple() {
 fn transaction_atomicity_on_failure() {
     let (mut store, _seq, vtrack, _at, va, _aa) = fixture();
     let a = Clip::new_media(va, 0, 2 * SEC, 0);
-    let b_colliding = Clip::new_media(va, 0, 2 * SEC, SEC); // colisiona con a
+    let b_colliding = Clip::new_media(va, 0, 2 * SEC, SEC); // collides with a
     let snapshot = store.project.clone();
 
     let result = store.dispatch(
-        "transacción rota",
+        "broken transaction",
         vec![
             Action::InsertClip { track_id: vtrack, clip: a },
             Action::InsertClip { track_id: vtrack, clip: b_colliding },
         ],
     );
     assert!(result.is_err());
-    assert_eq!(store.project, snapshot, "rollback total: el proyecto queda intacto");
-    assert!(!store.can_undo(), "una transacción fallida no entra al historial");
+    assert_eq!(store.project, snapshot, "full rollback: the project is left intact");
+    assert!(!store.can_undo(), "a failed transaction does not enter the history");
 }
 
 #[test]
@@ -299,13 +299,13 @@ fn locked_track_rejects_ops() {
         .unwrap();
     store
         .dispatch(
-            "Bloquear pista",
+            "Lock track",
             vec![Action::SetTrackProp { track_id: vtrack, prop: TrackProp::Locked(true) }],
         )
         .unwrap();
     assert!(store.split_clip(clip_id, SEC).is_err());
     assert!(store.delete_clips(&[clip_id], false).is_err());
-    // pero el undo del bloqueo funciona
+    // but undoing the lock works
     store.undo().unwrap();
     assert!(store.split_clip(clip_id, SEC).is_ok());
 }
@@ -313,17 +313,17 @@ fn locked_track_rejects_ops() {
 #[test]
 fn track_kind_rules() {
     let (mut store, _seq, vtrack, atrack, va, aa) = fixture();
-    // un asset de VIDEO puede ir en pista de audio (uso solo-audio, pares enlazados)
+    // a VIDEO asset can go on an audio track (audio-only use, linked pairs)
     let video_on_audio = Clip::new_media(va, 0, 2 * SEC, 0);
     assert!(store.insert_clip(atrack, video_on_audio, InsertMode::Strict).is_ok());
-    // un asset de AUDIO sigue sin poder ir en pista de video
+    // an AUDIO asset still can't go on a video track
     let audio_on_video = Clip::new_media(aa, 0, 2 * SEC, 0);
     assert!(
         store.insert_clip(vtrack, audio_on_video, InsertMode::Strict).is_err(),
-        "un clip de audio no entra en pista de video"
+        "an audio clip does not fit on a video track"
     );
-    // un clip de texto tampoco entra en pista de audio
-    let text = Clip::new_text("hola", 5 * SEC, 1 * SEC);
+    // a text clip doesn't fit on an audio track either
+    let text = Clip::new_text("hi", 5 * SEC, 1 * SEC);
     assert!(store.insert_clip(atrack, text, InsertMode::Strict).is_err());
 }
 
@@ -341,7 +341,7 @@ fn project_save_load_after_edits() {
 }
 
 // ---------------------------------------------------------------------------
-// Propiedad: secuencias aleatorias de operaciones + undo total ≡ estado inicial
+// Property: random sequences of operations + full undo ≡ initial state
 // ---------------------------------------------------------------------------
 
 mod property_tests {
@@ -378,7 +378,7 @@ mod property_tests {
         #[test]
         fn random_ops_then_undo_all_restores_initial(ops in prop_vec(op_strategy(), 1..40)) {
             let (mut store, seq, vtrack, _at, va, _aa) = fixture();
-            // estado inicial con un clip base
+            // initial state with a base clip
             store.insert_clip(vtrack, Clip::new_media(va, 0, 10 * SEC, 0), InsertMode::Strict).unwrap();
             let initial = store.project.clone();
             let initial_undo_depth = store.undo_labels().len();
@@ -431,11 +431,11 @@ mod property_tests {
                         store.cut_ranges(seq, &[(from_s * SEC, (from_s + len_s) * SEC)], true)
                     }
                 };
-                // gane o falle, los invariantes se mantienen SIEMPRE
+                // whether it succeeds or fails, the invariants ALWAYS hold
                 prop_assert_eq!(validate(&store.project), Vec::<String>::new());
             }
 
-            // deshacer todo lo aplicado en el bucle
+            // undo everything applied in the loop
             while store.undo_labels().len() > initial_undo_depth {
                 store.undo().unwrap();
             }
@@ -447,36 +447,36 @@ mod property_tests {
 #[test]
 fn move_range_reorders_and_preserves_material() {
     let (mut store, seq, vtrack, atrack, va, aa) = fixture();
-    // V1: un clip de 9 s [0..9); A1: audio paralelo [0..9)
+    // V1: a 9 s clip [0..9); A1: parallel audio [0..9)
     store.insert_clip(vtrack, Clip::new_media(va, 0, 9 * SEC, 0), InsertMode::Strict).unwrap();
     store.insert_clip(atrack, Clip::new_media(aa, 0, 9 * SEC, 0), InsertMode::Strict).unwrap();
     let snapshot = store.project.clone();
 
-    // mover el tercio central [3..6) al principio (dest=0)
+    // move the middle third [3..6) to the beginning (dest=0)
     store.move_range(seq, 3 * SEC, 6 * SEC, 0).unwrap();
 
     for track_id in [vtrack, atrack] {
         let track = store.project.track(track_id).unwrap();
-        // material total conservado y contiguo
+        // total material preserved and contiguous
         let total: i64 = track.clips.iter().map(|c| c.duration).sum();
         assert_eq!(total, 9 * SEC);
         let mut expected = 0;
         for c in &track.clips {
-            assert_eq!(c.start, expected, "sin huecos tras mover");
+            assert_eq!(c.start, expected, "no gaps after moving");
             expected = c.end();
         }
-        // el primer clip ahora es el material fuente [3..6)
+        // the first clip is now the source material [3..6)
         let first = &track.clips[0];
         match &first.payload {
             ClipPayload::Media { src_in, src_out, .. } => {
-                assert_eq!((*src_in, *src_out), (3 * SEC, 6 * SEC), "el tercio central va primero");
+                assert_eq!((*src_in, *src_out), (3 * SEC, 6 * SEC), "the middle third goes first");
             }
-            _ => panic!("payload inesperado"),
+            _ => panic!("unexpected payload"),
         }
     }
     assert!(validate(&store.project).is_empty());
 
-    // una sola entrada de undo lo revierte todo
+    // a single undo entry reverts it all
     store.undo().unwrap();
     assert_eq!(store.project, snapshot);
 }
@@ -486,17 +486,17 @@ fn move_range_forward_and_edge_cases() {
     let (mut store, seq, vtrack, _at, va, _aa) = fixture();
     store.insert_clip(vtrack, Clip::new_media(va, 0, 9 * SEC, 0), InsertMode::Strict).unwrap();
 
-    // mover [0..3) al final (dest=9): queda [3..9)+[0..3)
+    // move [0..3) to the end (dest=9): leaves [3..9)+[0..3)
     store.move_range(seq, 0, 3 * SEC, 9 * SEC).unwrap();
     let track = store.project.track(vtrack).unwrap();
     let last = track.clips.last().unwrap();
     match &last.payload {
-        ClipPayload::Media { src_in, .. } => assert_eq!(*src_in, 0, "el inicio quedó al final"),
+        ClipPayload::Media { src_in, .. } => assert_eq!(*src_in, 0, "the start ended up at the end"),
         _ => panic!(),
     }
-    assert_eq!(track.clips.last().unwrap().end(), 9 * SEC, "duración total intacta");
+    assert_eq!(track.clips.last().unwrap().end(), 9 * SEC, "total duration intact");
 
-    // destino dentro del rango → error y sin cambios
+    // destination inside the range → error and no changes
     let before = store.project.clone();
     assert!(store.move_range(seq, 0, 4 * SEC, 2 * SEC).is_err());
     assert_eq!(store.project, before);
@@ -505,7 +505,7 @@ fn move_range_forward_and_edge_cases() {
 #[test]
 fn linked_pair_propagates_all_operations() {
     let (mut store, _seq, vtrack, atrack, va, _aa) = fixture();
-    // par enlazado: video en V1 + su audio en A1 (asset de video en pista de audio)
+    // linked pair: video on V1 + its audio on A1 (video asset on an audio track)
     let group = Id::new();
     let mut vclip = Clip::new_media(va, 0, 10 * SEC, 0);
     vclip.group = Some(group);
@@ -515,18 +515,18 @@ fn linked_pair_propagates_all_operations() {
     let v_id = store.insert_clip(vtrack, vclip, InsertMode::Strict).unwrap();
     let _a_id = store.insert_clip(atrack, aclip, InsertMode::Strict).unwrap();
 
-    // SPLIT: divide ambos; las mitades derechas comparten grupo NUEVO
+    // SPLIT: splits both; the right halves share a NEW group
     let (vl, vr) = store.split_clip(v_id, 4 * SEC).unwrap();
     let a_clips: Vec<Clip> = store.project.track(atrack).unwrap().clips.clone();
-    assert_eq!(a_clips.len(), 2, "el audio enlazado también se dividió");
+    assert_eq!(a_clips.len(), 2, "the linked audio was split too");
     let v_right = store.project.clip(vr).unwrap().clone();
     let a_right = a_clips.iter().find(|c| c.start == 4 * SEC).unwrap();
-    assert_eq!(v_right.group, a_right.group, "mitades derechas re-enlazadas");
-    assert_ne!(v_right.group, Some(group), "con grupo nuevo");
+    assert_eq!(v_right.group, a_right.group, "right halves re-linked");
+    assert_ne!(v_right.group, Some(group), "with a new group");
     let v_left = store.project.clip(vl).unwrap().clone();
-    assert_eq!(v_left.group, Some(group), "las izquierdas conservan el grupo");
+    assert_eq!(v_left.group, Some(group), "the left halves keep the group");
 
-    // MOVE: mover el video derecho +5s arrastra su audio
+    // MOVE: moving the right video +5s drags its audio along
     store.move_clip(vr, vtrack, 9 * SEC, InsertMode::Strict).unwrap();
     let a_right_now = store
         .project
@@ -537,9 +537,9 @@ fn linked_pair_propagates_all_operations() {
         .find(|c| c.group == v_right.group)
         .unwrap()
         .clone();
-    assert_eq!(a_right_now.start, 9 * SEC, "el audio siguió al video");
+    assert_eq!(a_right_now.start, 9 * SEC, "the audio followed the video");
 
-    // TRIM: recortar el borde derecho del video recorta el audio
+    // TRIM: trimming the right edge of the video trims the audio
     store.trim_clip(vr, false, 12 * SEC).unwrap();
     let v_now = store.project.clip(vr).unwrap();
     let a_now = store
@@ -550,9 +550,9 @@ fn linked_pair_propagates_all_operations() {
         .iter()
         .find(|c| c.group == v_right.group)
         .unwrap();
-    assert_eq!(v_now.end(), a_now.end(), "bordes alineados tras el trim");
+    assert_eq!(v_now.end(), a_now.end(), "edges aligned after the trim");
 
-    // SPEED: 2x en ambos
+    // SPEED: 2x on both
     store.set_clip_speed(vr, 2.0).unwrap();
     let a_now = store
         .project
@@ -562,15 +562,45 @@ fn linked_pair_propagates_all_operations() {
         .iter()
         .find(|c| c.group == v_right.group)
         .unwrap();
-    assert_eq!(a_now.speed, 2.0, "velocidad propagada al audio");
+    assert_eq!(a_now.speed, 2.0, "speed propagated to the audio");
     assert_eq!(store.project.clip(vr).unwrap().duration, a_now.duration);
 
-    // DELETE con ripple: borra el par y cierra huecos en ambas pistas
+    // DELETE with ripple: deletes the pair and closes gaps on both tracks
     store.delete_clips(&[vl], true).unwrap();
     let v_clips = &store.project.track(vtrack).unwrap().clips;
     let a_clips = &store.project.track(atrack).unwrap().clips;
     assert_eq!(v_clips.len(), 1);
     assert_eq!(a_clips.len(), 1);
-    assert_eq!(v_clips[0].start, a_clips[0].start, "pistas alineadas tras ripple");
+    assert_eq!(v_clips[0].start, a_clips[0].start, "tracks aligned after ripple");
     assert!(validate(&store.project).is_empty());
+}
+
+/// Split-at-silences mode: boundaries only, nothing removed, duration intact.
+#[test]
+fn split_ranges_segments_without_removing() {
+    let (mut store, _seq, vtrack, atrack, va, _aa) = fixture();
+    store
+        .insert_clip(vtrack, Clip::new_media(va, 0, 10 * SEC, 0), InsertMode::Strict)
+        .unwrap();
+    store
+        .insert_clip(atrack, Clip::new_media(va, 0, 10 * SEC, 0), InsertMode::Strict)
+        .unwrap();
+    let seq_id = store.project.active_sequence;
+    // two "silences": [2,3) and [6,7)
+    store
+        .split_ranges(seq_id, &[(2 * SEC, 3 * SEC), (6 * SEC, 7 * SEC)])
+        .unwrap();
+    let seq = store.project.sequence(seq_id).unwrap();
+    for tid in [vtrack, atrack] {
+        let track = seq.tracks.iter().find(|t| t.id == tid).unwrap();
+        assert_eq!(track.clips.len(), 5, "4 cuts → 5 segments");
+        let total: i64 = track.clips.iter().map(|c| c.duration).sum();
+        assert_eq!(total, 10 * SEC, "nothing was removed");
+        let starts: Vec<i64> = track.clips.iter().map(|c| c.start).collect();
+        assert_eq!(starts, vec![0, 2 * SEC, 3 * SEC, 6 * SEC, 7 * SEC]);
+    }
+    // one undo restores the original single clips
+    store.undo().unwrap();
+    let seq = store.project.sequence(seq_id).unwrap();
+    assert!(seq.tracks.iter().filter(|t| t.id == vtrack || t.id == atrack).all(|t| t.clips.len() == 1));
 }

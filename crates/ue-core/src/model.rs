@@ -1,4 +1,4 @@
-//! Modelo de datos del proyecto (sección 4 del PLAN).
+//! Project data model (PLAN section 4).
 
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
@@ -14,7 +14,7 @@ fn new_id() -> Id {
 }
 
 // ---------------------------------------------------------------------------
-// Proyecto
+// Project
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -65,15 +65,15 @@ impl Default for ProjectSettings {
 }
 
 impl Project {
-    /// Proyecto nuevo con una secuencia 1920x1080@30 y pistas V1/A1.
+    /// New project with a 1920x1080@30 sequence and V1/A1 tracks.
     pub fn new(name: &str) -> Self {
-        let seq = Sequence::new("Principal", (1920, 1080), (30, 1));
+        let seq = Sequence::new("Main", (1920, 1080), (30, 1));
         let seq_id = seq.id;
         Project {
             schema_version: SCHEMA_VERSION,
             id: new_id(),
             name: name.to_string(),
-            created_at: String::new(), // la capa de app la rellena (ue-core no toca el reloj)
+            created_at: String::new(), // the app layer fills it in (ue-core never touches the clock)
             settings: ProjectSettings::default(),
             assets: vec![],
             transcripts: vec![],
@@ -92,7 +92,7 @@ impl Project {
         self.assets.iter().find(|a| a.id == id)
     }
 
-    /// Localiza un clip por id: (seq_idx, track_idx, clip_idx).
+    /// Locates a clip by id: (seq_idx, track_idx, clip_idx).
     pub fn locate_clip(&self, id: Id) -> Option<(usize, usize, usize)> {
         for (si, s) in self.sequences.iter().enumerate() {
             for (ti, t) in s.tracks.iter().enumerate() {
@@ -116,7 +116,7 @@ impl Project {
         self.sequences.iter_mut().flat_map(|s| s.tracks.iter_mut()).find(|t| t.id == id)
     }
 
-    /// Secuencia que contiene la pista.
+    /// The sequence that contains the track.
     pub fn sequence_of_track(&self, track_id: Id) -> Option<&Sequence> {
         self.sequences.iter().find(|s| s.tracks.iter().any(|t| t.id == track_id))
     }
@@ -159,7 +159,7 @@ pub struct ProbeInfo {
 pub struct MediaAsset {
     pub id: Id,
     pub kind: MediaKind,
-    /// Ruta relativa al archivo .uep (o absoluta mientras no se guarde).
+    /// Path relative to the .uep file (or absolute until it is saved).
     pub path: String,
     pub content_hash: String,
     pub probe: ProbeInfo,
@@ -178,7 +178,7 @@ pub struct MediaAsset {
 }
 
 // ---------------------------------------------------------------------------
-// Secuencia / pistas / clips
+// Sequence / tracks / clips
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -214,7 +214,7 @@ impl Sequence {
         }
     }
 
-    /// Duración = fin del último clip entre todas las pistas.
+    /// Duration = end of the last clip across all tracks.
     pub fn duration_us(&self) -> TimeUs {
         self.tracks
             .iter()
@@ -245,7 +245,7 @@ pub struct Track {
     pub locked: bool,
     #[serde(default)]
     pub volume_db: f32,
-    /// SIEMPRE ordenados por `start` y sin solaparse (invariante validado).
+    /// ALWAYS ordered by `start` and non-overlapping (validated invariant).
     #[serde(default)]
     pub clips: Vec<Clip>,
 }
@@ -268,12 +268,12 @@ impl Track {
         self.clips.iter().position(|c| c.id == id)
     }
 
-    /// Índice de inserción manteniendo orden por start.
+    /// Insertion index that keeps ordering by start.
     pub fn insertion_index(&self, start: TimeUs) -> usize {
         self.clips.partition_point(|c| c.start < start)
     }
 
-    /// ¿Un clip [start, start+dur) colisiona con los existentes (excluyendo `exclude`)?
+    /// Does a clip [start, start+dur) collide with the existing ones (excluding `exclude`)?
     pub fn collides(&self, start: TimeUs, duration: TimeUs, exclude: Option<Id>) -> bool {
         let end = start + duration;
         self.clips.iter().any(|c| {
@@ -313,8 +313,8 @@ pub struct Clip {
     pub transition_in: Option<TransitionRef>,
     #[serde(default)]
     pub label_color: Option<String>,
-    /// Clips enlazados (video+audio del mismo medio): comparten grupo y las
-    /// operaciones (mover, dividir, recortar, borrar, velocidad) se propagan.
+    /// Linked clips (video+audio of the same media): they share a group and
+    /// operations (move, split, trim, delete, speed) propagate across them.
     #[serde(default)]
     pub group: Option<Id>,
 }
@@ -386,7 +386,7 @@ impl Clip {
 pub enum ClipPayload {
     Media {
         asset_id: Id,
-        /// Rango del archivo fuente en µs.
+        /// Range of the source file in µs.
         src_in: TimeUs,
         src_out: TimeUs,
     },
@@ -399,8 +399,8 @@ pub enum ClipPayload {
         style: TextStyle,
         mode: SubtitleMode,
     },
-    /// Contenido generado (rectángulo sólido, degradado, …): un manifest de
-    /// generador (ue-render) produce la fuente lavfi a partir de los params.
+    /// Generated content (solid rectangle, gradient, …): a generator manifest
+    /// (ue-render) produces the lavfi source from the params.
     Generator {
         generator_id: String,
         #[serde(default)]
@@ -408,15 +408,15 @@ pub enum ClipPayload {
         #[serde(default)]
         color_params: std::collections::BTreeMap<String, String>,
     },
-    /// Avatar reactivo (PLAN §7.E.1): clips en loop por emoción, guiados por
-    /// el transcript del asset conductor. Config compatible con el
-    /// avatar_config/config.json del Youtubers-toolkit.
+    /// Reactive avatar (PLAN §7.E.1): looping clips per emotion, driven by
+    /// the transcript of the driver asset. Config compatible with the
+    /// avatar_config/config.json of the Youtubers-toolkit.
     Avatar {
         driver_asset: Id,
-        /// emoción → ruta del video del avatar (la primera es la default)
+        /// emotion → path of the avatar video (the first one is the default)
         avatars: std::collections::BTreeMap<String, String>,
         shake_factor: f64,
-        /// escala del avatar relativa al ancho de la secuencia (0..1)
+        /// avatar scale relative to the sequence width (0..1)
         scale: f64,
     },
 }
@@ -493,9 +493,9 @@ pub enum TextAlign {
 pub struct Transform2D {
     pub position: (Param, Param),
     pub scale: (Param, Param),
-    /// Grados.
+    /// Degrees.
     pub rotation: Param,
-    /// Crop left/top/right/bottom en fracción [0, 1].
+    /// Crop left/top/right/bottom as a fraction [0, 1].
     pub crop: (Param, Param, Param, Param),
     pub opacity: Param,
     #[serde(default)]
@@ -505,8 +505,8 @@ pub struct Transform2D {
 }
 
 impl Transform2D {
-    /// Instantánea con todas las curvas evaluadas en `at` (µs relativos al
-    /// clip). Para el preview al hacer scrub.
+    /// Snapshot with all curves evaluated at `at` (µs relative to the
+    /// clip). Used for the preview while scrubbing.
     pub fn sampled(&self, at: TimeUs) -> Transform2D {
         let ev = |p: &Param| Param::Const(p.eval(at));
         Transform2D {
@@ -566,7 +566,7 @@ pub struct EffectInstance {
     pub enabled: bool,
     #[serde(default)]
     pub params: std::collections::BTreeMap<String, Param>,
-    /// Parámetros de color ("#rrggbb"), separados de los numéricos/curvas.
+    /// Color params ("#rrggbb"), kept separate from the numeric/curve ones.
     #[serde(default)]
     pub color_params: std::collections::BTreeMap<String, String>,
 }
@@ -584,7 +584,7 @@ pub struct TransitionRef {
 }
 
 // ---------------------------------------------------------------------------
-// Transcripción (word-level)
+// Transcript (word-level)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -617,7 +617,7 @@ pub struct Segment {
     pub text: String,
     pub start_us: TimeUs,
     pub end_us: TimeUs,
-    /// Rango [desde, hasta) en `words`.
+    /// Range [from, to) in `words`.
     pub word_range: (usize, usize),
     #[serde(default)]
     pub emotion: Option<String>,
@@ -626,7 +626,7 @@ pub struct Segment {
 }
 
 // ---------------------------------------------------------------------------
-// (De)serialización del proyecto
+// Project (de)serialization
 // ---------------------------------------------------------------------------
 
 impl Project {
@@ -643,7 +643,7 @@ impl Project {
         if v.schema_version > SCHEMA_VERSION {
             return Err(crate::UeError::SchemaVersion(v.schema_version, SCHEMA_VERSION));
         }
-        // Aquí irán las migraciones v1→v2… cuando existan.
+        // The v1→v2… migrations will go here once they exist.
         Ok(serde_json::from_str(s)?)
     }
 }
@@ -705,8 +705,8 @@ mod tests {
         let a = Ulid::new();
         t.clips.push(Clip::new_media(a, 0, 1_000_000, 0)); // [0, 1s)
         assert!(t.collides(500_000, 1_000_000, None));
-        assert!(!t.collides(1_000_000, 1_000_000, None)); // adyacente exacto no colisiona
+        assert!(!t.collides(1_000_000, 1_000_000, None)); // exactly adjacent does not collide
         let id = t.clips[0].id;
-        assert!(!t.collides(0, 1_000_000, Some(id))); // excluyéndose a sí mismo
+        assert!(!t.collides(0, 1_000_000, Some(id))); // excluding itself
     }
 }

@@ -1,7 +1,7 @@
-//! ue-media: sondeo (ffprobe), hashing e importación de archivos, y extracción
-//! de frames reales (ffmpeg) para el preview. Los binarios de FFmpeg se toman
-//! del PATH en desarrollo (`UE_FFMPEG`/`UE_FFPROBE` los sobreescriben); en
-//! producción serán sidecars empaquetados.
+//! ue-media: probing (ffprobe), hashing and file import, and real frame
+//! extraction (ffmpeg) for the preview. FFmpeg binaries are taken from the
+//! PATH in development (`UE_FFMPEG`/`UE_FFPROBE` override them); in production
+//! they will be packaged sidecars.
 
 pub mod frame;
 pub mod hashing;
@@ -18,13 +18,13 @@ use ulid::Ulid;
 
 #[derive(Debug, Error)]
 pub enum MediaError {
-    #[error("no se pudo ejecutar {0}: {1}")]
+    #[error("could not run {0}: {1}")]
     Spawn(String, String),
-    #[error("{0} falló: {1}")]
+    #[error("{0} failed: {1}")]
     Tool(String, String),
-    #[error("no se pudo interpretar la salida de ffprobe: {0}")]
+    #[error("could not parse ffprobe output: {0}")]
     Parse(String),
-    #[error("archivo no soportado o sin streams: {0}")]
+    #[error("unsupported file or no streams: {0}")]
     Unsupported(String),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
@@ -40,7 +40,7 @@ pub fn ffprobe_bin() -> String {
     std::env::var("UE_FFPROBE").unwrap_or_else(|_| "ffprobe".into())
 }
 
-/// Importa un archivo: probe + hash → MediaAsset listo para el pool.
+/// Imports a file: probe + hash → MediaAsset ready for the pool.
 pub fn import_file(path: &Path) -> MediaResult<MediaAsset> {
     let (kind, probe_info) = probe::probe(path)?;
     let content_hash = hashing::content_hash(path)?;
@@ -59,8 +59,8 @@ pub fn import_file(path: &Path) -> MediaResult<MediaAsset> {
     })
 }
 
-/// Conforma el audio de un archivo a WAV PCM s16le 48 kHz estéreo (PLAN §5.3).
-/// Idempotente: si `out` ya existe no re-conforma.
+/// Conforms a file's audio to WAV PCM s16le 48 kHz stereo (PLAN §5.3).
+/// Idempotent: if `out` already exists it does not re-conform.
 pub fn conform_audio(src: &Path, out: &Path) -> MediaResult<()> {
     if out.exists() {
         return Ok(());
@@ -87,7 +87,7 @@ pub fn conform_audio(src: &Path, out: &Path) -> MediaResult<()> {
     Ok(())
 }
 
-/// Duración por defecto de un clip de imagen fija.
+/// Default duration of a still-image clip.
 pub const IMAGE_CLIP_DURATION_US: i64 = 5_000_000;
 
 pub fn default_clip_duration(asset: &MediaAsset) -> i64 {

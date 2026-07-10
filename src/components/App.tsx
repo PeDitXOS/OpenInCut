@@ -77,7 +77,7 @@ function usePlayback() {
     if (!playing) return;
 
     if (engineClock) {
-      // el reloj de audio del backend manda: sondear posición
+      // the backend audio clock is authoritative: poll position
       const id = window.setInterval(async () => {
         try {
           const [t, isPlaying, meterL, meterR] = await engine.playbackPosition();
@@ -90,7 +90,7 @@ function usePlayback() {
       return () => window.clearInterval(id);
     }
 
-    // reloj local (navegador / sin dispositivo de audio)
+    // local clock (browser / no audio device)
     let raf = 0;
     let last = performance.now();
     const tick = (now: number) => {
@@ -113,7 +113,7 @@ const MEDIA_EXTENSIONS = new Set([
   "png", "jpg", "jpeg", "webp", "bmp", "tiff", "gif",
 ]);
 
-/** Drag & drop de archivos desde el sistema (solo escritorio). */
+/** Drag & drop of files from the system (desktop only). */
 function useNativeFileDrop() {
   useEffect(() => {
     if (engine.kind !== "tauri") return;
@@ -136,7 +136,7 @@ function useNativeFileDrop() {
               dirty: snap.dirty,
               canUndo: snap.can_undo,
               canRedo: snap.can_redo,
-              lastActionLabel: `Importados ${paths.length} archivo(s) arrastrados`,
+              lastActionLabel: `Imported ${paths.length} dropped file(s)`,
             });
           } catch (e) {
             useStore.setState({
@@ -152,7 +152,7 @@ function useNativeFileDrop() {
 
 export function App() {
   const init = useStore((s) => s.init);
-  const [leftTab, setLeftTab] = useState<"media" | "texto">("media");
+  const [leftTab, setLeftTab] = useState<"media" | "text">("media");
   const transcriptCount = useStore((s) => s.project.transcripts.length);
   useEffect(() => {
     void init();
@@ -169,8 +169,8 @@ export function App() {
           <div className="flex gap-1 px-2 pt-2">
             {(
               [
-                ["media", "Medios"],
-                ["texto", `Texto${transcriptCount ? ` (${transcriptCount})` : ""}`],
+                ["media", "Media"],
+                ["text", `Text${transcriptCount ? ` (${transcriptCount})` : ""}`],
               ] as const
             ).map(([key, label]) => (
               <button

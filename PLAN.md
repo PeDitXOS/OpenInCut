@@ -1,248 +1,248 @@
-# UberEditor — Plan Maestro de Diseño e Implementación
+# UberEditor — Master Design and Implementation Plan
 
-> **Editor de video de escritorio, multiplataforma, con superpoderes de IA.**
-> Documento de planificación. Versión 1.0 — 2026-07-09.
-> Autor: Héctor Pulido + Claude. Estado: **borrador para revisión, no hay código todavía.**
-
----
-
-## Índice
-
-- [0. Resumen ejecutivo](#0-resumen-ejecutivo)
-- [1. Visión, alcance y no-objetivos](#1-visión-alcance-y-no-objetivos)
-- [2. Decisiones de stack tecnológico](#2-decisiones-de-stack-tecnológico)
-- [3. Arquitectura general](#3-arquitectura-general)
-- [4. Modelo de datos del proyecto](#4-modelo-de-datos-del-proyecto)
-- [5. Motor de render y reproducción (el corazón)](#5-motor-de-render-y-reproducción)
-- [6. Features básicas (diseño detallado, 1–11)](#6-features-básicas)
-- [7. Features avanzadas (diseño detallado)](#7-features-avanzadas)
-- [8. Reutilización del Youtubers-toolkit](#8-reutilización-del-youtubers-toolkit)
-- [9. API IPC (frontend ↔ engine)](#9-api-ipc-frontend--engine)
-- [10. Estructura del repositorio](#10-estructura-del-repositorio)
-- [11. Presupuestos de rendimiento](#11-presupuestos-de-rendimiento)
-- [12. Estrategia de testing y CI](#12-estrategia-de-testing-y-ci)
-- [13. Empaquetado, distribución y licencias](#13-empaquetado-distribución-y-licencias)
-- [14. Roadmap por fases](#14-roadmap-por-fases)
-- [15. Riesgos y mitigaciones](#15-riesgos-y-mitigaciones)
-- [16. Backlog futuro (post-v1)](#16-backlog-futuro)
-- [Apéndice A. Ejemplo completo de archivo de proyecto](#apéndice-a-ejemplo-completo-de-archivo-de-proyecto)
-- [Apéndice B. Ejemplo de efecto modular (manifest + WGSL)](#apéndice-b-ejemplo-de-efecto-modular)
-- [Apéndice C. Comandos FFmpeg de referencia](#apéndice-c-comandos-ffmpeg-de-referencia)
-- [Apéndice D. Formato de transcripción word-level](#apéndice-d-formato-de-transcripción-word-level)
-- [Apéndice E. Catálogo inicial de herramientas MCP](#apéndice-e-catálogo-inicial-de-herramientas-mcp)
+> **Cross-platform desktop video editor with AI superpowers.**
+> Planning document. Version 1.0 — 2026-07-09.
+> Author: Héctor Pulido + Claude. Status: **draft for review, no code yet.**
 
 ---
 
-## 0. Resumen ejecutivo
+## Index
 
-**UberEditor** es un editor de video no-lineal (NLE) de escritorio para macOS, Windows y Linux, construido sobre **Tauri 2 + Rust + React/TypeScript**, con un motor de composición GPU propio (**wgpu/WGSL**) y **FFmpeg** como columna vertebral de decodificación/codificación.
-
-Se diferencia de un NLE clásico en cuatro superpoderes:
-
-1. **Edición basada en texto**: todo video importado se transcribe con Whisper palabra por palabra; borrar una palabra en el panel de transcripción corta el video (estilo Descript).
-2. **Automatizaciones de creador**: eliminación/aceleración de silencios, generación automática de versiones verticales (Shorts/Reels), subtítulos automáticos.
-3. **Avatar reactivo**: un avatar personalizable (clips por emoción) que "habla" al ritmo del audio, con emociones clasificadas por LLM y vibración proporcional al volumen.
-4. **Servidor MCP embebido**: al arrancar, la app expone un servidor MCP local para que agentes (Claude Code, Claude Desktop, etc.) lean el estado completo del proyecto y, opcionalmente, ejecuten ediciones.
-
-Gran parte de la lógica de IA ya existe y está probada en `/Users/hectorpulido/Videos Reel/Youtubers-toolkit` (Python: faster-whisper, recorte por silencios, generador de shorts, avatar con emociones). La sección 8 detalla el mapeo módulo a módulo y la estrategia de portado (nativo en Rust como objetivo, sidecar Python como puente si hace falta).
-
-El roadmap propone **7 fases** (0–6). El MVP editable (importar → cortar → previsualizar → exportar) llega al final de la Fase 1; la paridad con el toolkit llega en la Fase 5.
+- [0. Executive summary](#0-executive-summary)
+- [1. Vision, scope and non-goals](#1-vision-scope-and-non-goals)
+- [2. Technology stack decisions](#2-technology-stack-decisions)
+- [3. General architecture](#3-general-architecture)
+- [4. Project data model](#4-project-data-model)
+- [5. Render and playback engine (the heart)](#5-render-and-playback-engine)
+- [6. Basic features (detailed design, 1–11)](#6-basic-features)
+- [7. Advanced features (detailed design)](#7-advanced-features)
+- [8. Reuse of the Youtubers-toolkit](#8-reuse-of-the-youtubers-toolkit)
+- [9. IPC API (frontend ↔ engine)](#9-ipc-api-frontend--engine)
+- [10. Repository structure](#10-repository-structure)
+- [11. Performance budgets](#11-performance-budgets)
+- [12. Testing and CI strategy](#12-testing-and-ci-strategy)
+- [13. Packaging, distribution and licenses](#13-packaging-distribution-and-licenses)
+- [14. Phased roadmap](#14-phased-roadmap)
+- [15. Risks and mitigations](#15-risks-and-mitigations)
+- [16. Future backlog (post-v1)](#16-future-backlog-post-v1)
+- [Appendix A. Complete project file example](#appendix-a-complete-project-file-example)
+- [Appendix B. Modular effect example (manifest + WGSL)](#appendix-b-modular-effect-example)
+- [Appendix C. Reference FFmpeg commands](#appendix-c-reference-ffmpeg-commands)
+- [Appendix D. Word-level transcript format](#appendix-d-word-level-transcript-format)
+- [Appendix E. Initial catalog of MCP tools](#appendix-e-initial-catalog-of-mcp-tools)
 
 ---
 
-## 1. Visión, alcance y no-objetivos
+## 0. Executive summary
 
-### 1.1 Visión
+**UberEditor** is a non-linear desktop video editor (NLE) for macOS, Windows and Linux, built on **Tauri 2 + Rust + React/TypeScript**, with a homegrown GPU compositing engine (**wgpu/WGSL**) and **FFmpeg** as the decode/encode backbone.
 
-Un editor que un YouTuber/creador usa de principio a fin para su flujo real:
+It differs from a classic NLE in four superpowers:
+
+1. **Text-based editing**: every imported video is transcribed with Whisper word by word; deleting a word in the transcript panel cuts the video (Descript-style).
+2. **Creator automations**: silence removal/speed-up, automatic generation of vertical versions (Shorts/Reels), automatic subtitles.
+3. **Reactive avatar**: a customizable avatar (clips per emotion) that "speaks" to the rhythm of the audio, with emotions classified by an LLM and vibration proportional to the volume.
+4. **Embedded MCP server**: on startup, the app exposes a local MCP server so that agents (Claude Code, Claude Desktop, etc.) can read the full project state and, optionally, run edits.
+
+Much of the AI logic already exists and is proven in `/Users/hectorpulido/Videos Reel/Youtubers-toolkit` (Python: faster-whisper, silence trimming, shorts generator, avatar with emotions). Section 8 details the module-by-module mapping and the porting strategy (native Rust as the goal, Python sidecar as a bridge if needed).
+
+The roadmap proposes **7 phases** (0–6). The editable MVP (import → cut → preview → export) lands at the end of Phase 1; parity with the toolkit arrives in Phase 5.
+
+---
+
+## 1. Vision, scope and non-goals
+
+### 1.1 Vision
+
+An editor a YouTuber/creator uses end to end for their real workflow:
 
 ```
-Grabar → Importar → Limpiar (silencios, muletillas) → Editar (texto + timeline)
-      → Decorar (subtítulos, avatar, títulos, efectos) → Exportar (horizontal + vertical)
+Record → Import → Clean up (silences, filler words) → Edit (text + timeline)
+      → Decorate (subtitles, avatar, titles, effects) → Export (horizontal + vertical)
 ```
 
-Y que además es **operable por agentes de IA** vía MCP: "Claude, elimina los silencios de este proyecto, genera la versión vertical y expórtala para Shorts".
+And which is also **operable by AI agents** via MCP: "Claude, remove the silences from this project, generate the vertical version and export it for Shorts".
 
-### 1.2 Alcance v1 (lo que SÍ entra)
+### 1.2 v1 scope (what IS included)
 
-**Básicas (requisito):**
+**Basic (required):**
 
-| # | Feature | Resumen |
+| # | Feature | Summary |
 |---|---------|---------|
-| 1 | Línea de tiempo | Pistas múltiples de video y audio, zoom, snapping, drag & drop |
-| 2 | Recorte y división | Cuchilla, split en playhead, trim de bordes, ripple delete |
-| 3 | Importación multi-formato | Video, audio e imágenes vía FFmpeg; proxies y conformado |
-| 4 | Vista previa en tiempo real | 720p30 estable como mínimo, escalado adaptativo |
-| 5 | Transiciones y efectos modulares | Sistema de shaders (WGSL/GLSL) con manifest JSON, hot-reload |
-| 6 | Texto y títulos | Clips de texto con estilos, plantillas y animación |
-| 7 | Control de audio | Ganancia por clip, fades, volumen/mute/solo por pista, medidores |
-| 8 | Ajustes de imagen | Brillo/contraste/saturación (+ más) como shaders; rotar, recortar encuadre, escala/posición |
-| 9 | Exportación configurable | Presets + control fino de códec/bitrate/resolución/rango |
-| 10 | Undo/redo y proyecto | Historial ilimitado-práctico, autosave, archivo de proyecto versionado |
-| 11 | Keyframes básicos | Cualquier parámetro numérico animable; interpolación lineal/hold/ease |
+| 1 | Timeline | Multiple video and audio tracks, zoom, snapping, drag & drop |
+| 2 | Trimming and splitting | Blade, split at playhead, edge trim, ripple delete |
+| 3 | Multi-format import | Video, audio and images via FFmpeg; proxies and conforming |
+| 4 | Real-time preview | Stable 720p30 at minimum, adaptive scaling |
+| 5 | Modular transitions and effects | Shader system (WGSL/GLSL) with JSON manifest, hot-reload |
+| 6 | Text and titles | Text clips with styles, templates and animation |
+| 7 | Audio control | Per-clip gain, fades, volume/mute/solo per track, meters |
+| 8 | Image adjustments | Brightness/contrast/saturation (+ more) as shaders; rotate, crop framing, scale/position |
+| 9 | Configurable export | Presets + fine control over codec/bitrate/resolution/range |
+| 10 | Undo/redo and project | Practically unlimited history, autosave, versioned project file |
+| 11 | Basic keyframes | Any numeric parameter animatable; linear/hold/ease interpolation |
 
-**Avanzadas (requisito):**
+**Advanced (required):**
 
-| # | Feature | Resumen |
+| # | Feature | Summary |
 |---|---------|---------|
-| A | Servidor MCP | Estado completo del proyecto expuesto a agentes; herramientas de edición opcionales |
-| B | Whisper palabra-por-palabra | Transcripción word-level de todo video; edición borrando/moviendo texto |
-| C | Silencios | Detectar, eliminar (ripple) o procesar (acelerar) silencios |
-| D | Vertical automático | Plantilla 9:16 con fondo desenfocado + subtítulos + títulos, wizard de 1 clic |
-| E | Avatar + subtítulos automáticos | Avatar por emociones que vibra con el volumen; subtítulos word-level automáticos |
+| A | MCP server | Full project state exposed to agents; optional editing tools |
+| B | Word-by-word Whisper | Word-level transcript of every video; editing by deleting/moving text |
+| C | Silences | Detect, remove (ripple) or process (speed up) silences |
+| D | Automatic vertical | 9:16 template with blurred background + subtitles + titles, 1-click wizard |
+| E | Avatar + automatic subtitles | Emotion-based avatar that vibrates with the volume; automatic word-level subtitles |
 
-### 1.3 No-objetivos v1 (explícitamente fuera)
+### 1.3 v1 non-goals (explicitly out)
 
-- Edición multicámara, motion tracking, estabilización.
-- Corrección de color profesional (scopes, LUTs, HDR) — solo ajustes básicos.
-- Plugins de terceros VST/OFX (sí efectos modulares propios en shader).
-- Colaboración multiusuario / proyectos en la nube.
-- Doblaje automático con TTS (existe en el toolkit con Kokoro; va al backlog, sección 16).
-- Edición 360°/VR, timelines anidados (compound clips) — backlog.
+- Multicam editing, motion tracking, stabilization.
+- Professional color grading (scopes, LUTs, HDR) — basic adjustments only.
+- Third-party VST/OFX plugins (yes to homegrown modular shader effects).
+- Multi-user collaboration / cloud projects.
+- Automatic dubbing with TTS (exists in the toolkit with Kokoro; goes to the backlog, section 16).
+- 360°/VR editing, nested timelines (compound clips) — backlog.
 
-### 1.4 Principios de diseño
+### 1.4 Design principles
 
-1. **Edición no destructiva siempre**: los archivos fuente jamás se modifican; todo es metadatos + render.
-2. **El estado vive en Rust**: el frontend es una vista; una única fuente de verdad en el engine evita desincronizaciones y hace trivial el MCP y el undo/redo.
-3. **Preview == Export**: el mismo grafo de render produce la vista previa y la exportación (a distinta resolución), incluyendo efectos aleatorios (ruido con semilla determinista). Lo que ves es lo que sale.
-4. **Todo trabajo pesado es un job cancelable con progreso**: import, proxy, waveform, whisper, export.
-5. **Los formatos de configuración del toolkit se respetan** donde sea razonable (config de avatar, estilos de subtítulos) para migración suave.
-6. **Modularidad radical**: casi toda feature visual es *datos + shader* (efectos, transiciones, ajustes de imagen, chroma key, incluso el shake del avatar) descubiertos en tiempo de ejecución desde carpetas de "packs"; casi toda feature de edición es una `Action` registrada en un único registro que alimenta a la vez la UI, el undo/redo y el MCP. Añadir una feature nueva = añadir un archivo, no tocar el núcleo (sección 6.5.1).
-7. **Chroma key de primera clase**: es un efecto core con supresión de spill, pensado tanto para material grabado con pantalla verde como para los avatares (sección 6.5.4).
+1. **Non-destructive editing always**: source files are never modified; everything is metadata + render.
+2. **State lives in Rust**: the frontend is a view; a single source of truth in the engine avoids desyncs and makes MCP and undo/redo trivial.
+3. **Preview == Export**: the same render graph produces the preview and the export (at different resolution), including random effects (noise with deterministic seed). What you see is what you get.
+4. **All heavy work is a cancelable job with progress**: import, proxy, waveform, whisper, export.
+5. **The toolkit's config formats are honored** wherever reasonable (avatar config, subtitle styles) for smooth migration.
+6. **Radical modularity**: almost every visual feature is *data + shader* (effects, transitions, image adjustments, chroma key, even the avatar shake) discovered at runtime from "pack" folders; almost every editing feature is an `Action` registered in a single registry that simultaneously feeds the UI, undo/redo and MCP. Adding a new feature = adding a file, not touching the core (section 6.5.1).
+7. **First-class chroma key**: it is a core effect with spill suppression, intended both for green-screen footage and for the avatars (section 6.5.4).
 
 ---
 
-## 2. Decisiones de stack tecnológico
+## 2. Technology stack decisions
 
-### 2.1 Tabla de decisiones
+### 2.1 Decision table
 
-| Área | Elección | Alternativas evaluadas | Justificación |
+| Area | Choice | Alternatives evaluated | Rationale |
 |------|----------|------------------------|---------------|
-| Shell de app | **Tauri 2.x** | Electron, Qt, egui/iced nativo | Pedido explícito; binarios pequeños; el backend Rust ES el motor de video (en Electron habría que escribir un addon nativo igualmente). |
-| Frontend | **React 18 + TypeScript + Vite** | Svelte 5, SolidJS | Ecosistema maduro para UIs complejas (DnD, virtualización); tipado compartido con el engine vía codegen. Svelte es viable si se prefiere; la arquitectura no depende del framework. |
-| Estado UI | **Zustand** + eventos Tauri | Redux, Jotai | Store minimalista que refleja (mirror) el estado del engine; las mutaciones NO viven aquí (viven en Rust). |
-| Estilos | **Tailwind CSS** + tokens propios | CSS modules | Velocidad para una UI densa tipo NLE con tema oscuro. |
-| Motor gráfico | **wgpu (WGSL)** | OpenGL crudo, Skia, CPU (como MoviePy) | Multiplataforma real (Metal/Vulkan/DX12), shaders modernos, compute disponible. MoviePy (CPU) es justo el cuello de botella que sufre el toolkit. |
-| Demux/decode | **FFmpeg sidecar (CLI)** en Fase 1 → opción `ffmpeg-next` (libav) en Fase 2+ | GStreamer, WebCodecs en el webview | Sidecar: cero problemas de linking, aislamiento de crashes, misma herramienta para probe/proxy/export. WebCodecs se descarta como base por soporte irregular en WebKitGTK (Linux). |
-| Encode/export | **FFmpeg sidecar** (pipe rawvideo + wav) | libav embebido | Control total de códecs/containers, robustez probada. |
-| Audio playback | **cpal** (callback de audio) + mixer propio | rodio, SDL | Necesitamos mezcla propia con keyframes y reloj maestro de audio; rodio es demasiado alto nivel. |
-| Decode de audio | **Conformado a WAV PCM al importar** (vía ffmpeg) + lectura mmap | symphonia en tiempo real | Conformar de entrada (como hacen los NLE pro) simplifica seeks, waveforms y mezcla; el costo de disco es aceptable. |
-| Texto/tipografía | **cosmic-text** (shaping + fallback) rasterizado a textura | glyphon, resvg | Soporte de emoji, RTL y fuentes del sistema; rasterizamos a atlas y componemos en GPU. |
-| Transcripción | **whisper-rs** (bindings whisper.cpp, con Metal/CUDA) | Sidecar Python faster-whisper (como el toolkit) | Sin dependencia de Python en producción. faster-whisper queda como **plan B puente** (sección 8.3). |
-| Clasif. de emociones | **API OpenAI-compatible configurable** (OpenAI, Ollama local, etc.) | Modelo local ONNX | Es exactamente lo que hace el toolkit (prompt probado); "OpenAI-compatible" permite privacidad total con Ollama. |
-| Denoise | **nnnoiseless / RNNoise** (Rust/C, tiempo real) | DNS64+torch (toolkit) | DNS64 arrastra PyTorch (~2GB); RNNoise es liviano y suficiente para voz. DNS64 posible vía sidecar en backlog. |
-| MCP | **rmcp** (SDK oficial de Rust) con transporte streamable-HTTP en localhost | Implementación manual, sidecar Node | SDK oficial, tokio-native, mismo proceso que el estado del proyecto. |
-| Persistencia | **JSON (serde)** con `schema_version`, rutas relativas | SQLite, binario | Diffable en git, inspeccionable, trivial de exponer por MCP. SQLite solo para cachés/índices internos. |
-| IDs | **ULID** | UUID v4 | Ordenables por tiempo (útil en logs/históricos), legibles. |
-| Tiempo | **`i64` microsegundos** (`TimeUs`) + fps racional `(num, den)` | floats, frames | Los floats acumulan error (el toolkit sufre esto en SRT); microsegundos enteros son exactos y convertibles a cualquier fps. |
+| App shell | **Tauri 2.x** | Electron, Qt, native egui/iced | Explicit request; small binaries; the Rust backend IS the video engine (in Electron you'd have to write a native addon anyway). |
+| Frontend | **React 18 + TypeScript + Vite** | Svelte 5, SolidJS | Mature ecosystem for complex UIs (DnD, virtualization); typing shared with the engine via codegen. Svelte is viable if preferred; the architecture doesn't depend on the framework. |
+| UI state | **Zustand** + Tauri events | Redux, Jotai | Minimalist store that mirrors the engine's state; mutations do NOT live here (they live in Rust). |
+| Styling | **Tailwind CSS** + custom tokens | CSS modules | Speed for a dense NLE-style UI with a dark theme. |
+| Graphics engine | **wgpu (WGSL)** | raw OpenGL, Skia, CPU (like MoviePy) | Real cross-platform (Metal/Vulkan/DX12), modern shaders, compute available. MoviePy (CPU) is exactly the bottleneck the toolkit suffers. |
+| Demux/decode | **FFmpeg sidecar (CLI)** in Phase 1 → `ffmpeg-next` (libav) option in Phase 2+ | GStreamer, WebCodecs in the webview | Sidecar: zero linking problems, crash isolation, same tool for probe/proxy/export. WebCodecs is ruled out as a base due to spotty support in WebKitGTK (Linux). |
+| Encode/export | **FFmpeg sidecar** (pipe rawvideo + wav) | embedded libav | Full control over codecs/containers, proven robustness. |
+| Audio playback | **cpal** (audio callback) + custom mixer | rodio, SDL | We need our own mixing with keyframes and a master audio clock; rodio is too high-level. |
+| Audio decode | **Conform to WAV PCM on import** (via ffmpeg) + mmap read | symphonia in real time | Conforming up front (as pro NLEs do) simplifies seeks, waveforms and mixing; the disk cost is acceptable. |
+| Text/typography | **cosmic-text** (shaping + fallback) rasterized to a texture | glyphon, resvg | Support for emoji, RTL and system fonts; we rasterize to an atlas and compose on the GPU. |
+| Transcription | **whisper-rs** (whisper.cpp bindings, with Metal/CUDA) | Python faster-whisper sidecar (like the toolkit) | No dependency on Python in production. faster-whisper remains as a **plan B bridge** (section 8.3). |
+| Emotion classif. | **Configurable OpenAI-compatible API** (OpenAI, local Ollama, etc.) | Local ONNX model | It is exactly what the toolkit does (proven prompt); "OpenAI-compatible" allows full privacy with Ollama. |
+| Denoise | **nnnoiseless / RNNoise** (Rust/C, real time) | DNS64+torch (toolkit) | DNS64 drags in PyTorch (~2GB); RNNoise is lightweight and sufficient for voice. DNS64 possible via sidecar in the backlog. |
+| MCP | **rmcp** (official Rust SDK) with streamable-HTTP transport on localhost | Manual implementation, Node sidecar | Official SDK, tokio-native, same process as the project state. |
+| Persistence | **JSON (serde)** with `schema_version`, relative paths | SQLite, binary | Diffable in git, inspectable, trivial to expose over MCP. SQLite only for internal caches/indexes. |
+| IDs | **ULID** | UUID v4 | Time-sortable (useful in logs/histories), readable. |
+| Time | **`i64` microseconds** (`TimeUs`) + rational fps `(num, den)` | floats, frames | Floats accumulate error (the toolkit suffers this in SRT); integer microseconds are exact and convertible to any fps. |
 
-### 2.2 Versiones objetivo
+### 2.2 Target versions
 
 - Rust stable ≥ 1.85, edition 2024.
-- Tauri 2.x + plugins oficiales: `dialog`, `fs`, `shell` (sidecars), `store` (preferencias), `log`, `single-instance`, `window-state`, `updater`.
-- FFmpeg 7.x sidecar (builds estáticos por plataforma, ver sección 13).
-- Node 22 + pnpm para el frontend.
-- whisper.cpp ≥ 1.7 vía whisper-rs (build con Metal en macOS; CPU AVX2 en Windows/Linux; CUDA opcional).
+- Tauri 2.x + official plugins: `dialog`, `fs`, `shell` (sidecars), `store` (preferences), `log`, `single-instance`, `window-state`, `updater`.
+- FFmpeg 7.x sidecar (static builds per platform, see section 13).
+- Node 22 + pnpm for the frontend.
+- whisper.cpp ≥ 1.7 via whisper-rs (Metal build on macOS; CPU AVX2 on Windows/Linux; CUDA optional).
 
-### 2.3 Plataformas soportadas
+### 2.3 Supported platforms
 
-| OS | Mínimo | Webview | GPU backend (wgpu) |
+| OS | Minimum | Webview | GPU backend (wgpu) |
 |----|--------|---------|--------------------|
 | macOS | 12+ (arm64 + x86_64) | WKWebView | Metal |
-| Windows | 10 20H2+ (x86_64) | WebView2 (Chromium) | DX12 (fallback Vulkan) |
-| Linux | Ubuntu 22.04+ (x86_64) | WebKitGTK | Vulkan (fallback GL) |
+| Windows | 10 20H2+ (x86_64) | WebView2 (Chromium) | DX12 (Vulkan fallback) |
+| Linux | Ubuntu 22.04+ (x86_64) | WebKitGTK | Vulkan (GL fallback) |
 
 ---
 
-## 3. Arquitectura general
+## 3. General architecture
 
-### 3.1 Diagrama de procesos y threads
+### 3.1 Process and thread diagram
 
 ```
-┌──────────────────────────────── Proceso principal (Tauri / Rust) ────────────────────────────────┐
+┌──────────────────────────────── Main process (Tauri / Rust) ────────────────────────────────┐
 │                                                                                                   │
 │  ┌───────────── WebView (React) ─────────────┐      ┌────────────── Engine (Rust) ─────────────┐  │
-│  │  Timeline UI (canvas)                     │      │  ProjectStore  (estado único + historial) │  │
-│  │  Preview (canvas WebGL / superficie)      │◄────►│  PlaybackController (reloj de audio)      │  │
-│  │  Media Pool, Inspector, Transcript Panel  │ IPC  │  RenderGraph (wgpu, WGSL, cache texturas) │  │
-│  │  Export dialog, Jobs panel                │      │  DecodePool (sesiones ffmpeg / frame LRU)  │  │
-│  └───────────────────────────────────────────┘      │  AudioMixer (cpal, 48kHz, reloj maestro)   │  │
-│         ▲  eventos state.patch / job.progress        │  JobRunner (import, proxy, whisper, export)│  │
-│         │  frames vía canal binario / protocolo      │  McpServer (rmcp, HTTP 127.0.0.1:4599)     │  │
+│  │  Timeline UI (canvas)                     │      │  ProjectStore  (single state + history)   │  │
+│  │  Preview (WebGL canvas / surface)         │◄────►│  PlaybackController (audio clock)         │  │
+│  │  Media Pool, Inspector, Transcript Panel  │ IPC  │  RenderGraph (wgpu, WGSL, texture cache)  │  │
+│  │  Export dialog, Jobs panel                │      │  DecodePool (ffmpeg sessions / frame LRU)  │  │
+│  └───────────────────────────────────────────┘      │  AudioMixer (cpal, 48kHz, master clock)    │  │
+│         ▲  state.patch / job.progress events         │  JobRunner (import, proxy, whisper, export)│  │
+│         │  frames via binary channel / protocol      │  McpServer (rmcp, HTTP 127.0.0.1:4599)     │  │
 │         └────────────────────────────────────────────┴────────────────────────────────────────────┘  │
 └───────────────────────────────────────────────────────────────────────────────────────────────────┘
         │                          │                              │
-        ▼ sidecar                  ▼ sidecar                      ▼ (in-process, hilo tokio)
-   ffmpeg / ffprobe        (opcional) toolkit-bridge         Cliente MCP externo
-   (decode, proxy,          (Python congelado:               (Claude Code / Desktop
-    waveform, export)        faster-whisper, kokoro)          se conecta por HTTP)
+        ▼ sidecar                  ▼ sidecar                      ▼ (in-process, tokio thread)
+   ffmpeg / ffprobe        (optional) toolkit-bridge          External MCP client
+   (decode, proxy,          (frozen Python:                  (Claude Code / Desktop
+    waveform, export)        faster-whisper, kokoro)          connects over HTTP)
 ```
 
-### 3.2 Reglas de flujo de datos
+### 3.2 Data-flow rules
 
-1. **Unidireccional**: la UI emite *intents* (`invoke("timeline.split_clip", …)`) → el engine valida, muta el `ProjectStore`, empuja al historial, y emite un evento `state.patch` (JSON Patch RFC 6902) → la UI aplica el patch a su mirror.
-2. **El engine nunca confía en la UI**: todos los invariantes (no solapar clips en una pista, in < out, etc.) se validan en Rust. El MCP reutiliza las mismas acciones, gratis.
-3. **Datos pesados fuera del IPC JSON**: frames de preview, waveforms y thumbnails viajan por canal binario (`tauri::ipc::Channel`) o por protocolo custom (`ueasset://`), nunca como JSON base64.
-4. **Jobs**: toda operación > 100 ms es un `Job { id, kind, progress, cancel_token }`; la UI tiene un panel de jobs global; MCP puede consultarlos.
+1. **Unidirectional**: the UI emits *intents* (`invoke("timeline.split_clip", …)`) → the engine validates, mutates the `ProjectStore`, pushes to history, and emits a `state.patch` event (JSON Patch RFC 6902) → the UI applies the patch to its mirror.
+2. **The engine never trusts the UI**: all invariants (no overlapping clips on a track, in < out, etc.) are validated in Rust. MCP reuses the same actions, for free.
+3. **Heavy data outside the JSON IPC**: preview frames, waveforms and thumbnails travel over a binary channel (`tauri::ipc::Channel`) or a custom protocol (`ueasset://`), never as base64 JSON.
+4. **Jobs**: every operation > 100 ms is a `Job { id, kind, progress, cancel_token }`; the UI has a global jobs panel; MCP can query them.
 
-### 3.3 Módulos del engine (crates internos)
+### 3.3 Engine modules (internal crates)
 
 ```
 crates/
-├── ue-core        # Modelo de datos, acciones, historial, validación, (de)serialización
-├── ue-media       # ffprobe, import, proxies, conformado de audio, thumbnails, peaks
-├── ue-render      # wgpu: grafo de composición, efectos, transiciones, texto, transform
-├── ue-audio       # cpal, mixer, fades/keyframes de volumen, medidores, reloj maestro
-├── ue-playback    # Orquestación: decode-ahead, cache, sync A/V, scrub
-├── ue-export      # Cola de exportación, pipe a ffmpeg, presets
-├── ue-ai          # whisper-rs, silencios, edición por texto, vertical, avatar, emociones
-├── ue-mcp         # Servidor MCP (rmcp), mapeo de tools → acciones de ue-core
-└── ue-tauri (src-tauri) # Comandos IPC, eventos, wiring, sidecars
+├── ue-core        # Data model, actions, history, validation, (de)serialization
+├── ue-media       # ffprobe, import, proxies, audio conforming, thumbnails, peaks
+├── ue-render      # wgpu: compositing graph, effects, transitions, text, transform
+├── ue-audio       # cpal, mixer, volume fades/keyframes, meters, master clock
+├── ue-playback    # Orchestration: decode-ahead, cache, A/V sync, scrub
+├── ue-export      # Export queue, pipe to ffmpeg, presets
+├── ue-ai          # whisper-rs, silences, text-based editing, vertical, avatar, emotions
+├── ue-mcp         # MCP server (rmcp), mapping of tools → ue-core actions
+└── ue-tauri (src-tauri) # IPC commands, events, wiring, sidecars
 ```
 
-Dependencias permitidas (flechas = "puede usar"): `ue-tauri → todos`; `ue-mcp → ue-core, ue-ai, ue-export`; `ue-playback → ue-media, ue-render, ue-audio, ue-core`; `ue-ai → ue-media, ue-core`. `ue-core` no depende de nadie (puro).
+Allowed dependencies (arrows = "may use"): `ue-tauri → everything`; `ue-mcp → ue-core, ue-ai, ue-export`; `ue-playback → ue-media, ue-render, ue-audio, ue-core`; `ue-ai → ue-media, ue-core`. `ue-core` depends on nobody (pure).
 
 ---
 
-## 4. Modelo de datos del proyecto
+## 4. Project data model
 
-### 4.1 Entidades (Rust, simplificado)
+### 4.1 Entities (Rust, simplified)
 
 ```rust
-type TimeUs = i64;           // microsegundos; 1 s = 1_000_000
+type TimeUs = i64;           // microseconds; 1 s = 1_000_000
 type Id = Ulid;
 
 struct Project {
-    schema_version: u32,             // migraciones explícitas
+    schema_version: u32,             // explicit migrations
     id: Id,
     name: String,
     created_at: String,              // ISO-8601
-    settings: ProjectSettings,       // carpeta de caché, idioma whisper por defecto, etc.
+    settings: ProjectSettings,       // cache folder, default whisper language, etc.
     assets: Vec<MediaAsset>,         // "media pool"
-    sequences: Vec<Sequence>,        // v1: normalmente 1, pero el modelo admite varias
+    sequences: Vec<Sequence>,        // v1: normally 1, but the model allows several
     active_sequence: Id,
 }
 
 struct MediaAsset {
     id: Id,
     kind: MediaKind,                 // Video | Audio | Image
-    path: RelPath,                   // relativa al proyecto; relink si no existe
-    content_hash: String,            // xxh3 de los primeros/últimos 4MB + tamaño (rápido)
-    probe: ProbeInfo,                // duración, streams, códecs, fps, resolución, rotación
-    proxy: Option<RelPath>,          // 720p h264 GOP corto (cache)
-    audio_conform: Option<RelPath>,  // wav pcm_s16le 48k estéreo (cache)
-    peaks: Option<RelPath>,          // picos de waveform binarios (cache)
-    thumbnails: Option<RelPath>,     // sprite de miniaturas (cache)
+    path: RelPath,                   // relative to the project; relink if it doesn't exist
+    content_hash: String,            // xxh3 of the first/last 4MB + size (fast)
+    probe: ProbeInfo,                // duration, streams, codecs, fps, resolution, rotation
+    proxy: Option<RelPath>,          // 720p h264 short GOP (cache)
+    audio_conform: Option<RelPath>,  // wav pcm_s16le 48k stereo (cache)
+    peaks: Option<RelPath>,          // binary waveform peaks (cache)
+    thumbnails: Option<RelPath>,     // thumbnail sprite (cache)
     transcript: Option<Id>,          // → TranscriptDoc
 }
 
 struct Sequence {
     id: Id,
     name: String,
-    resolution: (u32, u32),          // p.ej. (1920, 1080) o (1080, 1920)
-    fps: (u32, u32),                 // racional, p.ej. (30000, 1001)
+    resolution: (u32, u32),          // e.g. (1920, 1080) or (1080, 1920)
+    fps: (u32, u32),                 // rational, e.g. (30000, 1001)
     sample_rate: u32,                // 48000
-    tracks: Vec<Track>,              // orden = orden de composición (índice 0 = abajo)
+    tracks: Vec<Track>,              // order = compositing order (index 0 = bottom)
     markers: Vec<Marker>,
 }
 
@@ -251,306 +251,306 @@ struct Track {
     kind: TrackKind,                 // Video | Audio
     name: String,
     muted: bool, solo: bool, locked: bool,
-    volume_db: f32,                  // solo audio; keyframable
-    clips: Vec<Clip>,                // SIEMPRE ordenados por start, sin solaparse
+    volume_db: f32,                  // audio only; keyframable
+    clips: Vec<Clip>,                // ALWAYS ordered by start, non-overlapping
 }
 
 struct Clip {
     id: Id,
     payload: ClipPayload,
-    start: TimeUs,                   // posición en el timeline
+    start: TimeUs,                   // position on the timeline
     duration: TimeUs,
-    speed: f64,                      // 1.0 normal; >1 acelera (silencios procesados)
-    effects: Vec<EffectInstance>,    // cadena ordenada de shaders
-    transform: Transform2D,          // pos, escala, rotación, crop — keyframable
+    speed: f64,                      // 1.0 normal; >1 speeds up (processed silences)
+    effects: Vec<EffectInstance>,    // ordered shader chain
+    transform: Transform2D,          // pos, scale, rotation, crop — keyframable
     audio: AudioProps,               // gain_db, pan, fade_in/out — keyframable
-    transition_in: Option<TransitionRef>,   // compartida con el clip anterior
+    transition_in: Option<TransitionRef>,   // shared with the previous clip
     label_color: Option<String>,
 }
 
 enum ClipPayload {
-    Media { asset_id: Id, src_in: TimeUs, src_out: TimeUs },  // rango del archivo fuente
-    Text  { content: RichText, style: TextStyle },            // títulos y subtítulos manuales
+    Media { asset_id: Id, src_in: TimeUs, src_out: TimeUs },  // range of the source file
+    Text  { content: RichText, style: TextStyle },            // titles and manual subtitles
     Subtitles { transcript_id: Id, style: SubtitleStyle, mode: SubtitleMode }, // auto, word-level
-    Avatar { config: AvatarConfig, driver_asset: Id },        // sección 7.E
-    Solid { color: [f32; 4] },                                // fondos
+    Avatar { config: AvatarConfig, driver_asset: Id },        // section 7.E
+    Solid { color: [f32; 4] },                                // backgrounds
 }
 
 struct EffectInstance {
     effect_id: String,               // "core.brightness_contrast", "user.vhs"
     enabled: bool,
-    params: BTreeMap<String, ParamValue>,   // valor fijo o curva de keyframes
+    params: BTreeMap<String, ParamValue>,   // fixed value or keyframe curve
 }
 
 enum ParamValue { Const(f64), Color([f32;4]), Bool(bool), Curve(KeyframeCurve), Text(String) }
 
 struct KeyframeCurve {
-    keys: Vec<Keyframe>,             // ordenadas por t
+    keys: Vec<Keyframe>,             // ordered by t
 }
 struct Keyframe {
-    t: TimeUs,                       // relativo al inicio del CLIP (sobrevive a moverlo)
+    t: TimeUs,                       // relative to the start of the CLIP (survives moving it)
     value: f64,
     interp: Interp,                  // Hold | Linear | Bezier { in_tangent, out_tangent }
 }
 
-struct TranscriptDoc {               // sección 7.B y Apéndice D
+struct TranscriptDoc {               // section 7.B and Appendix D
     id: Id,
     asset_id: Id,
     language: String,
     model: String,                   // "large-v3-turbo"
-    words: Vec<Word>,                // { text, start, end, confidence } en tiempo del ASSET
-    segments: Vec<Segment>,          // frases (para emociones de avatar y SRT clásico)
+    words: Vec<Word>,                // { text, start, end, confidence } in ASSET time
+    segments: Vec<Segment>,          // phrases (for avatar emotions and classic SRT)
 }
 ```
 
-### 4.2 Invariantes (validados en `ue-core`, con tests)
+### 4.2 Invariants (validated in `ue-core`, with tests)
 
-1. Clips de una pista ordenados por `start` y sin solaparse (`clip[i].start + duration <= clip[i+1].start`).
-2. `0 <= src_in < src_out <= asset.duration` para payloads Media.
-3. Keyframes con `t` estrictamente creciente; toda curva tiene ≥ 1 key.
-4. Toda `TransitionRef` referencia dos clips adyacentes en la misma pista y su duración ≤ material disponible (handles) a ambos lados.
-5. Los IDs son únicos en todo el proyecto (mapa global de índices para lookup O(1)).
+1. A track's clips are ordered by `start` and non-overlapping (`clip[i].start + duration <= clip[i+1].start`).
+2. `0 <= src_in < src_out <= asset.duration` for Media payloads.
+3. Keyframes with strictly increasing `t`; every curve has ≥ 1 key.
+4. Every `TransitionRef` references two adjacent clips on the same track and its duration ≤ available material (handles) on both sides.
+5. IDs are unique across the whole project (global index map for O(1) lookup).
 
-### 4.3 Archivo de proyecto
+### 4.3 Project file
 
-- Extensión: **`.uep`** (UberEditor Project). Contenido: JSON pretty-printed (diffable).
-- Rutas de media **relativas** al archivo `.uep`; al abrir, verificación por `content_hash` → diálogo de **relink** con búsqueda por hash en carpetas que indique el usuario.
-- Cachés (proxies, wavs, peaks, transcripts) van a `<app_data>/cache/<content_hash>/…`, NUNCA dentro del proyecto → un `.uep` es pequeño y portable; borrar caché nunca pierde trabajo.
-- **Autosave**: cada 60 s (configurable) a `<proyecto>.uep.autosave`; al abrir tras crash se ofrece recuperar. Además, snapshot en cada export.
-- Ver ejemplo completo en Apéndice A.
+- Extension: **`.uep`** (UberEditor Project). Content: pretty-printed JSON (diffable).
+- Media paths **relative** to the `.uep` file; on open, verification via `content_hash` → **relink** dialog with hash-based search in folders the user specifies.
+- Caches (proxies, wavs, peaks, transcripts) go to `<app_data>/cache/<content_hash>/…`, NEVER inside the project → a `.uep` is small and portable; deleting the cache never loses work.
+- **Autosave**: every 60 s (configurable) to `<project>.uep.autosave`; on opening after a crash, recovery is offered. Additionally, a snapshot on every export.
+- See the full example in Appendix A.
 
 ---
 
-## 5. Motor de render y reproducción
+## 5. Render and playback engine
 
-Esta sección es la más crítica técnicamente: aquí se decide si la vista previa es fluida.
+This section is the most technically critical: it decides whether the preview is smooth.
 
-### 5.1 Grafo de evaluación de un frame
+### 5.1 Evaluation graph of a frame
 
-Para producir el frame en el tiempo `t` de la secuencia:
+To produce the frame at time `t` of the sequence:
 
 ```
-1. Para cada pista de VIDEO (de abajo hacia arriba):
-   a. Buscar el clip activo en t (búsqueda binaria por start).
-   b. Resolver el tiempo fuente: src_t = src_in + (t - clip.start) * speed.
-   c. Obtener la textura fuente:
+1. For each VIDEO track (from bottom to top):
+   a. Find the active clip at t (binary search by start).
+   b. Resolve the source time: src_t = src_in + (t - clip.start) * speed.
+   c. Get the source texture:
       - Media  → DecodePool.get_frame(asset, src_t)         (5.2)
       - Text   → TextRasterizer.texture(content, style, t)   (6.6)
       - Subtitles → SubtitleRenderer.texture(transcript, t)  (7.E)
       - Avatar → AvatarRenderer.texture(config, t)           (7.E)
-      - Solid  → textura 1x1 escalada
-   d. Aplicar cadena de efectos del clip (ping-pong entre 2 texturas offscreen,
-      un draw call por efecto, uniforms evaluados con keyframes en t).       (6.5, 6.8)
-   e. Si hay transición activa con el clip vecino: renderizar también el otro
-      clip (pasos b–d) y ejecutar el shader de transición(A, B, progress).
-   f. Aplicar Transform2D (crop → escala → rotación → posición) y componer
-      sobre el framebuffer acumulado (blend premultiplied alpha).
-2. El framebuffer final (formato RGBA8 sRGB en v1) es el frame de la secuencia.
+      - Solid  → scaled 1x1 texture
+   d. Apply the clip's effect chain (ping-pong between 2 offscreen textures,
+      one draw call per effect, uniforms evaluated with keyframes at t).       (6.5, 6.8)
+   e. If there is an active transition with the neighboring clip: also render the
+      other clip (steps b–d) and run the transition shader(A, B, progress).
+   f. Apply Transform2D (crop → scale → rotation → position) and compose
+      onto the accumulated framebuffer (premultiplied alpha blend).
+2. The final framebuffer (RGBA8 sRGB format in v1) is the sequence frame.
 ```
 
-Notas de implementación:
+Implementation notes:
 
-- **YUV→RGB en GPU**: ffmpeg entrega `yuv420p`; subimos los planos Y/U/V como 3 texturas R8 y convertimos en el primer shader. Ahorra ~40% de CPU y de ancho de banda de pipe frente a pedir `rgba`.
-- **Determinismo**: efectos con aleatoriedad (shake del avatar, grain) usan ruido *hash* con semilla `(clip_id, frame_index)` — así preview y export son idénticos y los tests de golden-frame son estables. (Mejora directa sobre `np.random` del toolkit, que era irrepetible.)
-- **Espacio de color v1**: sRGB 8-bit de punta a punta. HDR/lineal 16F queda anotado como evolución (el diseño de ping-pong lo permite cambiando el formato de textura).
+- **YUV→RGB on the GPU**: ffmpeg delivers `yuv420p`; we upload the Y/U/V planes as 3 R8 textures and convert in the first shader. Saves ~40% of CPU and pipe bandwidth versus requesting `rgba`.
+- **Determinism**: effects with randomness (avatar shake, grain) use *hash* noise with seed `(clip_id, frame_index)` — so preview and export are identical and the golden-frame tests are stable. (A direct improvement over the toolkit's `np.random`, which was unrepeatable.)
+- **Color space v1**: sRGB 8-bit end to end. HDR/linear 16F is noted as an evolution (the ping-pong design allows it by changing the texture format).
 
-### 5.2 DecodePool: obtención de frames fuente
+### 5.2 DecodePool: obtaining source frames
 
-- Una **sesión de decode** por asset activo: proceso `ffmpeg -ss <t> -i <proxy|original> -f rawvideo -pix_fmt yuv420p pipe:1` leyendo frames secuenciales por stdout.
-- **Reproducción**: la sesión avanza linealmente (lectura secuencial = barata). Prefetch de N frames por delante del playhead en un ring buffer.
-- **Seek**: matar sesión + relanzar con `-ss` (seek por keyframe + decode hasta el frame exacto). Con proxies de GOP corto (keyint 15) el peor caso es decodificar 14 frames ≈ decenas de ms.
-- **Scrub** (arrastrar el playhead): política *latest-wins* — se cancela el seek anterior si llega otro; mientras tanto se muestra el frame en caché más cercano.
-- **FrameCache LRU** global con presupuesto de RAM configurable (por defecto 2 GB): clave `(asset_id, quality, frame_idx)`. Los frames alrededor del playhead y de los bordes de clips (donde se corta a menudo) tienen prioridad.
-- **Evolución Fase 2+**: reemplazar sesiones CLI por `ffmpeg-next` (libav in-process) para scrub frame-accurate más fino y hardware decode (VideoToolbox/D3D11VA/VAAPI). La interfaz `trait FrameSource` se define desde el día 1 para que el cambio sea interno.
+- One **decode session** per active asset: a process `ffmpeg -ss <t> -i <proxy|original> -f rawvideo -pix_fmt yuv420p pipe:1` reading sequential frames over stdout.
+- **Playback**: the session advances linearly (sequential reading = cheap). Prefetch of N frames ahead of the playhead in a ring buffer.
+- **Seek**: kill the session + relaunch with `-ss` (seek by keyframe + decode up to the exact frame). With short-GOP proxies (keyint 15) the worst case is decoding 14 frames ≈ tens of ms.
+- **Scrub** (dragging the playhead): *latest-wins* policy — the previous seek is canceled if another arrives; meanwhile the nearest cached frame is shown.
+- Global **FrameCache LRU** with a configurable RAM budget (2 GB by default): key `(asset_id, quality, frame_idx)`. Frames around the playhead and around clip edges (where cuts happen often) get priority.
+- **Phase 2+ evolution**: replace CLI sessions with `ffmpeg-next` (in-process libav) for finer frame-accurate scrub and hardware decode (VideoToolbox/D3D11VA/VAAPI). The `trait FrameSource` interface is defined from day 1 so the change is internal.
 
-### 5.3 Proxies y conformado (al importar)
+### 5.3 Proxies and conforming (on import)
 
-Al importar un archivo se lanzan jobs en segundo plano (el clip es usable inmediatamente, con calidad degradada hasta que terminen):
+On importing a file, background jobs are launched (the clip is usable immediately, at degraded quality until they finish):
 
-| Job | Comando (ver Apéndice C) | Salida |
+| Job | Command (see Appendix C) | Output |
 |-----|--------------------------|--------|
-| Probe | `ffprobe -print_format json` | `ProbeInfo` (streams, duración, fps, rotación) |
-| Proxy video | h264 720p, `-g 15`, CRF 20, audio copy | `<hash>/proxy.mp4` |
-| Conformado audio | `pcm_s16le`, 48 kHz, estéreo | `<hash>/audio.wav` |
-| Peaks | lectura del wav → min/max por ventana de 256 samples | `<hash>/peaks.bin` |
-| Thumbnails | 1 frame cada N segundos, sprite 160px | `<hash>/thumbs.jpg` |
-| Whisper (opt-in/auto) | sección 7.B | `<hash>/transcript.json` |
+| Probe | `ffprobe -print_format json` | `ProbeInfo` (streams, duration, fps, rotation) |
+| Video proxy | h264 720p, `-g 15`, CRF 20, audio copy | `<hash>/proxy.mp4` |
+| Audio conforming | `pcm_s16le`, 48 kHz, stereo | `<hash>/audio.wav` |
+| Peaks | read the wav → min/max per window of 256 samples | `<hash>/peaks.bin` |
+| Thumbnails | 1 frame every N seconds, 160px sprite | `<hash>/thumbs.jpg` |
+| Whisper (opt-in/auto) | section 7.B | `<hash>/transcript.json` |
 
-- Imágenes: se cargan con `image` crate directamente a textura (con downscale si > 8K). Un clip de imagen tiene duración libre (por defecto 5 s).
-- El toggle **"calidad de preview"** (Auto / ½ / ¼ / Full) decide si el DecodePool lee el proxy o el original.
+- Images: loaded with the `image` crate directly to a texture (with downscale if > 8K). An image clip has a free duration (5 s by default).
+- The **"preview quality"** toggle (Auto / ½ / ¼ / Full) decides whether the DecodePool reads the proxy or the original.
 
-### 5.4 Audio: mixer y reloj maestro
+### 5.4 Audio: mixer and master clock
 
-- **cpal** abre un stream de salida a 48 kHz; el *callback* de audio pide `n` samples → el `AudioMixer` los produce leyendo los WAV conformados (mmap) de todos los clips audibles en la posición actual.
-- Cadena por clip: `sample → gain(keyframes) → fades(in/out) → pan` → suma por pista (`volume_db`, mute/solo) → master → *soft clip limiter*.
-- **El audio es el reloj maestro**: la posición de reproducción se deriva de los samples efectivamente consumidos por el dispositivo (`samples_played / 48000`). El video se sincroniza a ese reloj: si va tarde, saltar frames; si va adelantado, esperar. Es el esquema estándar que elimina el drift A/V.
-- Velocidad de clip ≠ 1.0: resampleo con `rubato` (sinc) por segmento; para "silencios acelerados" (7.C) se usa time-stretch simple (v1: resample con cambio de pitch aceptable a 2–4x en silencio; v2: WSOLA para preservar pitch).
-- Medidores: RMS + pico por pista y master, publicados a la UI a 15 Hz por evento.
+- **cpal** opens an output stream at 48 kHz; the audio *callback* requests `n` samples → the `AudioMixer` produces them by reading the conformed WAVs (mmap) of all audible clips at the current position.
+- Per-clip chain: `sample → gain(keyframes) → fades(in/out) → pan` → sum per track (`volume_db`, mute/solo) → master → *soft clip limiter*.
+- **Audio is the master clock**: the playback position is derived from the samples actually consumed by the device (`samples_played / 48000`). Video syncs to that clock: if it falls behind, skip frames; if it runs ahead, wait. It is the standard scheme that eliminates A/V drift.
+- Clip speed ≠ 1.0: resampling with `rubato` (sinc) per segment; for "sped-up silences" (7.C) simple time-stretch is used (v1: resample with acceptable pitch change at 2–4x during silence; v2: WSOLA to preserve pitch).
+- Meters: RMS + peak per track and master, published to the UI at 15 Hz by event.
 
-### 5.5 Entrega del preview a la UI
+### 5.5 Preview delivery to the UI
 
-**Fase 1 (simple y multiplataforma) — objetivo 1280×720@30:**
+**Phase 1 (simple and cross-platform) — target 1280×720@30:**
 
-1. Render wgpu a textura offscreen a resolución de preview.
-2. Copy a buffer de staging → CPU (`map_async`).
-3. Envío del RGBA crudo (~3.7 MB/frame) por `tauri::ipc::Channel<Vec<u8>>` binario → el frontend lo sube a una textura WebGL y la pinta en un canvas. Si el canal no sostiene el caudal en alguna plataforma, fallback automático a JPEG (turbojpeg, calidad 85, ~200 KB/frame).
-4. Backpressure: si la UI no confirma el frame anterior, se salta el envío (el render interno continúa; el audio nunca se bloquea).
+1. wgpu render to an offscreen texture at preview resolution.
+2. Copy to a staging buffer → CPU (`map_async`).
+3. Send the raw RGBA (~3.7 MB/frame) over a binary `tauri::ipc::Channel<Vec<u8>>` → the frontend uploads it to a WebGL texture and paints it on a canvas. If the channel can't sustain the throughput on some platform, automatic fallback to JPEG (turbojpeg, quality 85, ~200 KB/frame).
+4. Backpressure: if the UI doesn't confirm the previous frame, the send is skipped (the internal render continues; the audio is never blocked).
 
-**Fase 2 (optimización) — objetivo 4K@60 y latencia mínima:**
+**Phase 2 (optimization) — target 4K@60 and minimal latency:**
 
-- Superficie nativa hija (child window/`CAMetalLayer`/HWND/wayland subsurface) posicionada bajo el hueco del preview en el layout web; wgpu presenta directamente (zero-copy). La UI web dibuja solo los controles alrededor. Riesgo/complejidad documentados en sección 15; por eso es Fase 2 y no base.
+- Native child surface (child window/`CAMetalLayer`/HWND/wayland subsurface) positioned under the preview slot in the web layout; wgpu presents directly (zero-copy). The web UI draws only the controls around it. Risk/complexity documented in section 15; that's why it is Phase 2 and not the base.
 
-### 5.6 Pipeline de exportación
+### 5.6 Export pipeline
 
 ```
-RenderGraph (resolución/fps de la secuencia, sin cache de preview, calidad Full)
-   │  frames RGBA (o yuv420p convertido en GPU-→CPU)
+RenderGraph (sequence resolution/fps, no preview cache, Full quality)
+   │  RGBA frames (or yuv420p converted on GPU→CPU)
    ▼
 ffmpeg -f rawvideo -pix_fmt rgba -s WxH -r FPS -i pipe:0 \
        -i mixdown.wav \
-       [flags del preset]  out.mp4
+       [preset flags]  out.mp4
 ```
 
-1. El `AudioMixer` renderiza primero el **mixdown completo** a `mixdown.wav` (más rápido que tiempo real; sirve de barra de progreso temprana).
-2. El grafo renderiza frame a frame (sin reloj, a máxima velocidad) y escribe al stdin de ffmpeg. Presión regulada por el propio pipe.
-3. Progreso = frames escritos / totales; cancelación = matar ffmpeg + borrar parcial.
-4. Cola de exportación: múltiples jobs en serie (paralelo en backlog).
-5. Al terminar: verificación con ffprobe (duración esperada ± 1 frame) y notificación del SO.
+1. The `AudioMixer` first renders the **complete mixdown** to `mixdown.wav` (faster than real time; serves as an early progress bar).
+2. The graph renders frame by frame (no clock, at maximum speed) and writes to ffmpeg's stdin. Pressure regulated by the pipe itself.
+3. Progress = frames written / total; cancellation = kill ffmpeg + delete the partial.
+4. Export queue: multiple jobs in series (parallel in the backlog).
+5. On completion: verification with ffprobe (expected duration ± 1 frame) and OS notification.
 
 ---
 
-## 6. Features básicas
+## 6. Basic features
 
-Formato de cada subsección: **Objetivo → UX → Diseño técnico → Casos borde → Criterios de aceptación (CA)**.
+Format of each subsection: **Objective → UX → Technical design → Edge cases → Acceptance criteria (AC)**.
 
-### 6.1 Línea de tiempo (feature 1)
+### 6.1 Timeline (feature 1)
 
-**Objetivo.** Pistas ilimitadas de video y audio, manipulación directa fluida a 60 fps de UI incluso con cientos de clips.
-
-**UX.**
-- Layout clásico: regla de tiempo arriba, pistas de video (arriba) y audio (abajo), playhead vertical, cabeceras de pista a la izquierda (nombre, mute/solo/lock, volumen).
-- Zoom: rueda+Ctrl (centrado en el cursor), atajos `+`/`-`, "zoom to fit" (`Shift+Z`). Rango: de 10 min/pantalla a 5 frames/pantalla.
-- Scroll horizontal (rueda / arrastrar con espacio) y vertical (pistas).
-- **Snapping** (toggle `S`): imán a playhead, bordes de clips, marcadores y a 0; tolerancia 8 px en espacio de pantalla.
-- Drag & drop: desde el Media Pool a una pista (crea clip), entre pistas, y horizontal con preview fantasma + indicador de colisión.
-- Selección: click, marco elástico, `Shift` para múltiple; `Ctrl/Cmd+A` todo.
-- Clips muestran: nombre, thumbnails (video), waveform (audio), badges de efectos/velocidad, y color de etiqueta.
-- Marcadores de secuencia (`M`) con nombre y color.
-
-**Diseño técnico.**
-- El timeline se dibuja en **un solo `<canvas>` 2D** (no DOM por clip): render inmediato tipo juego con lista de visibles calculada por búsqueda binaria sobre `start`. Con virtualización de pistas es O(visible), no O(total).
-- Coordenadas: `px = (t_us - view_start_us) * pxPerUs`; todos los hit-tests en espacio de tiempo, no de píxeles (estable ante zoom).
-- Thumbnails/waveforms del canvas provienen de los sprites/peaks del caché (5.3) vía protocolo `ueasset://` (el webview los trae como imágenes normales, cacheables).
-- Interacciones emiten intents al engine (`timeline.move_clip`, etc.). Durante un drag, la UI muestra el fantasma localmente y solo al soltar emite la acción (una única entrada de undo).
-- Reordenar/insertar con **modo overwrite** (por defecto) y **modo insert/ripple** (con `Alt`): el engine implementa ambos como acciones distintas.
-
-**Casos borde.** Drop sobre clip existente (overwrite parte el clip de abajo); drag más allá del inicio (clamp a 0); pistas bloqueadas rechazan acciones con toast; zoom extremo con clips < 1 px (se dibujan como línea, siguen seleccionables por rango).
-
-**CA.**
-1. 500 clips en 8 pistas → pan/zoom a 60 fps en un portátil medio.
-2. Todas las mutaciones pasan por acciones del engine (verificable: replay del historial reproduce el estado).
-3. Snapping funciona a cualquier nivel de zoom con tolerancia en píxeles.
-
-### 6.2 Recorte y división de clips (feature 2)
-
-**Objetivo.** Cortar, partir y ajustar clips de forma no destructiva con precisión de frame.
+**Objective.** Unlimited video and audio tracks, fluid direct manipulation at 60 fps UI even with hundreds of clips.
 
 **UX.**
-- **Split en playhead** (`Ctrl/Cmd+K` o botón cuchilla): parte todos los clips seleccionados (o el que está bajo el playhead) en dos.
-- **Herramienta cuchilla** (`C`): click sobre cualquier clip lo parte en ese punto.
-- **Trim de bordes**: arrastrar el borde izquierdo/derecho de un clip ajusta `src_in`/`src_out` (cursor cambia; tooltip muestra +/- frames y nuevo timecode). Limitado por el material disponible del asset (los "handles").
-- **Ripple delete** (`Shift+Del`): borra el clip y cierra el hueco desplazando lo posterior. `Del` normal deja el hueco.
-- **Ripple trim** (`Alt` + arrastrar borde): trim que desplaza el resto de la pista.
-- Slip (arrastrar con `Y` el contenido sin mover el clip): mueve `src_in/src_out` juntos. (Slide queda en backlog.)
+- Classic layout: time ruler at the top, video tracks (top) and audio (bottom), vertical playhead, track headers on the left (name, mute/solo/lock, volume).
+- Zoom: wheel+Ctrl (centered on the cursor), shortcuts `+`/`-`, "zoom to fit" (`Shift+Z`). Range: from 10 min/screen to 5 frames/screen.
+- Horizontal scroll (wheel / drag with space) and vertical (tracks).
+- **Snapping** (toggle `S`): magnet to the playhead, clip edges, markers and to 0; 8 px tolerance in screen space.
+- Drag & drop: from the Media Pool to a track (creates a clip), between tracks, and horizontally with a ghost preview + collision indicator.
+- Selection: click, rubber-band marquee, `Shift` for multiple; `Ctrl/Cmd+A` all.
+- Clips show: name, thumbnails (video), waveform (audio), effect/speed badges, and label color.
+- Sequence markers (`M`) with name and color.
 
-**Diseño técnico.**
-- `split(clip, t)` = clonar clip; el izquierdo recibe `src_out' = src_in + (t - start) * speed`, el derecho `src_in' = src_out'`, `start' = t`. Los **keyframes** (curvas con `t` relativo al clip) se reparten: los del lado derecho se re-basan restando el offset; se insertan keys interpoladas en el punto de corte para preservar el valor exacto.
-- Los efectos y transform se **copian** a ambas mitades (comportamiento estándar NLE). La transición existente queda en el lado que toca a su vecino.
-- Precisión: `t` se cuantiza al frame de la secuencia (`round(t * fps_num / (fps_den * 1e6))`) antes de operar, para que los cortes caigan siempre en frontera de frame.
-- Todo son acciones puras sobre `ue-core` con inversa explícita (sección 6.10).
+**Technical design.**
+- The timeline is drawn on **a single 2D `<canvas>`** (not DOM per clip): immediate, game-like rendering with a visible list computed by binary search over `start`. With track virtualization it is O(visible), not O(total).
+- Coordinates: `px = (t_us - view_start_us) * pxPerUs`; all hit-tests in time space, not pixels (stable under zoom).
+- Canvas thumbnails/waveforms come from the sprites/peaks of the cache (5.3) via the `ueasset://` protocol (the webview fetches them as normal, cacheable images).
+- Interactions emit intents to the engine (`timeline.move_clip`, etc.). During a drag, the UI shows the ghost locally and only emits the action on drop (a single undo entry).
+- Reorder/insert with **overwrite mode** (default) and **insert/ripple mode** (with `Alt`): the engine implements both as distinct actions.
 
-**Casos borde.** Split exactamente en el borde (no-op); trim que dejaría duración 0 (mínimo 1 frame); split de clip con transición activa en ese punto (se rechaza con mensaje); split de clip de texto/subtítulos/avatar (soportado: parten su línea de tiempo interna).
+**Edge cases.** Drop over an existing clip (overwrite splits the clip below); drag past the start (clamp to 0); locked tracks reject actions with a toast; extreme zoom with clips < 1 px (drawn as a line, still selectable by range).
 
-**CA.**
-1. Split + undo restaura byte a byte el estado (test de serialización).
-2. Trim nunca excede el material fuente; el tooltip refleja frames exactos.
-3. Ripple delete sobre selección multi-pista mantiene la sincronía relativa de las demás pistas (opción "ripple all tracks" on/off).
+**AC.**
+1. 500 clips on 8 tracks → pan/zoom at 60 fps on a mid-range laptop.
+2. All mutations go through engine actions (verifiable: replaying the history reproduces the state).
+3. Snapping works at any zoom level with pixel tolerance.
 
-### 6.3 Importación multi-formato (feature 3)
+### 6.2 Clip trimming and splitting (feature 2)
 
-**Objetivo.** Arrastrar cualquier archivo razonable y que funcione: video, audio o imagen.
+**Objective.** Cut, split and adjust clips non-destructively with frame precision.
 
-**Formatos v1** (los que soporte el build de FFmpeg; lista de extensiones aceptadas en UI):
-- Video: mp4, mov, mkv, webm, avi, m4v, mts/m2ts, mpg, flv, wmv (códecs: h264, hevc, vp8/9, av1, prores, dnxhd, mpeg2/4…)
+**UX.**
+- **Split at playhead** (`Ctrl/Cmd+K` or blade button): splits all selected clips (or the one under the playhead) in two.
+- **Blade tool** (`C`): clicking on any clip splits it at that point.
+- **Edge trim**: dragging a clip's left/right edge adjusts `src_in`/`src_out` (cursor changes; tooltip shows +/- frames and new timecode). Limited by the asset's available material (the "handles").
+- **Ripple delete** (`Shift+Del`): deletes the clip and closes the gap by shifting what follows. A plain `Del` leaves the gap.
+- **Ripple trim** (`Alt` + drag edge): trim that shifts the rest of the track.
+- Slip (drag the content with `Y` without moving the clip): moves `src_in/src_out` together. (Slide stays in the backlog.)
+
+**Technical design.**
+- `split(clip, t)` = clone the clip; the left one gets `src_out' = src_in + (t - start) * speed`, the right one `src_in' = src_out'`, `start' = t`. The **keyframes** (curves with `t` relative to the clip) are split: those on the right side are re-based by subtracting the offset; interpolated keys are inserted at the cut point to preserve the exact value.
+- Effects and transform are **copied** to both halves (standard NLE behavior). The existing transition stays on the side that touches its neighbor.
+- Precision: `t` is quantized to the sequence frame (`round(t * fps_num / (fps_den * 1e6))`) before operating, so cuts always land on a frame boundary.
+- Everything is pure actions over `ue-core` with an explicit inverse (section 6.10).
+
+**Edge cases.** Split exactly at the edge (no-op); trim that would leave duration 0 (minimum 1 frame); split of a clip with an active transition at that point (rejected with a message); split of a text/subtitles/avatar clip (supported: they split their internal timeline).
+
+**AC.**
+1. Split + undo restores the state byte for byte (serialization test).
+2. Trim never exceeds the source material; the tooltip reflects exact frames.
+3. Ripple delete over a multi-track selection keeps the relative sync of the other tracks ("ripple all tracks" option on/off).
+
+### 6.3 Multi-format import (feature 3)
+
+**Objective.** Drag any reasonable file and have it work: video, audio or image.
+
+**v1 formats** (whatever the FFmpeg build supports; the list of accepted extensions in the UI):
+- Video: mp4, mov, mkv, webm, avi, m4v, mts/m2ts, mpg, flv, wmv (codecs: h264, hevc, vp8/9, av1, prores, dnxhd, mpeg2/4…)
 - Audio: wav, mp3, aac/m4a, flac, ogg/opus, aiff, wma
-- Imagen: png, jpg/jpeg, webp, bmp, tiff, gif (v1: primer frame; gif animado → tratado como video), svg (rasterizado con resvg a la resolución de secuencia), heic (macOS)
+- Image: png, jpg/jpeg, webp, bmp, tiff, gif (v1: first frame; animated gif → treated as video), svg (rasterized with resvg to the sequence resolution), heic (macOS)
 
 **UX.**
-- Vías de entrada: botón Importar, `Ctrl/Cmd+I`, drag & drop de archivos/carpetas al Media Pool o directamente al timeline (importa + inserta).
-- Media Pool: grid o lista con miniatura, nombre, duración, resolución/fps, badges de estado de jobs (proxy ✓, audio ✓, whisper ⏳), búsqueda y carpetas virtuales (bins).
-- Archivos con rotación en metadata (`rotate=90` típico de móvil) se muestran ya corregidos.
-- Media offline: clip rojo + diálogo de relink (busca por nombre y por `content_hash`).
+- Entry paths: Import button, `Ctrl/Cmd+I`, drag & drop of files/folders to the Media Pool or directly to the timeline (imports + inserts).
+- Media Pool: grid or list with thumbnail, name, duration, resolution/fps, job status badges (proxy ✓, audio ✓, whisper ⏳), search and virtual folders (bins).
+- Files with rotation in metadata (`rotate=90`, typical of phones) are shown already corrected.
+- Offline media: red clip + relink dialog (searches by name and by `content_hash`).
 
-**Diseño técnico.**
-- Import = `ffprobe` síncrono rápido (< 1 s) para validar y poblar `ProbeInfo` + programación de jobs de caché (5.3). El asset queda usable al instante (decode del original mientras no haya proxy).
-- Detección de VFR (frame rate variable, típico de OBS/pantalla): si `avg_frame_rate ≠ r_frame_rate`, el proxy se genera con `-vsync cfr -r <fps_secuencia>` y se marca el asset (los originales VFR rompen la precisión de seek; el proxy CFR lo arregla — lección conocida de editar material de screen recording).
-- `content_hash` = xxh3(primeros 4 MB + últimos 4 MB + tamaño) — suficiente para relink y claves de caché sin leer archivos de 50 GB enteros.
-- Carpetas: import recursivo con filtro de extensiones.
+**Technical design.**
+- Import = quick synchronous `ffprobe` (< 1 s) to validate and populate `ProbeInfo` + scheduling of cache jobs (5.3). The asset is usable instantly (decode of the original while there is no proxy).
+- VFR detection (variable frame rate, typical of OBS/screen): if `avg_frame_rate ≠ r_frame_rate`, the proxy is generated with `-vsync cfr -r <sequence_fps>` and the asset is flagged (VFR originals break seek precision; the CFR proxy fixes it — a known lesson from editing screen-recording material).
+- `content_hash` = xxh3(first 4 MB + last 4 MB + size) — enough for relink and cache keys without reading whole 50 GB files.
+- Folders: recursive import with an extension filter.
 
-**Casos borde.** Archivos sin pista de audio (waveform vacía, mixer los ignora); audio multicanal 5.1 (downmix a estéreo en el conformado, nota en inspector); imágenes con EXIF orientation; archivos corruptos (probe falla → toast con stderr resumido); rutas con caracteres no-ASCII y espacios (¡como `Videos Reel`!) — siempre pasar rutas como args separados al sidecar, jamás interpolar en shell.
+**Edge cases.** Files with no audio track (empty waveform, the mixer ignores them); 5.1 multichannel audio (downmix to stereo in the conforming, note in the inspector); images with EXIF orientation; corrupted files (probe fails → toast with summarized stderr); paths with non-ASCII characters and spaces (like `Videos Reel`!) — always pass paths as separate args to the sidecar, never interpolate into a shell.
 
-**CA.**
-1. Los 3 tipos importan por las 3 vías de entrada.
-2. Un mp4 de móvil grabado en vertical (rotate=90) se ve correcto en preview y export.
-3. Proyecto movido de carpeta con media al lado → abre sin relink (rutas relativas).
+**AC.**
+1. All 3 types import via the 3 entry paths.
+2. A phone mp4 shot vertically (rotate=90) looks correct in preview and export.
+3. A project moved to a folder with its media alongside → opens without relink (relative paths).
 
-### 6.4 Vista previa en tiempo real (feature 4)
+### 6.4 Real-time preview (feature 4)
 
-El grueso técnico está en la sección 5. Aquí, el contrato de UX:
+The technical bulk is in section 5. Here, the UX contract:
 
-- Transporte: espacio = play/pausa, `J/K/L` (reverse/pausa/forward con velocidades ×1/×2/×4 — reverse v1 = saltos hacia atrás de 1 frame, reverse fluido en backlog), `←/→` frame a frame, `Home/End`, `I/O` para marcas de rango.
-- Indicador de calidad (Auto/½/¼/Full) y de frames perdidos (contador de dropped frames en la esquina, visible solo si > 0).
-- **Degradación elegante**: si el render no llega a tiempo, primero baja resolución de preview (Auto), luego saltar frames de video; el audio no se interrumpe jamás.
-- Al pausar: re-render inmediato a calidad Full de ese frame (el usuario ve nítido al detenerse).
-- Zona segura / guías de tercios (toggle), fondo a cuadros para alpha.
+- Transport: space = play/pause, `J/K/L` (reverse/pause/forward with speeds ×1/×2/×4 — reverse in v1 = 1-frame jumps backward, smooth reverse in the backlog), `←/→` frame by frame, `Home/End`, `I/O` for range marks.
+- Quality indicator (Auto/½/¼/Full) and dropped-frames indicator (dropped-frame counter in the corner, visible only if > 0).
+- **Graceful degradation**: if the render doesn't make it in time, it first lowers the preview resolution (Auto), then skips video frames; the audio is never interrupted.
+- On pause: immediate re-render of that frame at Full quality (the user sees it sharp when stopping).
+- Safe zone / thirds guides (toggle), checkerboard background for alpha.
 
-**CA.**
-1. Secuencia 1080p con 2 pistas de video + 1 de texto + música: reproducción 30 fps sin drops en hardware de referencia (M1 / Ryzen 5 + GPU integrada).
-2. Latencia de scrub (soltar el playhead → frame correcto en pantalla) < 150 ms con proxy.
-3. Desincronización A/V < 40 ms sostenida en clips de 30 min (medible con video de beep+flash).
+**AC.**
+1. 1080p sequence with 2 video tracks + 1 text + music: 30 fps playback with no drops on reference hardware (M1 / Ryzen 5 + integrated GPU).
+2. Scrub latency (release the playhead → correct frame on screen) < 150 ms with proxy.
+3. A/V desync < 40 ms sustained on 30 min clips (measurable with a beep+flash video).
 
-### 6.5 Transiciones y efectos modulares — sistema de shaders (feature 5)
+### 6.5 Modular transitions and effects — shader system (feature 5)
 
-Esta subsección define **el sistema de extensibilidad central** de UberEditor (aplica también a 6.8, al chroma key y al avatar).
+This subsection defines **UberEditor's central extensibility system** (it also applies to 6.8, to the chroma key and to the avatar).
 
-#### 6.5.1 Arquitectura modular ("packs")
+#### 6.5.1 Modular architecture ("packs")
 
-Principio: **añadir un efecto, transición o preset jamás toca el código del núcleo.** Un *pack* es una carpeta:
+Principle: **adding an effect, transition or preset never touches the core code.** A *pack* is a folder:
 
 ```
 effects/
-├── core/                      # incluidos en la app (read-only, embebidos en el binario)
+├── core/                      # bundled with the app (read-only, embedded in the binary)
 │   ├── brightness_contrast/
 │   │   ├── manifest.json
 │   │   └── shader.wgsl
 │   ├── chroma_key/ …
 │   ├── gaussian_blur/ …
 │   └── transitions/crossfade/ …
-└── user/                      # <app_data>/effects — carpeta del usuario, hot-reload
+└── user/                      # <app_data>/effects — the user's folder, hot-reload
     └── vhs_retro/
         ├── manifest.json
-        └── shader.wgsl        # o shader.frag (GLSL) — naga lo ingiere igualmente
+        └── shader.wgsl        # or shader.frag (GLSL) — naga ingests it just the same
 ```
 
-- **Descubrimiento en runtime**: al arrancar (y con un file-watcher en la carpeta `user/`) se escanean manifests, se compilan shaders (con validación naga y errores legibles en un panel), y aparecen en la UI automáticamente. Editar el `.wgsl` con la app abierta re-compila y refresca el preview en caliente (**hot-reload**) — ciclo de iteración de segundos para crear efectos nuevos.
-- **Contrato único**: todo efecto es `fn effect(tex_in, uv, params…) -> color`; toda transición es `fn transition(tex_a, tex_b, uv, progress, params…) -> color`. El runtime genera el binding de uniforms desde el manifest (nada de tocar Rust para exponer un parámetro).
-- Los parámetros declarados en el manifest son **automáticamente keyframables** (6.11), aparecen en el Inspector con el widget correcto (slider/color/checkbox/ángulo/punto 2D) y son accesibles por MCP.
-- Compatibilidad GLSL: naga acepta GLSL fragment shaders → se puede portar el catálogo open-source de **gl-transitions** (MIT, ~80 transiciones) casi tal cual.
-- La misma filosofía de registro aplica fuera de los shaders: los `ClipPayload`, los `Job` y las `Action` se registran en tablas centrales (`ActionRegistry`), de modo que una feature nueva (p.ej. un payload "Screen Recording Zoom") se añade implementando 2 traits (`Renderable`, `Inspectable`) + 1 entrada de registro, y obtiene gratis undo/redo, persistencia, Inspector y exposición MCP.
+- **Runtime discovery**: on startup (and with a file-watcher on the `user/` folder) manifests are scanned, shaders are compiled (with naga validation and readable errors in a panel), and they appear in the UI automatically. Editing the `.wgsl` with the app open recompiles and refreshes the preview live (**hot-reload**) — an iteration cycle of seconds to author new effects.
+- **Single contract**: every effect is `fn effect(tex_in, uv, params…) -> color`; every transition is `fn transition(tex_a, tex_b, uv, progress, params…) -> color`. The runtime generates the uniform binding from the manifest (no touching Rust to expose a parameter).
+- The parameters declared in the manifest are **automatically keyframable** (6.11), appear in the Inspector with the right widget (slider/color/checkbox/angle/2D point) and are accessible via MCP.
+- GLSL compatibility: naga accepts GLSL fragment shaders → the open-source catalog of **gl-transitions** (MIT, ~80 transitions) can be ported almost as-is.
+- The same registry philosophy applies outside shaders: the `ClipPayload`s, the `Job`s and the `Action`s are registered in central tables (`ActionRegistry`), so a new feature (e.g. a "Screen Recording Zoom" payload) is added by implementing 2 traits (`Renderable`, `Inspectable`) + 1 registry entry, and gets undo/redo, persistence, Inspector and MCP exposure for free.
 
-#### 6.5.2 Manifest (contrato de datos)
+#### 6.5.2 Manifest (data contract)
 
-Ejemplo completo en Apéndice B. Campos clave:
+Full example in Appendix B. Key fields:
 
 ```json
 {
@@ -568,402 +568,402 @@ Ejemplo completo en Apéndice B. Campos clave:
 }
 ```
 
-#### 6.5.3 Catálogo core v1
+#### 6.5.3 Core catalog v1
 
-**Efectos** (todos keyframables): corrección de color (6.8), **chroma key** (abajo), gaussian blur (separable, 2 pasadas — reutilizado por el fondo del modo vertical), box blur, sharpen, viñeta, opacidad, escala de grises/sepia, invert, pixelate, ruido/grain (semilla determinista), glow simple, **shake** (portado del avatar, disponible para cualquier clip), speed ramp (via `speed` del clip), flip H/V.
+**Effects** (all keyframable): color correction (6.8), **chroma key** (below), gaussian blur (separable, 2 passes — reused by the vertical-mode background), box blur, sharpen, vignette, opacity, grayscale/sepia, invert, pixelate, noise/grain (deterministic seed), simple glow, **shake** (ported from the avatar, available for any clip), speed ramp (via the clip's `speed`), flip H/V.
 
-**Transiciones**: crossfade, dip-to-black/white, wipe (dirección paramétrica), slide/push, zoom blur, circle reveal, + el port de gl-transitions como pack extra opcional.
+**Transitions**: crossfade, dip-to-black/white, wipe (parametric direction), slide/push, zoom blur, circle reveal, + the gl-transitions port as an optional extra pack.
 
-- Modelo de transición: `TransitionRef { effect_id, duration, params }` entre dos clips adyacentes; el render necesita frames de A y B simultáneamente → requiere handles (material extra); la UI la dibuja como solape con forma de pajarita, arrastrable en duración.
+- Transition model: `TransitionRef { effect_id, duration, params }` between two adjacent clips; the render needs frames of A and B simultaneously → requires handles (extra material); the UI draws it as a bowtie-shaped overlap, draggable in duration.
 
-#### 6.5.4 Chroma key (efecto de primera clase) 🔑
+#### 6.5.4 Chroma key (first-class effect) 🔑
 
-Requisito del proyecto: importa muchísimo, así que se especifica al detalle.
+Project requirement: it matters a lot, so it is specified in detail.
 
-- **Algoritmo (shader)**: distancia al color clave en espacio **YCbCr** (robusto a variaciones de luma — solo se compara el plano de croma):
+- **Algorithm (shader)**: distance to the key color in **YCbCr** space (robust to luma variations — only the chroma plane is compared):
   ```
   d = distance(CbCr(pixel), CbCr(key_color))
   alpha = smoothstep(similarity, similarity + smoothness, d)
   ```
-- **Supresión de spill** (el borde verdoso): tras el keying, se desatura el canal dominante del key en los píxeles semi-transparentes: `g' = min(g, mix(g, (r+b)/2, spill * (1 - alpha_edge)))`.
-- **Parámetros**: `key_color` (con cuentagotas sobre el preview — la UI muestrea el frame renderizado), `similarity`, `smoothness`, `spill`, `edge_shrink` (erosión de 1px opcional en shader), `output_mode` (resultado / máscara en blanco y negro para depurar).
-- **Integración**: es un efecto más de la cadena (composición con premultiplied alpha ya soportada por el pipeline 5.1) → sirve para pantalla verde de material grabado, para avatares mp4 con fondo verde (los `avatar_*.mp4` actuales del toolkit lo necesitan; el `.mov` con alpha no), y para cualquier overlay.
-- **Preset "avatar del toolkit"**: verde puro `#00FF00`, similarity 0.30, smoothness 0.10, spill 0.6 — se valida contra los archivos reales de `avatar_config/`.
-- **CA**: keyear `avatar_angry.mp4` sobre un video 1080p manteniendo 30 fps de preview; sin halo verde visible a similarity/spill por defecto; alpha correcto en export con y sin fondo debajo.
+- **Spill suppression** (the greenish edge): after keying, the dominant channel of the key is desaturated in the semi-transparent pixels: `g' = min(g, mix(g, (r+b)/2, spill * (1 - alpha_edge)))`.
+- **Parameters**: `key_color` (with an eyedropper over the preview — the UI samples the rendered frame), `similarity`, `smoothness`, `spill`, `edge_shrink` (optional 1px erosion in the shader), `output_mode` (result / black-and-white mask for debugging).
+- **Integration**: it is just another effect in the chain (compositing with premultiplied alpha already supported by pipeline 5.1) → it works for green screen of recorded material, for avatar mp4s with a green background (the toolkit's current `avatar_*.mp4` need it; the `.mov` with alpha does not), and for any overlay.
+- **"Toolkit avatar" preset**: pure green `#00FF00`, similarity 0.30, smoothness 0.10, spill 0.6 — validated against the real files in `avatar_config/`.
+- **AC**: key `avatar_angry.mp4` over a 1080p video maintaining 30 fps preview; no visible green halo at default similarity/spill; correct alpha in export with and without a background underneath.
 
-**Casos borde (sistema de efectos).** Shader de usuario que no compila (efecto deshabilitado + panel de error, nunca crash); parámetro renombrado en el manifest (los proyectos guardan por `key`: los desconocidos se preservan y se ignoran con warning); dos packs con el mismo `id` (gana `user/`, warning).
+**Edge cases (effect system).** A user shader that doesn't compile (effect disabled + error panel, never a crash); a parameter renamed in the manifest (projects save by `key`: unknown ones are preserved and ignored with a warning); two packs with the same `id` (`user/` wins, warning).
 
-**CA (sistema).**
-1. Crear un efecto nuevo copiando una carpeta y editando 2 archivos, sin recompilar la app, con hot-reload < 2 s.
-2. Cadena de 5 efectos sobre un clip 1080p mantiene 30 fps de preview.
-3. Una transición de gl-transitions portada funciona idéntica en preview y export.
+**AC (system).**
+1. Create a new effect by copying a folder and editing 2 files, without recompiling the app, with hot-reload < 2 s.
+2. A chain of 5 effects over a 1080p clip maintains 30 fps preview.
+3. A ported gl-transitions transition works identically in preview and export.
 
-### 6.6 Texto y títulos (feature 6)
+### 6.6 Text and titles (feature 6)
 
-**Objetivo.** Clips de texto de calidad (shaping correcto, emoji, tildes) con estilos y animación.
-
-**UX.**
-- Botón "Añadir texto" → clip `Text` en la pista superior; edición del contenido **directamente sobre el preview** (caja editable) o en el Inspector.
-- Estilo: fuente (lista de fuentes del sistema + fuentes incluidas), tamaño, color, negrita/cursiva, alineación, interletrado, interlineado, **stroke** (color+ancho), **sombra** (offset, blur, color), **fondo/caja** (color, padding, radio de esquinas), opacidad.
-- Posición: arrastrable en el preview con guías inteligentes (centro/tercios); anclas de 9 puntos.
-- Animaciones preset de entrada/salida: fade, slide (4 direcciones), typewriter (por carácter), pop; duración configurable. Internamente son solo keyframes generados sobre transform/opacity → editables a mano después.
-- **Plantillas**: guardar estilo+animación como plantilla con nombre (JSON en `<app_data>/templates/titles/`); pack inicial de ~8 (lower third, título centrado, esquina para shorts, etc.). Los `titles_clip_config`/`titles` del `config.json` del toolkit se importan como una plantilla "Toolkit clásico".
-
-**Diseño técnico.**
-- Layout/shaping con **cosmic-text** (maneja fallback de fuentes y emoji); rasterizado a textura RGBA con caché por `(contenido, estilo, ancho_max)`; el stroke y sombra se generan en el rasterizado (no en shader) para calidad; la textura entra al pipeline como cualquier fuente y recibe efectos/transform/keyframes estándar.
-- Re-rasterizar solo cuando cambia contenido/estilo, no por frame. Typewriter: rasterizado por prefijos con caché (N texturas) o máscara por glifo — decisión en implementación, la interfaz lo oculta.
-- Los subtítulos automáticos (7.E) reutilizan este mismo rasterizador con su propio payload.
-
-**CA.**
-1. Texto con emoji + tildes + CJK se renderiza correcto en las 3 plataformas.
-2. Editar texto sobre el preview refleja cambios en < 50 ms.
-3. Una plantilla creada en macOS abre igual en Windows (fuentes faltantes → sustitución con warning).
-
-### 6.7 Control de audio (feature 7)
-
-**Objetivo.** Control suficiente para publicar sin DAW externo.
+**Objective.** Quality text clips (correct shaping, emoji, accents) with styles and animation.
 
 **UX.**
-- Por clip: ganancia (dB, -60..+12) con línea de volumen dibujada sobre el clip (arrastrable, con keyframes al hacer `Ctrl+click`), fade in/out con tiradores en las esquinas del clip (curva equal-power), pan.
-- Por pista: fader de volumen, mute, solo, medidor RMS/pico vertical.
-- Master: fader + medidor con indicador de clipping (retenedor de picos 2 s).
-- Utilidades: "Normalizar clip" (analiza pico → ajusta ganancia a -1 dBFS), "Silenciar rango" (keyframes automáticos), **denoise de voz** (RNNoise on/off por clip — procesa el WAV conformado a un WAV alternativo en caché, job en background; sustituto ligero del `denoise.py`/DNS64 del toolkit).
-- Export: opción **loudness normalization EBU R128** (dos pasadas de `loudnorm` de ffmpeg, target -14 LUFS para YouTube) en el diálogo de exportación.
+- "Add text" button → `Text` clip on the top track; editing the content **directly over the preview** (editable box) or in the Inspector.
+- Style: font (list of system fonts + bundled fonts), size, color, bold/italic, alignment, letter spacing, line spacing, **stroke** (color+width), **shadow** (offset, blur, color), **background/box** (color, padding, corner radius), opacity.
+- Position: draggable in the preview with smart guides (center/thirds); 9-point anchors.
+- Preset entry/exit animations: fade, slide (4 directions), typewriter (per character), pop; configurable duration. Internally they are just keyframes generated over transform/opacity → editable by hand afterward.
+- **Templates**: save style+animation as a named template (JSON in `<app_data>/templates/titles/`); initial pack of ~8 (lower third, centered title, corner for shorts, etc.). The toolkit's `titles_clip_config`/`titles` from `config.json` are imported as a "Classic toolkit" template.
 
-**Diseño técnico.** Ya descrito en 5.4. Los fades son curvas de ganancia implícitas fusionadas con la curva de keyframes; el orden es `gain_kf → fades → pan`.
+**Technical design.**
+- Layout/shaping with **cosmic-text** (handles font fallback and emoji); rasterized to an RGBA texture with a cache by `(content, style, max_width)`; the stroke and shadow are generated during rasterization (not in the shader) for quality; the texture enters the pipeline like any source and receives standard effects/transform/keyframes.
+- Re-rasterize only when content/style changes, not per frame. Typewriter: prefix-based rasterization with cache (N textures) or per-glyph mask — decided at implementation time, the interface hides it.
+- Automatic subtitles (7.E) reuse this same rasterizer with their own payload.
 
-**Casos borde.** Solo en múltiples pistas (unión); clips solapados en pistas distintas suman (headroom del limiter); keyframes de volumen y `speed ≠ 1` (los keyframes viven en tiempo de clip → se estiran con él).
+**AC.**
+1. Text with emoji + accents + CJK renders correctly on all 3 platforms.
+2. Editing text over the preview reflects changes in < 50 ms.
+3. A template created on macOS opens the same on Windows (missing fonts → substitution with a warning).
 
-**CA.**
-1. Fade in/out sin clicks ni pops (test: seno 1 kHz, inspección del WAV exportado).
-2. Medidores consistentes con el archivo exportado (± 1 dB).
-3. Mute/solo aplican en < 1 buffer de audio (sin cortes).
+### 6.7 Audio control (feature 7)
 
-### 6.8 Ajustes básicos de imagen + encuadre (feature 8)
+**Objective.** Enough control to publish without an external DAW.
 
-**Objetivo.** Brillo, contraste, saturación como mínimo; y rotar/recortar encuadre. Todo keyframable.
+**UX.**
+- Per clip: gain (dB, -60..+12) with a volume line drawn over the clip (draggable, with keyframes on `Ctrl+click`), fade in/out with handles at the clip corners (equal-power curve), pan.
+- Per track: volume fader, mute, solo, vertical RMS/peak meter.
+- Master: fader + meter with a clipping indicator (2 s peak hold).
+- Utilities: "Normalize clip" (analyzes peak → adjusts gain to -1 dBFS), "Mute range" (automatic keyframes), **voice denoise** (RNNoise on/off per clip — processes the conformed WAV into an alternate cached WAV, background job; lightweight substitute for the toolkit's `denoise.py`/DNS64).
+- Export: **EBU R128 loudness normalization** option (two passes of ffmpeg's `loudnorm`, target -14 LUFS for YouTube) in the export dialog.
 
-**Diseño.** Dos piezas separadas:
+**Technical design.** Already described in 5.4. Fades are implicit gain curves merged with the keyframe curve; the order is `gain_kf → fades → pan`.
 
-1. **Efecto "Corrección de color"** (`core.color_correct`, un solo pase WGSL, siempre disponible en el Inspector sin tener que añadirlo):
-   - `brightness` (-1..1, aditivo en luma), `contrast` (0..2, pivote 0.5), `saturation` (0..2, mezcla con luma Rec.709), `exposure` (stops, multiplicativo), `temperature`/`tint` (desplazamiento de balance), `gamma` (0.2..3).
-   - Orden fijo documentado en el shader: exposure → temperature/tint → contrast → brightness → saturation → gamma.
-2. **Transform2D del clip** (no es shader; es la etapa de composición geométrica 5.1.f):
-   - `position (x,y)` en píxeles de secuencia, `scale` (uniforme + no uniforme), `rotation` (grados, libre; atajos 90°/180°/-90°), `anchor point`, `crop` (left/top/right/bottom en % con feather opcional), `opacity`, flip H/V.
-   - UI: gizmo sobre el preview (mover/escalar/rotar con handles) + campos numéricos en Inspector. Crop con 4 tiradores de borde.
-   - "Fit / Fill / Stretch" de un clic para adecuar material de resolución distinta a la secuencia.
+**Edge cases.** Solo across multiple tracks (union); overlapping clips on different tracks sum (limiter headroom); volume keyframes and `speed ≠ 1` (keyframes live in clip time → they stretch with it).
 
-**Casos borde.** Rotación de material ya rotado por metadata (se componen); crop 100% (clip invisible pero válido); keyframes de crop + transición simultáneos.
+**AC.**
+1. Fade in/out with no clicks or pops (test: 1 kHz sine, inspection of the exported WAV).
+2. Meters consistent with the exported file (± 1 dB).
+3. Mute/solo apply in < 1 audio buffer (no cuts).
 
-**CA.**
-1. B/C/S coinciden visualmente entre preview y export (test golden-frame con tolerancia ΔE).
-2. Rotar 90° un clip vertical de móvil y recortar el encuadre a 16:9 es un flujo de < 5 clics.
-3. Todos los parámetros aceptan keyframes y aparecen en el editor de curvas.
+### 6.8 Basic image adjustments + framing (feature 8)
 
-### 6.9 Exportación configurable (feature 9)
+**Objective.** Brightness, contrast, saturation at minimum; and rotate/crop framing. All keyframable.
 
-**Objetivo.** Presets de un clic + control total para usuarios avanzados. Pipeline técnico en 5.6.
+**Design.** Two separate pieces:
 
-**UX — diálogo de exportación.**
-- Izquierda: **presets** (editables, guardables):
+1. **"Color correction" effect** (`core.color_correct`, a single WGSL pass, always available in the Inspector without having to add it):
+   - `brightness` (-1..1, additive in luma), `contrast` (0..2, pivot 0.5), `saturation` (0..2, mix with Rec.709 luma), `exposure` (stops, multiplicative), `temperature`/`tint` (balance shift), `gamma` (0.2..3).
+   - Fixed order documented in the shader: exposure → temperature/tint → contrast → brightness → saturation → gamma.
+2. **The clip's Transform2D** (not a shader; it is the geometric compositing stage 5.1.f):
+   - `position (x,y)` in sequence pixels, `scale` (uniform + non-uniform), `rotation` (degrees, free; 90°/180°/-90° shortcuts), `anchor point`, `crop` (left/top/right/bottom in % with optional feather), `opacity`, flip H/V.
+   - UI: gizmo over the preview (move/scale/rotate with handles) + numeric fields in the Inspector. Crop with 4 edge handles.
+   - One-click "Fit / Fill / Stretch" to adapt material of a different resolution to the sequence.
 
-| Preset | Contenedor | Video | Audio | Notas |
+**Edge cases.** Rotation of material already rotated by metadata (they compose); crop 100% (clip invisible but valid); crop keyframes + a simultaneous transition.
+
+**AC.**
+1. B/C/S match visually between preview and export (golden-frame test with ΔE tolerance).
+2. Rotating a vertical phone clip 90° and cropping the framing to 16:9 is a flow of < 5 clicks.
+3. All parameters accept keyframes and appear in the curve editor.
+
+### 6.9 Configurable export (feature 9)
+
+**Objective.** One-click presets + full control for advanced users. Technical pipeline in 5.6.
+
+**UX — export dialog.**
+- Left: **presets** (editable, savable):
+
+| Preset | Container | Video | Audio | Notes |
 |---|---|---|---|---|
-| YouTube 1080p | mp4 | H.264 High, CRF 18, `-preset slow`, yuv420p | AAC 320k | por defecto |
-| YouTube 4K | mp4 | H.265 CRF 20 (o H.264 CRF 17) | AAC 320k | aviso de tiempo |
-| Shorts/Reels 1080×1920 | mp4 | H.264 CRF 18, ≤ 60 s aviso | AAC 256k | enlaza con 7.D |
-| Web ligero | webm | VP9 CRF 32 | Opus 128k | |
-| Máster edición | mov | ProRes 422 (`prores_ks`) | PCM 24-bit | intercambio |
-| GIF | gif | paleta 2 pasadas, fps 15, ancho 720 | — | |
-| Solo audio | mp3 / wav | — | 320k / PCM | podcast |
+| YouTube 1080p | mp4 | H.264 High, CRF 18, `-preset slow`, yuv420p | AAC 320k | default |
+| YouTube 4K | mp4 | H.265 CRF 20 (or H.264 CRF 17) | AAC 320k | time warning |
+| Shorts/Reels 1080×1920 | mp4 | H.264 CRF 18, ≤ 60 s warning | AAC 256k | links with 7.D |
+| Lightweight web | webm | VP9 CRF 32 | Opus 128k | |
+| Editing master | mov | ProRes 422 (`prores_ks`) | PCM 24-bit | interchange |
+| GIF | gif | 2-pass palette, fps 15, width 720 | — | |
+| Audio only | mp3 / wav | — | 320k / PCM | podcast |
 
-- Derecha: **overrides**: resolución (con escalado), fps, rango (secuencia completa / marcas I-O), códec, modo bitrate (CRF vs CBR/VBR objetivo), keyframe interval, loudness R128 on/off, nombre/carpeta de salida (plantillas `{proyecto}_{preset}_{fecha}`).
-- Estimación de tamaño (heurística por bitrate) y botón "Añadir a cola".
-- Panel de cola: progreso por job (fps de render, ETA), cancelar, abrir carpeta al terminar, notificación del SO.
+- Right: **overrides**: resolution (with scaling), fps, range (full sequence / I-O marks), codec, bitrate mode (CRF vs target CBR/VBR), keyframe interval, R128 loudness on/off, output name/folder (templates `{project}_{preset}_{date}`).
+- Size estimate (bitrate heuristic) and "Add to queue" button.
+- Queue panel: progress per job (render fps, ETA), cancel, open folder on completion, OS notification.
 
-**Casos borde.** Resolución impar con yuv420p (se fuerza par); overwrite de archivo existente (sufijo incremental); disco lleno (error de ffmpeg capturado con mensaje claro); export con media offline (bloqueado con lista de faltantes).
+**Edge cases.** Odd resolution with yuv420p (forced to even); overwriting an existing file (incremental suffix); disk full (ffmpeg error captured with a clear message); export with offline media (blocked with a list of missing items).
 
-**CA.**
-1. Export 1080p H.264 de una secuencia de 5 min con efectos ≥ 1× tiempo real en hardware de referencia.
-2. El archivo pasa la validación ffprobe (duración ± 1 frame, fps y resolución exactos).
-3. Cancelar deja el sistema limpio (sin procesos zombie ni parciales).
+**AC.**
+1. 1080p H.264 export of a 5 min sequence with effects ≥ 1× real time on reference hardware.
+2. The file passes ffprobe validation (duration ± 1 frame, exact fps and resolution).
+3. Canceling leaves the system clean (no zombie processes or partials).
 
-### 6.10 Deshacer/rehacer y guardado de proyecto (feature 10)
+### 6.10 Undo/redo and project saving (feature 10)
 
-**Objetivo.** Undo/redo confiable e ilimitado en la práctica; nunca perder trabajo.
+**Objective.** Reliable and practically unlimited undo/redo; never lose work.
 
-**Diseño técnico — Command pattern en el engine.**
-- Toda mutación es una `Action` (enum serializable) con **inversa explícita**: `apply(&mut Project, Action) -> InverseAction`. Ejemplos: `SplitClip{clip, t} ↔ JoinClips{left, right}`, `MoveClip{id, from, to} ↔ MoveClip{id, to, from}`, `SetParam{path, old, new}`.
-- `History { undo: Vec<Entry>, redo: Vec<Entry> }`, donde `Entry { actions: Vec<Action>, label, timestamp }` — una entrada puede agrupar N acciones (transacción): un drag, un "eliminar silencios" (¡cientos de cortes = 1 undo!), un wizard vertical completo.
-- **Coalescing**: ediciones continuas del mismo parámetro (< 500 ms, mismo path) se funden en una entrada.
-- Límite práctico: 1000 entradas (configurable); al excederse se descartan las más antiguas.
-- La UI muestra historial navegable (panel con labels: "Dividir clip", "Eliminar 34 silencios") y `Ctrl/Cmd+Z / Shift+Z`.
-- Lo NO-undoable (import de archivos, jobs de caché, exports) queda fuera del historial; borrar un asset del pool exige confirmación si hay clips que lo usan (y ES undoable: la acción guarda el asset serializado).
+**Technical design — Command pattern in the engine.**
+- Every mutation is an `Action` (serializable enum) with an **explicit inverse**: `apply(&mut Project, Action) -> InverseAction`. Examples: `SplitClip{clip, t} ↔ JoinClips{left, right}`, `MoveClip{id, from, to} ↔ MoveClip{id, to, from}`, `SetParam{path, old, new}`.
+- `History { undo: Vec<Entry>, redo: Vec<Entry> }`, where `Entry { actions: Vec<Action>, label, timestamp }` — an entry can group N actions (transaction): a drag, a "remove silences" (hundreds of cuts = 1 undo!), a full vertical wizard.
+- **Coalescing**: continuous edits of the same parameter (< 500 ms, same path) are merged into one entry.
+- Practical limit: 1000 entries (configurable); when exceeded, the oldest are discarded.
+- The UI shows a navigable history (panel with labels: "Split clip", "Remove 34 silences") and `Ctrl/Cmd+Z / Shift+Z`.
+- The NON-undoable (file import, cache jobs, exports) stays out of the history; deleting an asset from the pool requires confirmation if there are clips using it (and IS undoable: the action stores the serialized asset).
 
-**Guardado.**
-- `Ctrl/Cmd+S` → escribe `.uep` (4.3) de forma **atómica** (tmp + rename). Indicador de dirty (● en el título).
-- Autosave a `.uep.autosave` cada 60 s si dirty; se elimina al guardar bien; al abrir, si existe y es más nuevo → diálogo de recuperación.
-- "Guardar como" + "Guardar copia empaquetada" (backlog: copia media a una carpeta).
-- Migraciones: `schema_version` + funciones `migrate_v1_v2(...)` puras y testeadas con fixtures de proyectos viejos.
+**Saving.**
+- `Ctrl/Cmd+S` → writes the `.uep` (4.3) **atomically** (tmp + rename). Dirty indicator (● in the title).
+- Autosave to `.uep.autosave` every 60 s if dirty; removed on a successful save; on opening, if it exists and is newer → recovery dialog.
+- "Save as" + "Save packaged copy" (backlog: copies media to a folder).
+- Migrations: `schema_version` + pure `migrate_v1_v2(...)` functions tested with fixtures of old projects.
 
-**CA.**
-1. Test de propiedad (proptest): secuencias aleatorias de 200 acciones + undo total ≡ proyecto inicial (comparación estructural).
-2. Kill -9 durante autosave → el proyecto original nunca queda corrupto (escritura atómica).
-3. "Eliminar silencios" (7.C) es exactamente 1 entrada de undo.
+**AC.**
+1. Property test (proptest): random sequences of 200 actions + full undo ≡ initial project (structural comparison).
+2. Kill -9 during autosave → the original project is never left corrupted (atomic write).
+3. "Remove silences" (7.C) is exactly 1 undo entry.
 
-### 6.11 Animaciones por keyframe (feature 11)
+### 6.11 Keyframe animations (feature 11)
 
-**Objetivo.** Animar cualquier parámetro numérico/color declarado (transform, efectos, volumen, texto).
+**Objective.** Animate any declared numeric/color parameter (transform, effects, volume, text).
 
 **UX.**
-- En el Inspector, cada parámetro keyframable tiene un botón ⏱ (activar animación) y un diamante ◇ (añadir/quitar key en el playhead); flechas ◀▶ saltan entre keys.
-- Bajo cada clip seleccionado, el timeline muestra una **lane de keyframes** (diamantes arrastrables; `Alt+drag` duplica; selección múltiple y desplazamiento en bloque).
-- **Editor de curvas** (panel plegable): valor vs tiempo, tangentes bezier arrastrables, presets de easing (linear, ease-in/out/in-out, hold, bounce simple).
-- Al activar animación de un parámetro con valor V, se crea key inicial `t=playhead, value=V` (comportamiento AE-like esperable).
+- In the Inspector, each keyframable parameter has a ⏱ button (enable animation) and a diamond ◇ (add/remove a key at the playhead); ◀▶ arrows jump between keys.
+- Under each selected clip, the timeline shows a **keyframe lane** (draggable diamonds; `Alt+drag` duplicates; multiple selection and block shifting).
+- **Curve editor** (collapsible panel): value vs time, draggable bezier tangents, easing presets (linear, ease-in/out/in-out, hold, simple bounce).
+- On enabling animation of a parameter with value V, an initial key `t=playhead, value=V` is created (expected AE-like behavior).
 
-**Diseño técnico.**
-- `KeyframeCurve::eval(t)` — búsqueda binaria del segmento + interpolación según `interp` (Hold devuelve el valor izquierdo; Bezier: hermite cúbico con tangentes, solución iterativa para t-uniforme, precomputada por segmento y cacheada).
-- Los tiempos son **relativos al clip** (sobreviven a mover/split, ver 6.2); `speed` del clip escala el mapeo timeline→clip antes de evaluar.
-- Colores interpolan por componente en RGB lineal (v1); enums/bools solo Hold.
-- El evaluador vive en `ue-core` (compartido por preview, export y tests).
+**Technical design.**
+- `KeyframeCurve::eval(t)` — binary search for the segment + interpolation according to `interp` (Hold returns the left value; Bezier: cubic hermite with tangents, iterative solution for uniform-t, precomputed per segment and cached).
+- Times are **relative to the clip** (they survive move/split, see 6.2); the clip's `speed` scales the timeline→clip mapping before evaluating.
+- Colors interpolate per component in linear RGB (v1); enums/bools Hold only.
+- The evaluator lives in `ue-core` (shared by preview, export and tests).
 
-**CA.**
-1. Animación de posición (slide) + opacidad (fade) simultáneas, suaves a 30 fps.
-2. Split de un clip animado conserva la trayectoria visual exacta (keys interpoladas insertadas en el corte).
-3. `eval()` con 10 000 llamadas/frame (peor caso absurdo) < 0.5 ms (bench criterion).
+**AC.**
+1. Simultaneous position (slide) + opacity (fade) animation, smooth at 30 fps.
+2. Splitting an animated clip preserves the exact visual trajectory (interpolated keys inserted at the cut).
+3. `eval()` with 10,000 calls/frame (absurd worst case) < 0.5 ms (criterion bench).
 
 ---
 
-## 7. Features avanzadas
+## 7. Advanced features
 
-### 7.A Servidor MCP embebido
+### 7.A Embedded MCP server
 
-**Objetivo.** Al arrancar la app, un servidor MCP local expone **todo el estado del proyecto** a agentes (Claude Code, Claude Desktop, cualquier cliente MCP), y opcionalmente permite editar.
+**Objective.** On app startup, a local MCP server exposes **the entire project state** to agents (Claude Code, Claude Desktop, any MCP client), and optionally allows editing.
 
-**Diseño.**
-- Crate `ue-mcp` sobre **rmcp** (SDK oficial Rust de MCP), transporte **streamable HTTP** en `http://127.0.0.1:4599/mcp` (puerto configurable; bind SOLO a loopback).
-- Corre en el runtime tokio del proceso principal → acceso directo (lock de lectura) al `ProjectStore`. Las herramientas de escritura despachan **las mismas `Action` del ActionRegistry que usa la UI** (sección 6.5.1) → validación, undo y eventos gratis. Un agente que hace 50 ediciones genera entradas de undo etiquetadas `[MCP] …` que el usuario puede deshacer.
-- **Seguridad**:
-  - Token bearer aleatorio por sesión (visible en Ajustes → MCP, con botón copiar; opción de token fijo por proyecto).
-  - Tres niveles configurables: `off` / `read-only` (default) / `read-write`. En read-write, opción "confirmar ediciones destructivas" (diálogo nativo cuando un tool borra > N clips o exporta).
-  - Sin acceso al filesystem arbitrario: los tools hablan de IDs del proyecto, no de rutas.
-- **Catálogo de tools** (detallado en Apéndice E): lectura (`get_project_summary`, `get_timeline`, `get_transcript`, `get_media_pool`, `get_jobs`, `get_selection_and_playhead`…), edición (`split_clip`, `remove_range`, `move_clip`, `set_clip_property`, `apply_effect`, `add_text_clip`…), IA de alto nivel (`remove_silences`, `delete_words`, `generate_vertical`, `generate_avatar_track`, `start_export`). Resources: `project://current` (JSON del proyecto), `transcript://{asset_id}` (JSON word-level y SRT).
-- **Registro del cliente**: la pantalla de Ajustes muestra el snippet listo para copiar:
+**Design.**
+- `ue-mcp` crate on **rmcp** (official Rust MCP SDK), **streamable HTTP** transport at `http://127.0.0.1:4599/mcp` (configurable port; bind ONLY to loopback).
+- Runs in the main process's tokio runtime → direct access (read lock) to the `ProjectStore`. Write tools dispatch **the same `Action`s from the ActionRegistry that the UI uses** (section 6.5.1) → validation, undo and events for free. An agent that makes 50 edits generates undo entries labeled `[MCP] …` that the user can undo.
+- **Security**:
+  - Random bearer token per session (visible in Settings → MCP, with a copy button; option of a fixed token per project).
+  - Three configurable levels: `off` / `read-only` (default) / `read-write`. In read-write, a "confirm destructive edits" option (native dialog when a tool deletes > N clips or exports).
+  - No arbitrary filesystem access: the tools speak of project IDs, not paths.
+- **Tool catalog** (detailed in Appendix E): reads (`get_project_summary`, `get_timeline`, `get_transcript`, `get_media_pool`, `get_jobs`, `get_selection_and_playhead`…), edits (`split_clip`, `remove_range`, `move_clip`, `set_clip_property`, `apply_effect`, `add_text_clip`…), high-level AI (`remove_silences`, `delete_words`, `generate_vertical`, `generate_avatar_track`, `start_export`). Resources: `project://current` (project JSON), `transcript://{asset_id}` (word-level JSON and SRT).
+- **Client registration**: the Settings screen shows the ready-to-copy snippet:
   ```bash
   claude mcp add --transport http ubereditor http://127.0.0.1:4599/mcp \
       --header "Authorization: Bearer <token>"
   ```
-  y el JSON equivalente para Claude Desktop. Botón "probar conexión".
-- Eventos: cambios de estado emiten `notifications/resources/updated` sobre `project://current` para clientes suscritos.
+  and the equivalent JSON for Claude Desktop. "Test connection" button.
+- Events: state changes emit `notifications/resources/updated` on `project://current` for subscribed clients.
 
-**Casos de uso objetivo** (guían el diseño de tools): "¿cuánto dura mi proyecto y qué media usa?", "elimina los silencios de la pista 1 con padding 200 ms", "borra todas las palabras 'este...' y 'o sea'", "genera la versión vertical y exporta para Shorts", "pon un título con el texto X en el minuto 2".
+**Target use cases** (they guide the tool design): "how long is my project and what media does it use?", "remove the silences from track 1 with 200 ms padding", "delete all the words 'um...' and 'you know'", "generate the vertical version and export for Shorts", "put a title with the text X at minute 2".
 
-**CA.**
-1. Claude Code conectado puede describir el proyecto completo (secuencias, clips, transcripts) sin ayuda.
-2. `remove_silences` vía MCP ≡ mismo resultado que el botón de la UI, y es 1 undo.
-3. Con nivel `read-only`, toda tool de escritura devuelve error MCP estándar y un mensaje útil.
-4. Dos clientes MCP simultáneos no corrompen estado (todas las escrituras serializadas por el lock del store).
+**AC.**
+1. Connected Claude Code can describe the whole project (sequences, clips, transcripts) unaided.
+2. `remove_silences` via MCP ≡ same result as the UI button, and it is 1 undo.
+3. At `read-only` level, every write tool returns a standard MCP error and a useful message.
+4. Two simultaneous MCP clients don't corrupt state (all writes serialized by the store's lock).
 
-### 7.B Whisper palabra-por-palabra + edición basada en texto
+### 7.B Word-by-word Whisper + text-based editing
 
-**Objetivo.** Todo video/audio importado se transcribe con timestamps **por palabra**; un panel de transcripción permite editar el video borrando o reordenando texto.
+**Objective.** Every imported video/audio is transcribed with **per-word** timestamps; a transcript panel allows editing the video by deleting or reordering text.
 
-#### 7.B.1 Transcripción (job de import)
+#### 7.B.1 Transcription (import job)
 
-- **whisper-rs** (whisper.cpp) con `token_timestamps + DTW` para timestamps de palabra; modelos ggml gestionados desde Ajustes → IA:
+- **whisper-rs** (whisper.cpp) with `token_timestamps + DTW` for word timestamps; ggml models managed from Settings → AI:
 
-| Modelo | Tamaño aprox. | Uso recomendado |
+| Model | Approx. size | Recommended use |
 |---|---|---|
-| tiny / base (q5) | 40–80 MB | pruebas, máquinas lentas |
-| small | ~500 MB | equilibrio CPU |
-| large-v3-turbo (default) | ~1.6 GB | el que usa el toolkit ("turbo"); rápido y preciso |
+| tiny / base (q5) | 40–80 MB | testing, slow machines |
+| small | ~500 MB | CPU balance |
+| large-v3-turbo (default) | ~1.6 GB | the one the toolkit uses ("turbo"); fast and accurate |
 
-  Descarga desde HuggingFace con progreso y verificación sha256, a `<app_data>/models/`. GPU: Metal en macOS (gran ganancia), CUDA opcional.
-- Pipeline del job: audio conformado 16 kHz mono (derivado del WAV de 5.3) → VAD opcional (silero-vad ONNX) para trocear y acelerar → whisper por chunks con contexto → merge → normalización (colapsar espacios, unir tokens con apóstrofes) → `TranscriptDoc { words[], segments[] }` (Apéndice D).
-- **Caché por `content_hash`** (mismo patrón que el `_segments.json` del toolkit): re-importar el mismo archivo o re-transcribir tras un crash es gratis.
-- Configuración: idioma (auto/es/en/…), auto-transcribir al importar (on por defecto, desactivable), modelo, traducción a inglés opcional (capacidad nativa de whisper).
-- **Plan B**: si los word-timestamps de whisper.cpp dieran problemas de calidad, el sidecar `toolkit-bridge` (Python congelado con faster-whisper, sección 8.3) implementa el mismo contrato JSON — el resto de la app no se entera.
+  Download from HuggingFace with progress and sha256 verification, to `<app_data>/models/`. GPU: Metal on macOS (big gain), CUDA optional.
+- Job pipeline: conformed audio 16 kHz mono (derived from the WAV of 5.3) → optional VAD (silero-vad ONNX) to chunk and accelerate → whisper by chunks with context → merge → normalization (collapse spaces, join tokens with apostrophes) → `TranscriptDoc { words[], segments[] }` (Appendix D).
+- **Cache by `content_hash`** (same pattern as the toolkit's `_segments.json`): re-importing the same file or re-transcribing after a crash is free.
+- Configuration: language (auto/es/en/…), auto-transcribe on import (on by default, can be disabled), model, optional translation to English (whisper's native capability).
+- **Plan B**: if whisper.cpp's word-timestamps have quality problems, the `toolkit-bridge` sidecar (frozen Python with faster-whisper, section 8.3) implements the same JSON contract — the rest of the app doesn't notice.
 
-#### 7.B.2 Panel de transcripción y edición por texto
-
-**UX.**
-- Panel lateral "Transcripción" con dos modos:
-  - **Modo Asset**: transcript completo de un archivo del pool (para revisar).
-  - **Modo Secuencia** (el potente): concatena las palabras de los clips en orden de timeline; refleja la edición actual. Cada palabra conoce su clip y su rango fuente.
-- Palabra bajo el playhead resaltada; click en palabra = seek; doble click = selecciona la palabra en el timeline.
-- **Borrar texto = cortar video**: seleccionar palabras y `Supr` → el engine corta los rangos correspondientes (con padding configurable, default 80 ms a cada lado, fusionando cortes a < 120 ms de distancia) y hace ripple. Una entrada de undo.
-- **Modo tachado (no destructivo)**: `Ctrl+Supr` tacha palabras (se guardan como `rejected`); el preview las salta virtualmente; botón "Aplicar cortes" los materializa. Permite iterar sin comprometerse.
-- **Reordenar**: seleccionar una frase y arrastrarla a otro punto del texto → mueve los clips correspondientes (split en fronteras + move + ripple). V1 limita el arrastre a fronteras de frase (los cortes en mitad de coarticulación suenan mal; se documenta).
-- Búsqueda de texto con resaltado en timeline (encuentra muletillas: "eee", "o sea") + acción "tachar todas las coincidencias".
-- Corrección de texto: editar una palabra corrige el transcript (para subtítulos), nunca el audio.
-
-**Diseño técnico.**
-- La operación central es `cut_ranges(sequence, Vec<(TimeUs, TimeUs)>, ripple: bool)` en `ue-core`: normaliza+fusiona rangos, split en fronteras, elimina, ripple; devuelve una transacción. La reutilizan: edición por texto, silencios (7.C) y MCP. **Escribirla una vez, testearla a fondo.**
-- Mapeo palabra→timeline: `word.start` está en tiempo del asset; para cada clip Media se indexan las palabras con `src_in ≤ t < src_out`; posición en timeline = `clip.start + (word.start - src_in) / speed`. Índice invertido cacheado e invalidado por patch.
-
-**CA.**
-1. Borrar 10 palabras dispersas produce los cortes correctos (test con fixture de transcript sintético) y 1 undo.
-2. El modo secuencia refleja splits/moves/deletes existentes correctamente.
-3. Video de 20 min con large-v3-turbo transcribe en segundo plano sin bloquear la edición; en M1 ≤ ~2–3 min (Metal).
-
-### 7.C Eliminación / procesado de silencios
-
-**Objetivo.** Detectar silencios y: eliminarlos (ripple), acelerarlos, o solo marcarlos. Port directo mejorado de `trim.py` del toolkit.
-
-**Algoritmo** (en `ue-ai::silence`, sobre el WAV conformado):
-
-```
-1. RMS por ventanas: window=50 ms, hop=10 ms (el toolkit usa ventana fija de 2 s /
-   0.25 s vía "clip_interval"; el hop fino da fronteras precisas).
-2. Umbral dual (histéresis): habla si RMS > T_on; silencio si RMS < T_off = T_on - 6 dB.
-   T_on configurable: absoluto en dBFS (default -38 dBFS ≈ el 0.01 lineal del toolkit)
-   o RELATIVO: percentil 15 del RMS del clip + 8 dB (robusto a niveles de grabación).
-3. Fusionar: silencios < min_silence (default 400 ms) se ignoran (respiraciones);
-   islas de habla < min_speech (default 150 ms) se absorben (clicks).
-4. Padding: expandir habla pad_pre=150 ms / pad_post=200 ms (deja respirar los finales).
-5. Salida: Vec<SpeechInterval> en tiempo del asset.
-```
+#### 7.B.2 Transcript panel and text-based editing
 
 **UX.**
-- Diálogo "Silencios…" sobre la selección (o pista/secuencia): sliders de parámetros + **preview en vivo**: regiones rojas (silencio) / verdes (habla) pintadas sobre los clips y el histograma de RMS con la línea de umbral — se recalcula al mover sliders (el análisis RMS se cachea; solo se re-umbraliza: instantáneo).
-- Tres acciones:
-  1. **Eliminar** → `cut_ranges(ripple=true)` (7.B.2).
-  2. **Acelerar** → split de los rangos silenciosos y `speed = N×` (default 4×, con audio atenuado -12 dB opcional) — estilo jump-cut suave.
-  3. **Marcar** → solo marcadores de secuencia (revisión manual).
-- Estadística previa: "Se eliminarán 47 silencios (2:13 de 14:20 → 12:07)".
+- Side "Transcript" panel with two modes:
+  - **Asset mode**: complete transcript of a file from the pool (for review).
+  - **Sequence mode** (the powerful one): concatenates the words of the clips in timeline order; reflects the current edit. Each word knows its clip and its source range.
+- Word under the playhead highlighted; clicking a word = seek; double-clicking = selects the word in the timeline.
+- **Deleting text = cutting video**: select words and `Del` → the engine cuts the corresponding ranges (with configurable padding, default 80 ms on each side, merging cuts < 120 ms apart) and ripples. One undo entry.
+- **Strikethrough mode (non-destructive)**: `Ctrl+Del` strikes words through (saved as `rejected`); the preview virtually skips them; an "Apply cuts" button materializes them. Lets you iterate without committing.
+- **Reorder**: select a phrase and drag it to another point in the text → moves the corresponding clips (split at boundaries + move + ripple). V1 limits the drag to phrase boundaries (cuts in the middle of coarticulation sound bad; documented).
+- Text search with highlighting in the timeline (finds filler words: "um", "you know") + a "strike through all matches" action.
+- Text correction: editing a word corrects the transcript (for subtitles), never the audio.
 
-**CA.**
-1. Sobre un fixture sintético (habla + silencios conocidos) el detector encuentra 100% de silencios > 400 ms sin falsos positivos a umbral default.
-2. Preview de regiones se actualiza < 100 ms al mover sliders (solo re-umbralizado).
-3. Resultado idéntico al aplicar vía UI, MCP o wizard vertical.
+**Technical design.**
+- The central operation is `cut_ranges(sequence, Vec<(TimeUs, TimeUs)>, ripple: bool)` in `ue-core`: it normalizes+merges ranges, splits at boundaries, deletes, ripples; returns a transaction. It is reused by: text-based editing, silences (7.C) and MCP. **Write it once, test it thoroughly.**
+- Word→timeline mapping: `word.start` is in asset time; for each Media clip the words with `src_in ≤ t < src_out` are indexed; timeline position = `clip.start + (word.start - src_in) / speed`. Inverted index cached and invalidated by patch.
 
-### 7.D Generación automática de videos verticales
+**AC.**
+1. Deleting 10 scattered words produces the correct cuts (test with a synthetic transcript fixture) and 1 undo.
+2. Sequence mode reflects existing splits/moves/deletes correctly.
+3. A 20 min video with large-v3-turbo transcribes in the background without blocking editing; on M1 ≤ ~2–3 min (Metal).
 
-**Objetivo.** De una secuencia/rango horizontal a un 9:16 listo para Shorts/Reels con 1 clic. Port del `generate_short_base` de `recipes.py` + `shorts.py`.
+### 7.C Silence removal / processing
 
-**Wizard "Generar vertical…"** (pasos, todos con defaults sensatos):
+**Objective.** Detect silences and: remove them (ripple), speed them up, or just mark them. A direct, improved port of the toolkit's `trim.py`.
 
-1. **Rango**: secuencia completa, marcas I-O, o selección de clips.
-2. **Layout** (plantillas, sistema abierto a más):
-   - `Fondo desenfocado` (port del toolkit): secuencia nueva 1080×1920; capa inferior = mismo material escalado a llenar (crop) + `core.gaussian_blur` (σ≈20, equivalente al `boxblur=10:1`) + oscurecido -20%; capa superior = material escalado a ancho 1080, centrado vertical.
-   - `Zoom centrado`: crop 9:16 directo, con posición X keyframable manualmente después.
-   - (Backlog: `Auto-reframe` con detección de caras — sección 16.)
-3. **Silencios**: checkbox "eliminar silencios primero" (reusa 7.C).
-4. **Subtítulos**: checkbox "subtítulos automáticos word-level" (estilo karaoke por defecto, reusa 7.E.2) — usa el transcript existente o lanza whisper.
-5. **Títulos**: opcional, texto inicial/CTAs desde plantilla (port de `add_titles` + `titles` del config.json del toolkit: "Video completo en la descripción", "Suscríbete"…).
-6. Resultado: **una secuencia nueva** `"<nombre> (Vertical)"` — el original queda intacto; todo es editable a mano después (son clips/efectos normales). El wizard es una transacción componiendo acciones existentes → 1 undo, reproducible por MCP (`generate_vertical`).
+**Algorithm** (in `ue-ai::silence`, over the conformed WAV):
 
-**CA.**
-1. Wizard completo (con silencios + subtítulos) sobre un video de 3 min < 30 s de proceso (sin contar whisper si no está cacheado).
-2. El resultado es 100% editable (mover subtítulos, cambiar blur, deshacer cortes).
-3. Export directo con preset Shorts desde el paso final.
+```
+1. RMS per window: window=50 ms, hop=10 ms (the toolkit uses a fixed 2 s /
+   0.25 s window via "clip_interval"; the fine hop gives precise boundaries).
+2. Dual threshold (hysteresis): speech if RMS > T_on; silence if RMS < T_off = T_on - 6 dB.
+   T_on configurable: absolute in dBFS (default -38 dBFS ≈ the toolkit's 0.01 linear)
+   or RELATIVE: 15th percentile of the clip's RMS + 8 dB (robust to recording levels).
+3. Merge: silences < min_silence (default 400 ms) are ignored (breaths);
+   speech islands < min_speech (default 150 ms) are absorbed (clicks).
+4. Padding: expand speech pad_pre=150 ms / pad_post=200 ms (lets endings breathe).
+5. Output: Vec<SpeechInterval> in asset time.
+```
 
-### 7.E Avatar personalizable + subtítulos automáticos
+**UX.**
+- "Silences…" dialog over the selection (or track/sequence): parameter sliders + **live preview**: red regions (silence) / green regions (speech) painted over the clips and the RMS histogram with the threshold line — recomputed as the sliders move (the RMS analysis is cached; only re-thresholding happens: instant).
+- Three actions:
+  1. **Remove** → `cut_ranges(ripple=true)` (7.B.2).
+  2. **Speed up** → split the silent ranges and `speed = N×` (default 4×, with optional -12 dB attenuated audio) — smooth jump-cut style.
+  3. **Mark** → only sequence markers (manual review).
+- Preview stat: "47 silences will be removed (2:13 of 14:20 → 12:07)".
 
-#### 7.E.1 Avatar que habla al ritmo del video
+**AC.**
+1. Over a synthetic fixture (speech + known silences) the detector finds 100% of silences > 400 ms with no false positives at default threshold.
+2. Region preview updates < 100 ms when moving sliders (only re-thresholding).
+3. Result identical whether applied via UI, MCP or the vertical wizard.
 
-Port completo de `avatar_video_generation.py` del toolkit, convertido de "script que exporta un mp4" a **clip vivo del timeline**.
+### 7.D Automatic vertical video generation
 
-**Modelo.** `ClipPayload::Avatar { config: AvatarConfig, driver_asset: Id }`:
+**Objective.** From a horizontal sequence/range to a 9:16 ready for Shorts/Reels with 1 click. Port of `generate_short_base` from `recipes.py` + `shorts.py`.
+
+**"Generate vertical…" wizard** (steps, all with sensible defaults):
+
+1. **Range**: full sequence, I-O marks, or clip selection.
+2. **Layout** (templates, a system open to more):
+   - `Blurred background` (toolkit port): new 1080×1920 sequence; bottom layer = same material scaled to fill (crop) + `core.gaussian_blur` (σ≈20, equivalent to `boxblur=10:1`) + darkened -20%; top layer = material scaled to 1080 width, vertically centered.
+   - `Centered zoom`: direct 9:16 crop, with an X position that can be keyframed manually afterward.
+   - (Backlog: `Auto-reframe` with face detection — section 16.)
+3. **Silences**: "remove silences first" checkbox (reuses 7.C).
+4. **Subtitles**: "automatic word-level subtitles" checkbox (karaoke style by default, reuses 7.E.2) — uses the existing transcript or launches whisper.
+5. **Titles**: optional, initial text/CTAs from a template (port of `add_titles` + `titles` from the toolkit's config.json: "Full video in the description", "Subscribe"…).
+6. Result: **a new sequence** `"<name> (Vertical)"` — the original stays intact; everything is editable by hand afterward (they are normal clips/effects). The wizard is a transaction composing existing actions → 1 undo, reproducible via MCP (`generate_vertical`).
+
+**AC.**
+1. Full wizard (with silences + subtitles) over a 3 min video < 30 s of processing (not counting whisper if it isn't cached).
+2. The result is 100% editable (move subtitles, change blur, undo cuts).
+3. Direct export with the Shorts preset from the final step.
+
+### 7.E Customizable avatar + automatic subtitles
+
+#### 7.E.1 Avatar that talks to the rhythm of the video
+
+Full port of the toolkit's `avatar_video_generation.py`, converted from "a script that exports an mp4" into a **live timeline clip**.
+
+**Model.** `ClipPayload::Avatar { config: AvatarConfig, driver_asset: Id }`:
 
 ```rust
 struct AvatarConfig {
-    avatars: BTreeMap<String, RelPath>, // emoción → clip de video (loop). COMPATIBLE
-                                        // con avatar_config/config.json del toolkit
-                                        // (mismas claves: calm, angry, sad, amazed…)
-    default_emotion: String,            // primera clave (como el toolkit)
-    shake_factor: f32,                  // vibración ∝ volumen (idéntico concepto)
-    chroma: Option<ChromaParams>,       // para avatares mp4 con fondo verde (6.5.4);
-                                        // los .mov con alpha no lo necesitan
-    scale: f32, anchor: Anchor9,        // posición en el frame (esquina inferior, etc.)
+    avatars: BTreeMap<String, RelPath>, // emotion → video clip (loop). COMPATIBLE
+                                        // with the toolkit's avatar_config/config.json
+                                        // (same keys: calm, angry, sad, amazed…)
+    default_emotion: String,            // first key (like the toolkit)
+    shake_factor: f32,                  // vibration ∝ volume (identical concept)
+    chroma: Option<ChromaParams>,       // for avatar mp4s with a green background (6.5.4);
+                                        // the .mov with alpha don't need it
+    scale: f32, anchor: Anchor9,        // position in the frame (bottom corner, etc.)
 }
 ```
 
-**Pipeline de análisis** (job "Analizar avatar", cacheado por `content_hash` del driver):
-1. Transcript por **segmentos/frases** del asset conductor (reusa 7.B; no requiere word-level).
-2. **Clasificación de emoción por segmento** vía endpoint OpenAI-compatible configurable (OpenAI, Ollama local, LM Studio…), con el **mismo prompt probado del toolkit**: *"You are an emotion classifier… reply with exactly one of: {labels}"*, matching laxo por substring y fallback a la emoción default ante error — comportamiento calcado de `classify_emotion()`. Paralelizado (N requests concurrentes), cacheado en el TranscriptDoc (`segments[].emotion`).
-   - Fallback sin red/API: heurística por volumen+velocidad (RMS alto→"angry/amazed", pausado→"calm") para que la feature funcione offline, con calidad reducida documentada.
-3. **Volumen RMS por segmento** (port de `get_subclip_volume_segment`) + media global → factor de vibración por segmento.
+**Analysis pipeline** (job "Analyze avatar", cached by the driver's `content_hash`):
+1. Transcript by **segments/phrases** of the driver asset (reuses 7.B; doesn't require word-level).
+2. **Per-segment emotion classification** via a configurable OpenAI-compatible endpoint (OpenAI, local Ollama, LM Studio…), with the **same proven prompt from the toolkit**: *"You are an emotion classifier… reply with exactly one of: {labels}"*, lax substring matching and fallback to the default emotion on error — behavior identical to `classify_emotion()`. Parallelized (N concurrent requests), cached in the TranscriptDoc (`segments[].emotion`).
+   - Fallback with no network/API: heuristic by volume+speed (high RMS→"angry/amazed", slow→"calm") so the feature works offline, with documented reduced quality.
+3. **RMS volume per segment** (port of `get_subclip_volume_segment`) + global mean → vibration factor per segment.
 
-**Render en vivo** (implementa `Renderable`, como cualquier payload):
-- En el tiempo `t`, el segmento activo determina la emoción → clip de avatar correspondiente, en **loop** (`src_t = (t - seg.start) % avatar_dur`, decodificado por el DecodePool normal); huecos entre segmentos → avatar default (idéntico a `build_avatar_subclips` del toolkit, incluida la cola final).
-- **Shake**: efecto `core.shake` inyectado con `intensity = (seg.volume / global_avg) * shake_factor`, implementado como offset UV en shader con ruido determinista por frame (mejora sobre el `np.roll` aleatorio del toolkit: reproducible y sin coste CPU).
-- Chroma key si está configurado; luego transform estándar (posición/escala/keyframes como cualquier clip).
+**Live render** (implements `Renderable`, like any payload):
+- At time `t`, the active segment determines the emotion → the corresponding avatar clip, in **loop** (`src_t = (t - seg.start) % avatar_dur`, decoded by the normal DecodePool); gaps between segments → default avatar (identical to the toolkit's `build_avatar_subclips`, including the final tail).
+- **Shake**: `core.shake` effect injected with `intensity = (seg.volume / global_avg) * shake_factor`, implemented as a UV offset in the shader with deterministic per-frame noise (an improvement over the toolkit's random `np.roll`: reproducible and with no CPU cost).
+- Chroma key if configured; then standard transform (position/scale/keyframes like any clip).
 
 **UX.**
-- Editor de avatares (Ajustes → Avatares): crear avatar con nombre, mapear emoción→archivo (drag & drop, con preview en loop), añadir/renombrar emociones libres (el prompt se construye con las claves reales, como hace el toolkit), shake, chroma. **Botón "Importar config del toolkit"** que lee un `avatar_config/config.json` existente tal cual.
-- Uso: arrastrar el avatar desde el pool de avatares a una pista sobre el video → se ancla al asset de audio/video conductor bajo él (o el que elija el usuario). Botón "Analizar" lanza el job; hasta entonces se muestra con la emoción default.
-- El estado del análisis (emociones por segmento) es visible como colorcitos sobre el clip avatar y editable: click derecho en un segmento → forzar emoción (override manual persistido).
+- Avatar editor (Settings → Avatars): create an avatar with a name, map emotion→file (drag & drop, with looping preview), add/rename free emotions (the prompt is built from the real keys, as the toolkit does), shake, chroma. **"Import toolkit config" button** that reads an existing `avatar_config/config.json` as-is.
+- Usage: drag the avatar from the avatar pool to a track over the video → it anchors to the driver audio/video asset below it (or whichever the user chooses). An "Analyze" button launches the job; until then it shows with the default emotion.
+- The analysis state (emotions per segment) is visible as little colors over the avatar clip and editable: right-click a segment → force emotion (manual override persisted).
 
-**CA.**
-1. Con los archivos reales de `avatar_config/` del toolkit y un video de prueba, el resultado es visualmente equivalente al `output_video.mp4` del toolkit (validación manual lado a lado).
-2. Cambiar de emoción un segmento manualmente re-renderiza al instante sin re-análisis.
-3. Sin API key configurada, el avatar funciona con la heurística offline.
-4. Preview 30 fps con avatar + chroma + video base 1080p.
+**AC.**
+1. With the real files from the toolkit's `avatar_config/` and a test video, the result is visually equivalent to the toolkit's `output_video.mp4` (manual side-by-side validation).
+2. Manually changing a segment's emotion re-renders instantly without re-analysis.
+3. With no API key configured, the avatar works with the offline heuristic.
+4. 30 fps preview with avatar + chroma + 1080p base video.
 
-#### 7.E.2 Subtítulos automáticos
+#### 7.E.2 Automatic subtitles
 
-- `ClipPayload::Subtitles { transcript_id, style, mode }` — un solo clip que cubre el rango y renderiza el texto que toque en cada `t` (no cientos de clips de texto; mucho más manejable).
-- **Modos**: `Phrase` (agrupación por pausas > 1 s y máx. N palabras/caracteres — port de la lógica `process_transcript` de `translation.py` con `MAX_PAUSE=1.0`), `Word` (palabra a palabra, como `transcript_divided` del toolkit), `Karaoke` (frase visible + palabra actual resaltada con color/escala).
-- **Estilo** (`SubtitleStyle`): tipografía completa de 6.6 + color de resaltado karaoke + posición (default: centrado, offset Y configurable — equivalente al `text_position_y_offset` del `config.json` del toolkit, que se importa como preset "Toolkit").
-- Sincronizados con la edición: al ser render dinámico desde el transcript + mapeo clip→tiempo (7.B.2), **cortar/mover video reajusta los subtítulos solos**. Palabras `rejected` no se muestran.
-- Export a archivo: `.srt` y `.vtt` (con la corrección de redondeo de `float_to_srt_time` hecha con enteros), por asset o por secuencia.
-- Edición: corregir texto de una palabra en el panel 7.B.2 se refleja al instante.
+- `ClipPayload::Subtitles { transcript_id, style, mode }` — a single clip that covers the range and renders the appropriate text at each `t` (not hundreds of text clips; far more manageable).
+- **Modes**: `Phrase` (grouping by pauses > 1 s and max. N words/characters — port of the `process_transcript` logic from `translation.py` with `MAX_PAUSE=1.0`), `Word` (word by word, like the toolkit's `transcript_divided`), `Karaoke` (visible phrase + current word highlighted with color/scale).
+- **Style** (`SubtitleStyle`): full typography from 6.6 + karaoke highlight color + position (default: centered, configurable Y offset — equivalent to the `text_position_y_offset` from the toolkit's `config.json`, imported as a "Toolkit" preset).
+- Synced with the edit: being a dynamic render from the transcript + clip→time mapping (7.B.2), **cutting/moving video re-adjusts the subtitles on its own**. `rejected` words are not shown.
+- File export: `.srt` and `.vtt` (with the rounding correction of `float_to_srt_time` done with integers), per asset or per sequence.
+- Editing: correcting a word's text in the 7.B.2 panel is reflected instantly.
 
-**CA.**
-1. Modo karaoke legible y sincronizado (± 1 frame de los timestamps de whisper).
-2. Tras eliminar silencios, los subtítulos siguen cuadrando sin re-análisis.
-3. SRT exportado válido (round-trip con un parser externo) y con acentos correctos (UTF-8).
+**AC.**
+1. Karaoke mode legible and synced (± 1 frame of whisper's timestamps).
+2. After removing silences, subtitles still line up without re-analysis.
+3. Exported SRT valid (round-trip with an external parser) and with correct accents (UTF-8).
 
 ---
 
-## 8. Reutilización del Youtubers-toolkit
+## 8. Reuse of the Youtubers-toolkit
 
-### 8.1 Inventario y mapeo módulo a módulo
+### 8.1 Inventory and module-by-module mapping
 
-| Toolkit (Python) | Qué hace hoy | Destino en UberEditor | Estrategia |
+| Toolkit (Python) | What it does today | Destination in UberEditor | Strategy |
 |---|---|---|---|
-| `trim.py` (`trim_by_silence`) | RMS por chunks de `clip_interval`, umbral lineal 0.01, corta con moviepy | `ue-ai::silence` (7.C) | **Port a Rust** del algoritmo, mejorado (histéresis, min-duration, padding, umbral relativo). El parámetro `sound_threshold=0.01` ≈ -38 dBFS se conserva como default. |
-| `transcript.py` (`generate_transcript`, `transcript_divided`) | faster-whisper "turbo", SRT por segmento o por palabra | `ue-ai::transcribe` (7.B) + export SRT (7.E.2) | **Port** a whisper-rs (mismo modelo turbo). El SRT word-level de `transcript_divided` ≡ modo `Word` de subtítulos. |
-| `subtitles.py` + `config.json` (`subtitles_clip_config`, offsets) | Quema SRT con TextClip de moviepy | Payload Subtitles (7.E.2) | **Port de la config**: importador que convierte `config.json` en un `SubtitleStyle` preset ("Toolkit"). Fuente `Hey-Comic`, tamaños y offsets incluidos. |
-| `shorts.py` (`blur_video`, `generate_video_base`, `add_titles`) | boxblur=10:1 + composición 1080×1920 + títulos de 3 s | Wizard vertical (7.D) + plantillas de título (6.6) | **Port conceptual**: el blur pasa a shader GPU, la composición a plantilla de layout; `titles` del config → plantilla de CTAs. |
-| `set_orientation.py` | resize que INVIERTE w/h (estira) | Transform2D (6.8) | **Sustituido** (el original deforma la imagen; el layout vertical correcto es 7.D). |
-| `denoise.py` (DNS64 + torch) | Denoise de voz offline | Denoise RNNoise por clip (6.7) | **Sustituido** por RNNoise (ligero). DNS64 vía sidecar queda en backlog si se echa de menos su calidad. |
-| `avatar_video_generation.py` | Whisper → emociones GPT → volumen → loops con shake → mp4 | Payload Avatar (7.E.1) | **Port completo a Rust** conservando: prompt de clasificación, matching laxo + fallback, cache de segmentos, relleno de huecos/cola con default, shake ∝ volumen/media. |
-| `avatar_config/config.json` + clips | Mapa emoción→archivo + shake_factor | `AvatarConfig` (7.E.1) | **Formato compatible**: botón de importación directa. Los mp4 con fondo verde usan chroma key core. |
-| `translation.py` (`process_transcript`) | Agrupa palabras en frases por pausas > 1 s | Modo `Phrase` de subtítulos (7.E.2) | **Port del algoritmo** de agrupación tal cual. |
-| `translation.py` (traducción Helsinki-NLP) + `audio_generator` (Kokoro TTS) | Doblaje: traducir + TTS + remontar audio | — | **Backlog** (sección 16, "Doblaje"). No es requisito v1. |
-| `agents/` (killer_video_idea, title_gen, persona_testing) | Ideación de títulos/ideas con OpenAI | — | **No se embebe**: con el servidor MCP (7.A), un agente externo (Claude) hace esto mejor leyendo el transcript del proyecto. Se documenta como receta MCP. |
-| `recipes.py` | Encadena comandos CLI | Wizards de la UI + tools MCP de alto nivel | Cada receta ≡ un wizard: `separate_video`→Silencios, `generate_short_base`→Vertical, `subtitle_video`→Subtítulos, `generate_avatar`→Avatar. |
-| `utils.py` (`get_subclip_volume*`, `float_to_srt_time`, `apply_shake`, `get_audio`) | Helpers | `ue-media` / `ue-ai` / shader shake | **Port** trivial (RMS y SRT en enteros; shake en GPU). |
-| `main.py` (pipeline de kwargs) | Orquestación CLI | ActionRegistry + transacciones | El patrón "pipeline de pasos componibles" sobrevive como composición de Actions. |
+| `trim.py` (`trim_by_silence`) | RMS per `clip_interval` chunks, linear threshold 0.01, cuts with moviepy | `ue-ai::silence` (7.C) | **Port to Rust** of the algorithm, improved (hysteresis, min-duration, padding, relative threshold). The `sound_threshold=0.01` ≈ -38 dBFS parameter is kept as the default. |
+| `transcript.py` (`generate_transcript`, `transcript_divided`) | faster-whisper "turbo", SRT per segment or per word | `ue-ai::transcribe` (7.B) + SRT export (7.E.2) | **Port** to whisper-rs (same turbo model). The word-level SRT of `transcript_divided` ≡ the `Word` subtitle mode. |
+| `subtitles.py` + `config.json` (`subtitles_clip_config`, offsets) | Burns SRT with moviepy's TextClip | Subtitles payload (7.E.2) | **Config port**: importer that converts `config.json` into a `SubtitleStyle` preset ("Toolkit"). `Hey-Comic` font, sizes and offsets included. |
+| `shorts.py` (`blur_video`, `generate_video_base`, `add_titles`) | boxblur=10:1 + 1080×1920 composition + 3 s titles | Vertical wizard (7.D) + title templates (6.6) | **Conceptual port**: the blur becomes a GPU shader, the composition a layout template; `titles` from config → CTA template. |
+| `set_orientation.py` | resize that INVERTS w/h (stretches) | Transform2D (6.8) | **Replaced** (the original deforms the image; the correct vertical layout is 7.D). |
+| `denoise.py` (DNS64 + torch) | Offline voice denoise | RNNoise denoise per clip (6.7) | **Replaced** by RNNoise (lightweight). DNS64 via sidecar stays in the backlog if its quality is missed. |
+| `avatar_video_generation.py` | Whisper → GPT emotions → volume → loops with shake → mp4 | Avatar payload (7.E.1) | **Full port to Rust** preserving: classification prompt, lax matching + fallback, segment cache, gap/tail filling with default, shake ∝ volume/mean. |
+| `avatar_config/config.json` + clips | emotion→file map + shake_factor | `AvatarConfig` (7.E.1) | **Compatible format**: direct import button. The green-background mp4s use the core chroma key. |
+| `translation.py` (`process_transcript`) | Groups words into phrases by pauses > 1 s | `Phrase` subtitle mode (7.E.2) | **Port of the grouping algorithm** as-is. |
+| `translation.py` (Helsinki-NLP translation) + `audio_generator` (Kokoro TTS) | Dubbing: translate + TTS + reassemble audio | — | **Backlog** (section 16, "Dubbing"). Not a v1 requirement. |
+| `agents/` (killer_video_idea, title_gen, persona_testing) | Title/idea ideation with OpenAI | — | **Not embedded**: with the MCP server (7.A), an external agent (Claude) does this better by reading the project's transcript. Documented as an MCP recipe. |
+| `recipes.py` | Chains CLI commands | UI wizards + high-level MCP tools | Each recipe ≡ a wizard: `separate_video`→Silences, `generate_short_base`→Vertical, `subtitle_video`→Subtitles, `generate_avatar`→Avatar. |
+| `utils.py` (`get_subclip_volume*`, `float_to_srt_time`, `apply_shake`, `get_audio`) | Helpers | `ue-media` / `ue-ai` / shake shader | **Trivial port** (RMS and SRT in integers; shake on the GPU). |
+| `main.py` (kwargs pipeline) | CLI orchestration | ActionRegistry + transactions | The "pipeline of composable steps" pattern survives as composition of Actions. |
 
-### 8.2 Qué NO se hereda (deudas conocidas del toolkit que se corrigen)
+### 8.2 What is NOT inherited (known toolkit debts that are fixed)
 
-- MoviePy/CPU para todo → GPU (wgpu); es la razón #1 de lentitud del toolkit.
-- Tiempos en float y SRT con redondeos → `TimeUs` enteros.
-- `np.random` sin semilla en el shake → ruido determinista.
-- `set_vertical` que estira la imagen → layout real 9:16.
-- Subprocesos con `shell=True` e interpolación de rutas → sidecars con args (rutas con espacios seguras).
-- Estado en archivos sueltos junto al video (`*_transcript.srt`, `*_segments.json`) → caché centralizada por hash + proyecto autocontenido.
+- MoviePy/CPU for everything → GPU (wgpu); it is the #1 reason for the toolkit's slowness.
+- Times in float and SRT with rounding → integer `TimeUs`.
+- `np.random` without a seed in the shake → deterministic noise.
+- `set_vertical` that stretches the image → real 9:16 layout.
+- Subprocesses with `shell=True` and path interpolation → sidecars with args (paths with spaces are safe).
+- State in loose files next to the video (`*_transcript.srt`, `*_segments.json`) → centralized cache by hash + self-contained project.
 
-### 8.3 Puente opcional: sidecar `toolkit-bridge`
+### 8.3 Optional bridge: `toolkit-bridge` sidecar
 
-Red de seguridad si algún port nativo se atasca (sobre todo whisper word-level o calidad de denoise):
+Safety net if some native port gets stuck (especially whisper word-level or denoise quality):
 
-- Empaquetar un subconjunto del toolkit (faster-whisper; opcional DNS64/Kokoro) con **PyInstaller** como binario sidecar por plataforma, expuesto por **JSON-RPC sobre stdio**: `transcribe(path, model, word_timestamps) → transcript.json`, `denoise(path) → wav`.
-- Contrato de datos idéntico al nativo (Apéndice D) → intercambiable con un flag de configuración.
-- Costo: ~300–500 MB de binario extra; por eso es **opt-in de desarrollo**, no el plan A de distribución.
+- Package a subset of the toolkit (faster-whisper; optionally DNS64/Kokoro) with **PyInstaller** as a per-platform sidecar binary, exposed by **JSON-RPC over stdio**: `transcribe(path, model, word_timestamps) → transcript.json`, `denoise(path) → wav`.
+- Data contract identical to the native one (Appendix D) → interchangeable with a config flag.
+- Cost: ~300–500 MB of extra binary; that's why it is **development opt-in**, not the plan A for distribution.
 
 ---
 
-## 9. API IPC (frontend ↔ engine)
+## 9. IPC API (frontend ↔ engine)
 
-Convención: comandos `dominio.acción` (Tauri `invoke`), respuestas `Result<T, UeError>` tipadas. Tipos TypeScript **generados** desde los structs Rust (ts-rs o specta) — una sola fuente de verdad.
+Convention: `domain.action` commands (Tauri `invoke`), typed `Result<T, UeError>` responses. TypeScript types **generated** from the Rust structs (ts-rs or specta) — a single source of truth.
 
-### 9.1 Comandos (selección; la lista crece con el ActionRegistry)
+### 9.1 Commands (selection; the list grows with the ActionRegistry)
 
-| Dominio | Comandos |
+| Domain | Commands |
 |---|---|
 | `project` | `new`, `open(path)`, `save`, `save_as(path)`, `close`, `undo`, `redo`, `get_state`, `get_history` |
 | `media` | `import(paths[])`, `remove(asset_id)`, `relink(asset_id, path)`, `get_pool` |
@@ -972,198 +972,198 @@ Convención: comandos `dominio.acción` (Tauri `invoke`), respuestas `Result<T, 
 | `playback` | `play`, `pause`, `seek(t)`, `set_rate(r)`, `set_quality(q)`, `set_loop(in, out)` |
 | `text` | `add_text_clip`, `set_content`, `set_style`, `save_template`, `list_templates` |
 | `export` | `list_presets`, `start(preset, overrides)`, `cancel(job_id)`, `queue_status` |
-| `ai` | `transcribe(asset_id, opts)`, `analyze_silences(scope, params)` (solo análisis), `apply_silences(analysis_id, action)`, `delete_words(word_ids, opts)`, `reject_words(word_ids)`, `apply_rejected`, `generate_vertical(opts)`, `avatar_analyze(clip_id)`, `avatar_set_emotion(clip_id, seg_idx, emotion)` |
+| `ai` | `transcribe(asset_id, opts)`, `analyze_silences(scope, params)` (analysis only), `apply_silences(analysis_id, action)`, `delete_words(word_ids, opts)`, `reject_words(word_ids)`, `apply_rejected`, `generate_vertical(opts)`, `avatar_analyze(clip_id)`, `avatar_set_emotion(clip_id, seg_idx, emotion)` |
 | `effects` | `list`, `reload_user_packs`, `get_manifest(id)` |
 | `mcp` | `status`, `set_mode(off/ro/rw)`, `regenerate_token` |
 | `jobs` | `list`, `cancel(id)` |
 
-### 9.2 Eventos (engine → UI)
+### 9.2 Events (engine → UI)
 
-| Evento | Payload | Frecuencia |
+| Event | Payload | Frequency |
 |---|---|---|
-| `state.patch` | JSON Patch + nº de versión | por mutación |
-| `playback.position` | `t_us`, estado, dropped | 30 Hz durante play |
-| `preview.frame` | binario por Channel (5.5) | 30 Hz |
-| `audio.meters` | RMS/pico por pista | 15 Hz |
-| `job.progress` | id, kind, 0–1, mensaje | ≤ 4 Hz por job |
-| `job.done` / `job.error` | id, resultado/error | por job |
-| `mcp.activity` | tool llamada, cliente | por llamada (para el indicador de UI) |
+| `state.patch` | JSON Patch + version number | per mutation |
+| `playback.position` | `t_us`, state, dropped | 30 Hz during play |
+| `preview.frame` | binary over Channel (5.5) | 30 Hz |
+| `audio.meters` | RMS/peak per track | 15 Hz |
+| `job.progress` | id, kind, 0–1, message | ≤ 4 Hz per job |
+| `job.done` / `job.error` | id, result/error | per job |
+| `mcp.activity` | tool called, client | per call (for the UI indicator) |
 
 ---
 
-## 10. Estructura del repositorio
+## 10. Repository structure
 
 ```
 ubereditor/
-├── PLAN.md                      # este documento
+├── PLAN.md                      # this document
 ├── package.json / pnpm-lock.yaml
-├── src/                         # Frontend React + TS
-│   ├── app/                     # shell, layout, ruteo de paneles, temas
+├── src/                         # React + TS frontend
+│   ├── app/                     # shell, layout, panel routing, themes
 │   ├── components/
-│   │   ├── timeline/            # canvas del timeline, interacciones, lanes de keyframes
-│   │   ├── preview/             # canvas WebGL, transporte, gizmo de transform, cuentagotas
+│   │   ├── timeline/            # timeline canvas, interactions, keyframe lanes
+│   │   ├── preview/             # WebGL canvas, transport, transform gizmo, eyedropper
 │   │   ├── media-pool/
-│   │   ├── inspector/           # widgets de params autogenerados desde manifests
-│   │   ├── transcript/          # panel de edición por texto
-│   │   ├── export/              # diálogo + cola
-│   │   ├── wizards/             # vertical, silencios, avatar
-│   │   └── settings/            # IA, MCP, avatares, atajos
-│   ├── state/                   # stores zustand (mirror), aplicación de patches
-│   ├── ipc/                     # wrappers tipados de invoke/eventos (código generado)
+│   │   ├── inspector/           # param widgets auto-generated from manifests
+│   │   ├── transcript/          # text-based editing panel
+│   │   ├── export/              # dialog + queue
+│   │   ├── wizards/             # vertical, silences, avatar
+│   │   └── settings/            # AI, MCP, avatars, shortcuts
+│   ├── state/                   # zustand stores (mirror), applying patches
+│   ├── ipc/                     # typed wrappers of invoke/events (generated code)
 │   └── lib/
 ├── src-tauri/
-│   ├── tauri.conf.json          # sidecars ffmpeg/ffprobe (externalBin), CSP, updater
+│   ├── tauri.conf.json          # ffmpeg/ffprobe sidecars (externalBin), CSP, updater
 │   ├── binaries/                # ffmpeg-<target-triple>, ffprobe-<target-triple>
 │   ├── icons/
-│   └── src/main.rs              # wiring: comandos, eventos, arranque de MCP
-├── crates/                      # (ver 3.3) ue-core, ue-media, ue-render, ue-audio,
+│   └── src/main.rs              # wiring: commands, events, MCP startup
+├── crates/                      # (see 3.3) ue-core, ue-media, ue-render, ue-audio,
 │   │                            #  ue-playback, ue-export, ue-ai, ue-mcp
-│   └── ue-core/tests/           # proptest de acciones, fixtures .uep
-├── effects/core/                # packs de efectos/transiciones embebidos
-├── assets/                      # fuentes incluidas (OFL), plantillas de títulos, presets
-├── docs/                        # ADRs (decisiones), guía de efectos de usuario, guía MCP
-└── .github/workflows/           # CI (sección 12)
+│   └── ue-core/tests/           # action proptests, .uep fixtures
+├── effects/core/                # embedded effect/transition packs
+├── assets/                      # bundled fonts (OFL), title templates, presets
+├── docs/                        # ADRs (decisions), user effects guide, MCP guide
+└── .github/workflows/           # CI (section 12)
 ```
 
 ---
 
-## 11. Presupuestos de rendimiento
+## 11. Performance budgets
 
-Hardware de referencia: MacBook Air M1 8 GB / PC Ryzen 5 + GPU integrada Vega / Ubuntu equivalente.
+Reference hardware: MacBook Air M1 8 GB / Ryzen 5 PC + integrated Vega GPU / equivalent Ubuntu.
 
-| Métrica | Objetivo | Cómo se mide |
+| Metric | Target | How it's measured |
 |---|---|---|
-| UI del timeline | 60 fps con 500 clips | trazas de rAF en CI manual |
-| Preview 1080p (2 pistas video + texto + música) | 30 fps sin drops sostenidos | contador de dropped frames |
-| Latencia de scrub (con proxy) | < 150 ms p95 | test instrumentado |
-| Seek de reproducción | < 300 ms p95 | ídem |
-| Desincronización A/V | < 40 ms sostenida | video de test beep+flash |
-| Import (probe + usable) | < 1 s | por archivo |
-| Proxy 720p de 10 min 1080p | < 2 min en background | job timing |
-| Export 1080p H.264 | ≥ 1× tiempo real | job timing |
-| Whisper large-v3-turbo (M1, Metal) | ≥ 5× tiempo real | job timing |
-| RAM en reposo con proyecto mediano | < 1.5 GB (sin contar FrameCache configurable) | Activity Monitor |
-| Arranque en frío hasta interactivo | < 3 s | stopwatch CI manual |
+| Timeline UI | 60 fps with 500 clips | rAF traces in manual CI |
+| 1080p preview (2 video tracks + text + music) | 30 fps with no sustained drops | dropped-frames counter |
+| Scrub latency (with proxy) | < 150 ms p95 | instrumented test |
+| Playback seek | < 300 ms p95 | ditto |
+| A/V desync | < 40 ms sustained | beep+flash test video |
+| Import (probe + usable) | < 1 s | per file |
+| 720p proxy of 10 min 1080p | < 2 min in background | job timing |
+| 1080p H.264 export | ≥ 1× real time | job timing |
+| Whisper large-v3-turbo (M1, Metal) | ≥ 5× real time | job timing |
+| RAM at rest with a medium project | < 1.5 GB (not counting the configurable FrameCache) | Activity Monitor |
+| Cold start to interactive | < 3 s | manual CI stopwatch |
 
-Decisiones que protegen estos números: proxies GOP-corto, YUV en GPU, canvas único en timeline, cache LRU, patches en vez de estado completo por IPC, jobs fuera del hilo de render.
+Decisions that protect these numbers: short-GOP proxies, YUV on the GPU, single canvas in the timeline, LRU cache, patches instead of full state over IPC, jobs off the render thread.
 
 ---
 
-## 12. Estrategia de testing y CI
+## 12. Testing and CI strategy
 
 **Unit (Rust, `cargo test`):**
-- `ue-core`: invariantes del modelo, cada Action y su inversa, **proptest** (secuencias aleatorias de acciones + undo total ≡ estado inicial), migraciones de schema con fixtures, evaluador de keyframes (valores exactos en bordes).
-- `ue-ai`: detector de silencios sobre WAVs sintéticos generados en el test (tonos + silencios conocidos); agrupación por pausas; mapeo palabra→timeline con transcripts fixture; `cut_ranges` exhaustivo.
-- `ue-media`: parsing de ffprobe con JSONs reales grabados como fixtures (incluye VFR, rotate=90, 5.1, sin audio).
+- `ue-core`: model invariants, each Action and its inverse, **proptest** (random sequences of actions + full undo ≡ initial state), schema migrations with fixtures, keyframe evaluator (exact values at boundaries).
+- `ue-ai`: silence detector over synthetic WAVs generated in the test (tones + known silences); grouping by pauses; word→timeline mapping with fixture transcripts; exhaustive `cut_ranges`.
+- `ue-media`: ffprobe parsing with real JSONs recorded as fixtures (includes VFR, rotate=90, 5.1, no audio).
 
 **Golden frames (render):**
-- Proyectos fixture pequeños → render de N frames concretos → hash perceptual (dHash) contra imágenes de referencia versionadas con tolerancia; corre en las 3 plataformas del CI (con adapter de software: `wgpu` + lavapipe/llvmpipe en Linux CI).
-- Cubre: cada efecto core, cada transición, chroma key con imagen de test verde, texto con tildes/emoji, transform con rotación.
+- Small fixture projects → render of N specific frames → perceptual hash (dHash) against versioned reference images with tolerance; runs on the 3 CI platforms (with a software adapter: `wgpu` + lavapipe/llvmpipe on Linux CI).
+- Covers: each core effect, each transition, chroma key with a green test image, text with accents/emoji, transform with rotation.
 
-**Integración:**
-- Export de un proyecto fixture de 10 s → validación con ffprobe (duración, fps, resolución) + extracción de 3 frames → golden.
-- MCP: cliente de test que llama cada tool contra una app headless (el engine se puede instanciar sin webview — diseño que además habilita un futuro CLI).
-- Whisper: audio corto fixture con texto conocido → asserts laxos sobre las palabras (por variabilidad del modelo, solo en el job nightly con modelo tiny).
+**Integration:**
+- Export of a 10 s fixture project → validation with ffprobe (duration, fps, resolution) + extraction of 3 frames → golden.
+- MCP: a test client that calls each tool against a headless app (the engine can be instantiated without the webview — a design that additionally enables a future CLI).
+- Whisper: a short fixture audio with known text → lax asserts over the words (due to model variability, only in the nightly job with the tiny model).
 
-**E2E (frontend):** Playwright + tauri-driver (WebDriver) para flujos: importar→cortar→exportar; undo/redo; wizard vertical. Solo smoke en CI (lentos), suite completa manual pre-release.
+**E2E (frontend):** Playwright + tauri-driver (WebDriver) for flows: import→cut→export; undo/redo; vertical wizard. Only smoke in CI (slow), full suite manual pre-release.
 
 **CI (GitHub Actions):**
-- Matrix macOS/Windows/Ubuntu: `cargo clippy -D warnings`, `cargo test`, `pnpm typecheck && pnpm test`, build Tauri sin firmar.
-- Nightly: golden frames completos + bench criterion (regresiones > 15% fallan) + E2E smoke.
-- Release: builds firmados (sección 13) + subida a GitHub Releases + manifiesto del updater.
+- macOS/Windows/Ubuntu matrix: `cargo clippy -D warnings`, `cargo test`, `pnpm typecheck && pnpm test`, unsigned Tauri build.
+- Nightly: full golden frames + criterion bench (regressions > 15% fail) + E2E smoke.
+- Release: signed builds (section 13) + upload to GitHub Releases + updater manifest.
 
 ---
 
-## 13. Empaquetado, distribución y licencias
+## 13. Packaging, distribution and licenses
 
-**Sidecars FFmpeg:** builds estáticos por plataforma en `src-tauri/binaries/` con sufijo de target-triple (`ffmpeg-aarch64-apple-darwin`, etc.), declarados en `externalBin`. Script `scripts/fetch-ffmpeg.ts` los descarga y verifica (sha256) en dev y CI.
+**FFmpeg sidecars:** static per-platform builds in `src-tauri/binaries/` with a target-triple suffix (`ffmpeg-aarch64-apple-darwin`, etc.), declared in `externalBin`. A `scripts/fetch-ffmpeg.ts` script downloads and verifies them (sha256) in dev and CI.
 
-**Licencias (importante):**
-- FFmpeg con libx264/x265 → binario **GPL**: al distribuirlo como sidecar (proceso separado) cumplimos publicando la procedencia del build, su licencia y oferta de fuentes (página "Licencias de terceros" en la app). El código propio de UberEditor no se ve forzado a GPL por ejecutar un binario externo. Si algún día molesta: build LGPL sin x264 (usando openh264/hardware encoders) — decisión documentada como ADR.
-- whisper.cpp (MIT), wgpu (MIT/Apache), cosmic-text (MIT/Apache), RNNoise (BSD), gl-transitions (MIT), rmcp (MIT/Apache) — sin fricción. Fuentes incluidas: solo OFL.
-- Modelos whisper: se descargan del lado del usuario (no se redistribuyen en el instalador).
+**Licenses (important):**
+- FFmpeg with libx264/x265 → **GPL** binary: distributing it as a sidecar (separate process) means we comply by publishing the build's provenance, its license and an offer of sources ("Third-party licenses" page in the app). UberEditor's own code is not forced to GPL by running an external binary. If it ever becomes a problem: LGPL build without x264 (using openh264/hardware encoders) — decision documented as an ADR.
+- whisper.cpp (MIT), wgpu (MIT/Apache), cosmic-text (MIT/Apache), RNNoise (BSD), gl-transitions (MIT), rmcp (MIT/Apache) — no friction. Bundled fonts: OFL only.
+- Whisper models: downloaded on the user's side (not redistributed in the installer).
 
-**Instaladores:** macOS: `.dmg` universal (arm64+x64), firmado + **notarizado** (cuenta Apple Developer necesaria — trámite a iniciar temprano). Windows: NSIS `.exe` firmado (certificado OV o firma con Azure Trusted Signing). Linux: AppImage + `.deb`.
+**Installers:** macOS: universal `.dmg` (arm64+x64), signed + **notarized** (Apple Developer account needed — a process to start early). Windows: signed NSIS `.exe` (OV certificate or signing with Azure Trusted Signing). Linux: AppImage + `.deb`.
 
-**Updater:** tauri-plugin-updater con manifiesto en GitHub Releases y firma de update propia.
+**Updater:** tauri-plugin-updater with a manifest in GitHub Releases and a custom update signature.
 
-**Telemetría:** ninguna en v1 (decisión explícita). Crash reports opt-in vía sentry-rust en backlog.
-
----
-
-## 14. Roadmap por fases
-
-> Estimaciones para **1 desarrollador senior a tiempo completo** ayudado por agentes de IA. Los rangos asumen aprendizaje de wgpu/Tauri incluido. Cada fase termina con sus CA verificados y una tag git.
-
-### Fase 0 — Fundaciones (1–2 semanas)
-Scaffolding Tauri 2 + React + workspace de crates (3.3, 10); sidecars ffmpeg funcionando con rutas con espacios; CI matrix verde; `ue-core` con modelo de datos (4), acciones básicas, historial y proptest; ADRs iniciales.
-**Hito:** `cargo test` verde en 3 OS; crear/guardar/abrir un `.uep` vacío desde la UI.
-
-### Fase 1 — MVP editable (6–8 semanas)
-Import + probe + jobs de caché (proxy, conformado, peaks, thumbs) (6.3); Media Pool; timeline canvas con drag&drop, split/trim/ripple (6.1, 6.2); DecodePool + RenderGraph mínimo (YUV→RGB, transform básico, composición) (5.1–5.3); AudioMixer + reloj maestro (5.4); preview por Channel (5.5); export H.264/AAC con 2 presets (5.6); save/undo/redo completos (6.10).
-**Hito (demo):** importar 3 clips, cortarlos, reordenarlos, oír el audio en sync y exportar un mp4 correcto.
-
-### Fase 2 — Editor completo (5–7 semanas)
-Sistema de packs de efectos + hot-reload (6.5.1–6.5.2); catálogo core incluyendo **chroma key** (6.5.4); transiciones (6.5.3); corrección de color + Transform2D con gizmo (6.8); texto y títulos con plantillas (6.6); keyframes + lanes + editor de curvas (6.11); audio completo (fades, keyframes, medidores, RNNoise) (6.7); diálogo de export completo con cola y R128 (6.9).
-**Hito:** un video "real" editado de punta a punta solo con UberEditor, con chroma key de pantalla verde incluido.
-
-### Fase 3 — IA de texto y silencios (4–6 semanas)
-whisper-rs + gestión de modelos + job de transcripción con caché (7.B.1); panel de transcripción, borrar/tachar palabras, búsqueda de muletillas (7.B.2); `cut_ranges` robusto; detector de silencios + diálogo con preview + 3 acciones (7.C); subtítulos automáticos (payload, modos phrase/word/karaoke, export SRT/VTT) (7.E.2).
-**Hito:** flujo "importar → transcribir → borrar muletillas por texto → eliminar silencios → subtítulos karaoke".
-
-### Fase 4 — MCP (1.5–2.5 semanas)
-`ue-mcp` con rmcp: tools de lectura, resources, token, niveles off/ro/rw (7.A); tools de escritura mapeadas al ActionRegistry; docs + snippet de conexión; indicador de actividad MCP en UI.
-**Hito (demo estrella):** Claude Code conectado responde "¿qué hay en mi proyecto?" y ejecuta "elimina los silencios y expórtame un preview".
-
-### Fase 5 — Creador: vertical + avatar (4–6 semanas)
-Wizard vertical con plantillas de layout, integración silencios+subtítulos+títulos (7.D); payload Avatar: editor de avatares, importador de config del toolkit, análisis (emociones LLM + fallback offline + volumen), render en vivo con shake determinista y chroma (7.E.1); tools MCP `generate_vertical` / `generate_avatar_track`.
-**Hito:** paridad funcional con las recetas del toolkit (`separate_video`, `generate_short_base`, `generate_avatar`, `subtitle_video`) — validación lado a lado con los mismos archivos de entrada.
-
-### Fase 6 — Pulido y release (3–4 semanas)
-Rendimiento contra los presupuestos de la sección 11 (perf pass); firmas/notarización + updater (13); onboarding (proyecto demo incluido), atajos configurables, i18n es/en; docs de usuario (efectos custom, MCP, avatares); bug bash + suite E2E completa; v1.0.
-**Hito:** instaladores firmados en las 3 plataformas, descargables.
-
-**Total estimado: ~6–7.5 meses** a tiempo completo. Camino crítico: Fase 1 (motor). Las fases 3–5 son paralelizables entre sí si se suma gente (dependen de F1–F2, no entre ellas — salvo que 7.D y 7.E.2 usan 7.B/7.C).
+**Telemetry:** none in v1 (explicit decision). Opt-in crash reports via sentry-rust in the backlog.
 
 ---
 
-## 15. Riesgos y mitigaciones
+## 14. Phased roadmap
 
-| # | Riesgo | Prob. | Impacto | Mitigación |
+> Estimates for **1 senior developer full-time** assisted by AI agents. The ranges assume learning wgpu/Tauri is included. Each phase ends with its AC verified and a git tag.
+
+### Phase 0 — Foundations (1–2 weeks)
+Tauri 2 + React scaffolding + crate workspace (3.3, 10); ffmpeg sidecars working with paths with spaces; green CI matrix; `ue-core` with the data model (4), basic actions, history and proptest; initial ADRs.
+**Milestone:** green `cargo test` on 3 OSes; create/save/open an empty `.uep` from the UI.
+
+### Phase 1 — Editable MVP (6–8 weeks)
+Import + probe + cache jobs (proxy, conforming, peaks, thumbs) (6.3); Media Pool; timeline canvas with drag&drop, split/trim/ripple (6.1, 6.2); DecodePool + minimal RenderGraph (YUV→RGB, basic transform, compositing) (5.1–5.3); AudioMixer + master clock (5.4); preview over Channel (5.5); H.264/AAC export with 2 presets (5.6); full save/undo/redo (6.10).
+**Milestone (demo):** import 3 clips, cut them, reorder them, hear the audio in sync and export a correct mp4.
+
+### Phase 2 — Complete editor (5–7 weeks)
+Effect pack system + hot-reload (6.5.1–6.5.2); core catalog including **chroma key** (6.5.4); transitions (6.5.3); color correction + Transform2D with gizmo (6.8); text and titles with templates (6.6); keyframes + lanes + curve editor (6.11); full audio (fades, keyframes, meters, RNNoise) (6.7); complete export dialog with queue and R128 (6.9).
+**Milestone:** a "real" video edited end to end only with UberEditor, green-screen chroma key included.
+
+### Phase 3 — Text and silence AI (4–6 weeks)
+whisper-rs + model management + transcription job with cache (7.B.1); transcript panel, delete/strike words, filler-word search (7.B.2); robust `cut_ranges`; silence detector + dialog with preview + 3 actions (7.C); automatic subtitles (payload, phrase/word/karaoke modes, SRT/VTT export) (7.E.2).
+**Milestone:** the flow "import → transcribe → delete filler words by text → remove silences → karaoke subtitles".
+
+### Phase 4 — MCP (1.5–2.5 weeks)
+`ue-mcp` with rmcp: read tools, resources, token, off/ro/rw levels (7.A); write tools mapped to the ActionRegistry; docs + connection snippet; MCP activity indicator in the UI.
+**Milestone (star demo):** connected Claude Code answers "what's in my project?" and runs "remove the silences and export me a preview".
+
+### Phase 5 — Creator: vertical + avatar (4–6 weeks)
+Vertical wizard with layout templates, silences+subtitles+titles integration (7.D); Avatar payload: avatar editor, toolkit config importer, analysis (LLM emotions + offline fallback + volume), live render with deterministic shake and chroma (7.E.1); `generate_vertical` / `generate_avatar_track` MCP tools.
+**Milestone:** functional parity with the toolkit's recipes (`separate_video`, `generate_short_base`, `generate_avatar`, `subtitle_video`) — side-by-side validation with the same input files.
+
+### Phase 6 — Polish and release (3–4 weeks)
+Performance against the budgets of section 11 (perf pass); signing/notarization + updater (13); onboarding (included demo project), configurable shortcuts, es/en i18n; user docs (custom effects, MCP, avatars); bug bash + full E2E suite; v1.0.
+**Milestone:** signed installers on all 3 platforms, downloadable.
+
+**Estimated total: ~6–7.5 months** full-time. Critical path: Phase 1 (the engine). Phases 3–5 are parallelizable among themselves if people are added (they depend on P1–P2, not on each other — except that 7.D and 7.E.2 use 7.B/7.C).
+
+---
+
+## 15. Risks and mitigations
+
+| # | Risk | Prob. | Impact | Mitigation |
 |---|---|---|---|---|
-| 1 | El preview por IPC no sostiene 30 fps en alguna plataforma (5.5) | Media | Alto | Fallback JPEG automático; plan Fase-2 de superficie nativa diseñado desde el día 1 (el RenderGraph no sabe cómo se presenta); bajar resolución Auto. |
-| 2 | Seeks lentos / VFR rompen precisión de frame | Media | Alto | Proxies CFR GOP-corto SIEMPRE para preview; detección de VFR al importar; `ffmpeg-next` como upgrade path. |
-| 3 | Word-timestamps de whisper.cpp menos precisos que faster-whisper | Media | Medio | Plan B `toolkit-bridge` (8.3) con contrato idéntico; padding configurable en cortes por texto amortigua ±50 ms. |
-| 4 | wgpu en GPUs viejas/drivers Linux rotos | Baja-media | Medio | Fallback GL de wgpu; render por software (llvmpipe) como último recurso con aviso; matriz de GPUs mínimas documentada. |
-| 5 | Complejidad del motor supera el estimado (es lo normal) | Alta | Alto | Fase 1 es SOLO lo mínimo; recortes pre-acordados: reverse playback, slide tool, editor de curvas (pueden caer a Fase 6/backlog sin tocar requisitos). |
-| 6 | Licencia GPL de ffmpeg incomoda a futuro | Baja | Medio | Sidecar aislado + ADR con plan LGPL (13). |
-| 7 | Clasificación de emociones cara/lenta con API de pago | Media | Bajo | Cache agresivo por hash; soporte Ollama local; heurística offline; batch de segmentos por request. |
-| 8 | Scope creep (¡es un editor de video!) | Alta | Alto | Este documento es el contrato: lo que no está en secciones 6–7 va a la 16 y espera a v1.1. |
-| 9 | Notarización/firma bloquea el release | Media | Bajo | Iniciar trámites (Apple Developer, cert Windows) en Fase 0–1, no al final. |
-| 10 | Cambios de API en Tauri 2 / rmcp (ecosistemas jóvenes) | Media | Bajo | Versiones pineadas; wrappers propios finos alrededor de ambos. |
+| 1 | The IPC preview doesn't sustain 30 fps on some platform (5.5) | Medium | High | Automatic JPEG fallback; Phase-2 native-surface plan designed from day 1 (the RenderGraph doesn't know how it's presented); lower Auto resolution. |
+| 2 | Slow seeks / VFR break frame precision | Medium | High | ALWAYS short-GOP CFR proxies for preview; VFR detection on import; `ffmpeg-next` as an upgrade path. |
+| 3 | whisper.cpp word-timestamps less precise than faster-whisper | Medium | Medium | Plan B `toolkit-bridge` (8.3) with an identical contract; configurable padding in text cuts cushions ±50 ms. |
+| 4 | wgpu on old GPUs / broken Linux drivers | Low-medium | Medium | wgpu GL fallback; software render (llvmpipe) as a last resort with a warning; minimum GPU matrix documented. |
+| 5 | Engine complexity exceeds the estimate (which is normal) | High | High | Phase 1 is ONLY the minimum; pre-agreed cuts: reverse playback, slide tool, curve editor (can drop to Phase 6/backlog without touching requirements). |
+| 6 | ffmpeg's GPL license becomes uncomfortable in the future | Low | Medium | Isolated sidecar + ADR with an LGPL plan (13). |
+| 7 | Emotion classification expensive/slow with a paid API | Medium | Low | Aggressive cache by hash; local Ollama support; offline heuristic; batch of segments per request. |
+| 8 | Scope creep (it's a video editor!) | High | High | This document is the contract: whatever is not in sections 6–7 goes to 16 and waits for v1.1. |
+| 9 | Notarization/signing blocks the release | Medium | Low | Start the paperwork (Apple Developer, Windows cert) in Phase 0–1, not at the end. |
+| 10 | API changes in Tauri 2 / rmcp (young ecosystems) | Medium | Low | Pinned versions; thin custom wrappers around both. |
 
 ---
 
-## 16. Backlog futuro (post-v1)
+## 16. Future backlog (post-v1)
 
-Ordenado por valor estimado para el flujo del usuario:
+Ordered by estimated value for the user's workflow:
 
-1. **Auto-reframe con detección de caras** para el modo vertical (ONNX yolov8-face/mediapipe + suavizado EMA → keyframes de crop automáticos).
-2. **Doblaje automático** (port de `translation.py` + Kokoro TTS del toolkit: transcribir → traducir → TTS → remontar con ajuste de velocidad).
-3. **Recetas MCP de ideación** (documentar prompts para que Claude genere títulos/ideas desde `transcript://` — sustituye a `agents/` del toolkit).
-4. Reverse playback fluido, slide tool, compound clips / timelines anidados.
-5. Detección y eliminación de **muletillas por lista** con 1 clic (sobre 7.B: buscar "eee", "o sea", "¿vale?" → tachar todo).
-6. Grabación directa (cámara/micro/pantalla) dentro de la app.
-7. Denoise DNS64 vía sidecar (calidad máxima), de-esser, compresor de voz.
-8. Export en paralelo, render distribuido de la cola.
-9. HDR / espacio de color lineal 16F; LUTs .cube.
-10. Marketplace/carpeta compartida de packs de efectos y plantillas.
-11. Crash reporting opt-in; métricas de rendimiento locales.
-12. CLI headless (`ubereditor render proyecto.uep --preset youtube`) — el engine ya lo permite (12).
+1. **Auto-reframe with face detection** for vertical mode (ONNX yolov8-face/mediapipe + EMA smoothing → automatic crop keyframes).
+2. **Automatic dubbing** (port of the toolkit's `translation.py` + Kokoro TTS: transcribe → translate → TTS → reassemble with speed adjustment).
+3. **MCP ideation recipes** (document prompts so Claude generates titles/ideas from `transcript://` — replaces the toolkit's `agents/`).
+4. Smooth reverse playback, slide tool, compound clips / nested timelines.
+5. Detection and removal of **filler words by list** with 1 click (over 7.B: search "um", "you know", "like" → strike all).
+6. Direct recording (camera/mic/screen) inside the app.
+7. DNS64 denoise via sidecar (maximum quality), de-esser, voice compressor.
+8. Parallel export, distributed rendering of the queue.
+9. HDR / linear 16F color space; .cube LUTs.
+10. Marketplace/shared folder of effect packs and templates.
+11. Opt-in crash reporting; local performance metrics.
+12. Headless CLI (`ubereditor render project.uep --preset youtube`) — the engine already allows it (12).
 
 ---
 
-## Apéndice A. Ejemplo completo de archivo de proyecto
+## Appendix A. Complete project file example
 
 ```jsonc
 {
@@ -1174,7 +1174,7 @@ Ordenado por valor estimado para el flujo del usuario:
   "settings": { "whisper_language": "es", "autosave_secs": 60 },
   "assets": [
     {
-      "id": "01JZK3MA...A1", "kind": "video", "path": "media/toma1.mp4",
+      "id": "01JZK3MA...A1", "kind": "video", "path": "media/take1.mp4",
       "content_hash": "xxh3:9f2c…", 
       "probe": { "duration_us": 754000000, "fps": [30000, 1001], "width": 1920,
                  "height": 1080, "rotation": 0, "vcodec": "h264", "acodec": "aac",
@@ -1182,18 +1182,18 @@ Ordenado por valor estimado para el flujo del usuario:
       "proxy": null, "audio_conform": null, "peaks": null, "thumbnails": null,
       "transcript": "01JZK3TR...T1"
     },
-    { "id": "01JZK3MA...A2", "kind": "audio", "path": "media/musica.mp3", "…": "…" },
+    { "id": "01JZK3MA...A2", "kind": "audio", "path": "media/music.mp3", "…": "…" },
     { "id": "01JZK3MA...A3", "kind": "image", "path": "media/logo.png", "…": "…" }
   ],
-  "transcripts": [ { "id": "01JZK3TR...T1", "asset_id": "01JZK3MA...A1", "…": "ver Apéndice D" } ],
+  "transcripts": [ { "id": "01JZK3TR...T1", "asset_id": "01JZK3MA...A1", "…": "see Appendix D" } ],
   "sequences": [
     {
-      "id": "01JZK3SQ...S1", "name": "Principal",
+      "id": "01JZK3SQ...S1", "name": "Main",
       "resolution": [1920, 1080], "fps": [30000, 1001], "sample_rate": 48000,
-      "markers": [ { "t": 12000000, "name": "Intro fin", "color": "#e5484d" } ],
+      "markers": [ { "t": 12000000, "name": "Intro end", "color": "#e5484d" } ],
       "tracks": [
         {
-          "id": "01JZ...TA1", "kind": "audio", "name": "Música",
+          "id": "01JZ...TA1", "kind": "audio", "name": "Music",
           "muted": false, "solo": false, "locked": false, "volume_db": -12.0,
           "clips": [
             {
@@ -1258,7 +1258,7 @@ Ordenado por valor estimado para el flujo del usuario:
 }
 ```
 
-## Apéndice B. Ejemplo de efecto modular
+## Appendix B. Modular effect example
 
 `effects/user/vhs_retro/manifest.json`:
 
@@ -1281,12 +1281,12 @@ Ordenado por valor estimado para el flujo del usuario:
 }
 ```
 
-`effects/user/vhs_retro/shader.wgsl` (contrato: el runtime provee `tex`, `samp`, uniforms del manifest en `params`, y globals `time_s`, `seed`, `resolution`):
+`effects/user/vhs_retro/shader.wgsl` (contract: the runtime provides `tex`, `samp`, the manifest's uniforms in `params`, and globals `time_s`, `seed`, `resolution`):
 
 ```wgsl
 @fragment
 fn effect(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
-    // aberración cromática horizontal
+    // horizontal chromatic aberration
     let off = params.color_bleed * 0.004;
     let r = textureSample(tex, samp, uv + vec2(off, 0.0)).r;
     let g = textureSample(tex, samp, uv).g;
@@ -1295,68 +1295,68 @@ fn effect(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
     // scanlines
     let scan = 0.5 + 0.5 * sin(uv.y * params.line_count * 3.14159);
     col *= mix(1.0, scan, params.intensity * 0.35);
-    // ruido determinista (hash por pixel+frame, reproducible en export)
+    // deterministic noise (hash per pixel+frame, reproducible in export)
     let n = hash13(vec3(uv * resolution, f32(seed)));
     col += (n - 0.5) * params.intensity * 0.08;
     return vec4(col, textureSample(tex, samp, uv).a);
 }
 ```
 
-Al guardar estos dos archivos con la app abierta, el efecto aparece en el Inspector con sus 4 controles, todos keyframables. **Cero cambios en el núcleo.**
+Saving these two files with the app open makes the effect appear in the Inspector with its 4 controls, all keyframable. **Zero changes to the core.**
 
-## Apéndice C. Comandos FFmpeg de referencia
+## Appendix C. Reference FFmpeg commands
 
 ```bash
 # Probe (import)
 ffprobe -v quiet -print_format json -show_format -show_streams INPUT
 
-# Proxy 720p GOP-corto (seeks rápidos); CFR si el origen es VFR
+# Short-GOP 720p proxy (fast seeks); CFR if the source is VFR
 ffmpeg -y -i INPUT -vf "scale=-2:720" -c:v libx264 -preset veryfast -crf 20 \
        -g 15 -pix_fmt yuv420p -vsync cfr -r FPS -an CACHE/proxy.mp4
 
-# Conformado de audio (mixer y whisper parten de aquí)
+# Audio conforming (mixer and whisper start from here)
 ffmpeg -y -i INPUT -vn -ac 2 -ar 48000 -c:a pcm_s16le CACHE/audio.wav
-ffmpeg -y -i CACHE/audio.wav -ac 1 -ar 16000 CACHE/audio16k.wav   # para whisper
+ffmpeg -y -i CACHE/audio.wav -ac 1 -ar 16000 CACHE/audio16k.wav   # for whisper
 
-# Thumbnails (sprite: 1 frame cada 2 s, 160px de alto)
+# Thumbnails (sprite: 1 frame every 2 s, 160px tall)
 ffmpeg -y -i INPUT -vf "fps=1/2,scale=-2:90,tile=100x1" -frames:v 1 CACHE/thumbs.jpg
 
-# Sesión de decode del preview (stdout de frames crudos)
+# Preview decode session (raw frames on stdout)
 ffmpeg -v error -ss SEEK -i PROXY -f rawvideo -pix_fmt yuv420p pipe:1
 
-# Export (frames por stdin + mixdown)
+# Export (frames on stdin + mixdown)
 ffmpeg -y -f rawvideo -pix_fmt rgba -s 1920x1080 -r 30000/1001 -i pipe:0 \
        -i mixdown.wav -map 0:v -map 1:a \
        -c:v libx264 -preset slow -crf 18 -pix_fmt yuv420p \
        -c:a aac -b:a 320k -movflags +faststart OUT.mp4
 
-# Loudness R128 (2 pasadas: análisis → aplicar con measured_*)
+# R128 loudness (2 passes: analysis → apply with measured_*)
 ffmpeg -i mixdown.wav -af loudnorm=I=-14:TP=-1.5:LRA=11:print_format=json -f null -
 
-# GIF (paleta en 2 pasadas)
+# GIF (palette in 2 passes)
 ffmpeg -y -i pipe:0 -vf "fps=15,scale=720:-1:flags=lanczos,palettegen" palette.png
 ffmpeg -y -i pipe:0 -i palette.png -lavfi "fps=15,scale=720:-1 [x]; [x][1:v] paletteuse" OUT.gif
 ```
 
-## Apéndice D. Formato de transcripción word-level
+## Appendix D. Word-level transcript format
 
-`CACHE/<content_hash>/transcript.json` — contrato compartido por whisper-rs nativo y el sidecar `toolkit-bridge`:
+`CACHE/<content_hash>/transcript.json` — contract shared by native whisper-rs and the `toolkit-bridge` sidecar:
 
 ```json
 {
   "version": 1,
   "asset_hash": "xxh3:9f2c…",
-  "language": "es",
+  "language": "en",
   "model": "large-v3-turbo",
   "generated_at": "2026-07-09T10:12:00Z",
   "words": [
-    { "i": 0, "text": "Hola", "start_us": 480000, "end_us": 820000,
+    { "i": 0, "text": "Hello",    "start_us": 480000, "end_us": 820000,
       "confidence": 0.97, "rejected": false },
-    { "i": 1, "text": "a",    "start_us": 860000, "end_us": 920000,
+    { "i": 1, "text": "everyone", "start_us": 860000, "end_us": 920000,
       "confidence": 0.91, "rejected": false }
   ],
   "segments": [
-    { "i": 0, "text": "Hola a todos, bienvenidos.", "start_us": 480000,
+    { "i": 0, "text": "Hello everyone, welcome.", "start_us": 480000,
       "end_us": 2600000, "word_range": [0, 4],
       "emotion": "calm", "volume_rms": 812.4 }
   ],
@@ -1364,48 +1364,48 @@ ffmpeg -y -i pipe:0 -i palette.png -lavfi "fps=15,scale=720:-1 [x]; [x][1:v] pal
 }
 ```
 
-- `segments[].emotion` y `volume_rms` los rellena el análisis de avatar (7.E.1) — mismo rol que el `<audio>_segments.json` del toolkit, del que existe un importador.
-- `rejected` implementa el modo tachado (7.B.2).
-- Export SRT/VTT se deriva de aquí (por words o por segments según el modo).
+- `segments[].emotion` and `volume_rms` are filled in by the avatar analysis (7.E.1) — same role as the toolkit's `<audio>_segments.json`, for which an importer exists.
+- `rejected` implements the strikethrough mode (7.B.2).
+- SRT/VTT export is derived from here (by words or by segments depending on the mode).
 
-## Apéndice E. Catálogo inicial de herramientas MCP
+## Appendix E. Initial catalog of MCP tools
 
-**Lectura (nivel `read-only`):**
+**Reads (`read-only` level):**
 
-| Tool | Args | Devuelve |
+| Tool | Args | Returns |
 |---|---|---|
-| `get_project_summary` | — | nombre, duración, nº assets/secuencias/clips, jobs activos, dirty |
-| `get_media_pool` | — | lista de assets con probe, estado de cachés y transcript |
-| `get_timeline` | `sequence_id?`, `include_params?` | pistas y clips (payloads, tiempos, efectos) |
-| `get_clip` | `clip_id` | detalle completo: params, keyframes, transiciones |
-| `get_transcript` | `asset_id`, `format: json\|srt\|text` | transcript word-level / SRT / texto plano |
-| `search_transcript` | `query`, `scope` | palabras coincidentes con ids y tiempos |
-| `get_selection_and_playhead` | — | qué mira/tiene seleccionado el usuario ahora |
-| `get_jobs` | — | jobs con progreso |
-| `get_effects_catalog` | — | manifests disponibles (para que el agente sepa qué puede aplicar) |
-| `get_history` | `limit?` | últimas entradas de undo (auditoría) |
+| `get_project_summary` | — | name, duration, number of assets/sequences/clips, active jobs, dirty |
+| `get_media_pool` | — | list of assets with probe, cache status and transcript |
+| `get_timeline` | `sequence_id?`, `include_params?` | tracks and clips (payloads, times, effects) |
+| `get_clip` | `clip_id` | full detail: params, keyframes, transitions |
+| `get_transcript` | `asset_id`, `format: json\|srt\|text` | word-level transcript / SRT / plain text |
+| `search_transcript` | `query`, `scope` | matching words with ids and times |
+| `get_selection_and_playhead` | — | what the user is looking at/has selected now |
+| `get_jobs` | — | jobs with progress |
+| `get_effects_catalog` | — | available manifests (so the agent knows what it can apply) |
+| `get_history` | `limit?` | latest undo entries (audit) |
 
-**Escritura (nivel `read-write`; toda tool = transacción con label `[MCP] …`):**
+**Writes (`read-write` level; every tool = a transaction with label `[MCP] …`):**
 
-| Tool | Args (resumen) |
+| Tool | Args (summary) |
 |---|---|
 | `split_clip` | `clip_id`, `t_us` |
 | `cut_ranges` | `sequence_id`, `ranges[]`, `ripple` |
-| `move_clip` / `trim_clip` / `delete_clips` | ids + tiempos |
-| `set_clip_property` | `clip_id`, `path` (p.ej. `transform.scale`), `value` o `curve` |
+| `move_clip` / `trim_clip` / `delete_clips` | ids + times |
+| `set_clip_property` | `clip_id`, `path` (e.g. `transform.scale`), `value` or `curve` |
 | `apply_effect` / `remove_effect` | `clip_id`, `effect_id`, `params?` |
 | `add_text_clip` | `sequence_id`, `track_id`, `t`, `content`, `style?/template?` |
 | `add_marker` | `t`, `name`, `color?` |
-| `delete_words` / `reject_words` | `word_ids[]` u `objeto {asset_id, indices}` + `padding_ms?` |
-| `remove_silences` | `scope`, `params?` (defaults de 7.C), `action: delete\|speedup\|mark` |
-| `generate_vertical` | opciones del wizard 7.D |
+| `delete_words` / `reject_words` | `word_ids[]` or `object {asset_id, indices}` + `padding_ms?` |
+| `remove_silences` | `scope`, `params?` (defaults from 7.C), `action: delete\|speedup\|mark` |
+| `generate_vertical` | wizard options from 7.D |
 | `generate_avatar_track` | `sequence_id`, `avatar_name`, `driver_asset` |
 | `transcribe_asset` | `asset_id`, `model?`, `language?` |
 | `start_export` | `preset`, `overrides?` → `job_id` |
-| `undo` / `redo` | — (el agente puede deshacerse a sí mismo) |
+| `undo` / `redo` | — (the agent can undo itself) |
 
-**Resources:** `project://current` (JSON completo, se actualiza con notificaciones), `transcript://{asset_id}` (JSON), `transcript://{asset_id}.srt`.
+**Resources:** `project://current` (full JSON, updated with notifications), `transcript://{asset_id}` (JSON), `transcript://{asset_id}.srt`.
 
 ---
 
-*Fin del plan. Documento vivo: las desviaciones durante la implementación se registran como ADRs en `docs/` y se reflejan aquí.*
+*End of the plan. Living document: deviations during implementation are recorded as ADRs in `docs/` and reflected here.*

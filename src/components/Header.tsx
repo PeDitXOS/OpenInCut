@@ -32,7 +32,7 @@ export function Header() {
 
       <div className="flex items-center gap-2 text-ink-dim">
         <span className="max-w-[360px] truncate text-[13px] text-ink">{project.name}</span>
-        {dirty && <span className="h-1.5 w-1.5 rounded-full bg-accent" title="Cambios sin guardar" />}
+        {dirty && <span className="h-1.5 w-1.5 rounded-full bg-accent" title="Unsaved changes" />}
       </div>
 
       <div className="flex-1" />
@@ -40,23 +40,23 @@ export function Header() {
       <button
         className="focus-ring rounded-md px-2.5 py-1.5 text-[12px] text-ink-dim hover:bg-bg3 hover:text-ink"
         onClick={() => void newProject()}
-        title="Proyecto nuevo (descarta el actual si no está guardado)"
+        title="New project (discards the current one if unsaved)"
       >
-        Nuevo
+        New
       </button>
       <button
         className="focus-ring rounded-md px-2.5 py-1.5 text-[12px] text-ink-dim hover:bg-bg3 hover:text-ink"
         onClick={() => void openProject()}
-        title="Abrir proyecto (⌘O)"
+        title="Open project (⌘O)"
       >
-        Abrir…
+        Open…
       </button>
       <button
         className="focus-ring rounded-md px-2.5 py-1.5 text-[12px] text-ink-dim hover:bg-bg3 hover:text-ink"
         onClick={() => void saveProject()}
-        title="Guardar proyecto (⌘S)"
+        title="Save project (⌘S)"
       >
-        Guardar
+        Save
       </button>
 
       <div className="mx-1 h-5 w-px bg-line" />
@@ -65,17 +65,17 @@ export function Header() {
         className="focus-ring rounded-md px-2.5 py-1.5 text-[12px] text-ink-dim enabled:hover:bg-bg3 enabled:hover:text-ink disabled:opacity-40"
         onClick={() => void undo()}
         disabled={!canUndo}
-        title="Deshacer (⌘Z)"
+        title="Undo (⌘Z)"
       >
-        ↶ Deshacer
+        ↶ Undo
       </button>
       <button
         className="focus-ring rounded-md px-2.5 py-1.5 text-[12px] text-ink-dim enabled:hover:bg-bg3 enabled:hover:text-ink disabled:opacity-40"
         onClick={() => void redo()}
         disabled={!canRedo}
-        title="Rehacer (⇧⌘Z)"
+        title="Redo (⇧⌘Z)"
       >
-        ↷ Rehacer
+        ↷ Redo
       </button>
 
       <div className="mx-1 h-5 w-px bg-line" />
@@ -86,30 +86,30 @@ export function Header() {
         }`}
         title={
           mcpPort
-            ? `Servidor MCP activo:\nclaude mcp add --transport http ubereditor http://127.0.0.1:${mcpPort}/mcp --header "Authorization: Bearer ${mcpToken ?? ""}"`
-            : "El servidor MCP corre en la app de escritorio"
+            ? `MCP server active:\nclaude mcp add --transport http ubereditor http://127.0.0.1:${mcpPort}/mcp --header "Authorization: Bearer ${mcpToken ?? ""}"`
+            : "The MCP server runs in the desktop app"
         }
       >
         <span
           className={`h-1.5 w-1.5 rounded-full ${mcpPort ? "bg-clip-audio-hi" : "bg-ink-faint"}`}
         />
-        {mcpPort ? `MCP :${mcpPort}` : "MCP inactivo"}
+        {mcpPort ? `MCP :${mcpPort}` : "MCP inactive"}
       </span>
 
       {exporting && (
         <button
           className="focus-ring rounded-md border border-line px-2 py-1.5 text-[12px] text-ink-dim hover:text-danger"
           onClick={() => void cancelExport()}
-          title="Cancelar la exportación"
+          title="Cancel the export"
         >
-          Cancelar
+          Cancel
         </button>
       )}
       <button
         className="focus-ring relative overflow-hidden rounded-md bg-accent px-3.5 py-1.5 text-[12px] font-semibold text-bg0 enabled:hover:bg-accent-deep disabled:opacity-80"
         onClick={() => setShowExportDialog(true)}
         disabled={exporting}
-        title="Exportar la secuencia a MP4"
+        title="Export the sequence to MP4"
       >
         {exporting && (
           <span
@@ -118,7 +118,7 @@ export function Header() {
           />
         )}
         <span className="relative">
-          {exporting ? `Exportando ${Math.round((exportProgress ?? 0) * 100)}%` : "Exportar…"}
+          {exporting ? `Exporting ${Math.round((exportProgress ?? 0) * 100)}%` : "Export…"}
         </span>
       </button>
     </header>

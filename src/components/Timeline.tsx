@@ -39,11 +39,11 @@ interface DragGhost {
   clipId: string;
   mode: DragMode;
   startUs: number;
-  /** para trim: posición actual del borde arrastrado (µs) */
+  /** for trim: current position of the dragged edge (µs) */
   edgeUs: number;
-  trackIdx: number; // índice en displayTracks
+  trackIdx: number; // index into displayTracks
   moved: boolean;
-  /** µs del objetivo al que se imantó el arrastre (guía visual), o null */
+  /** µs of the target the drag snapped to (visual guide), or null */
   snapUs: number | null;
 }
 
@@ -55,7 +55,7 @@ interface Marquee {
   additive: boolean;
 }
 
-/** Objetivos de imán: 0, playhead, rango I-O, bordes de otros clips, marcadores. */
+/** Snap targets: 0, playhead, I-O range, edges of other clips, markers. */
 function snapTargets(
   project: Project,
   playheadUs: number,
@@ -76,7 +76,7 @@ function snapTargets(
   return targets;
 }
 
-/** Objetivo más cercano dentro de ~8 px, o null. */
+/** Nearest target within ~8 px, or null. */
 function nearestSnap(us: number, targets: number[], pxPerSec: number): number | null {
   let best: number | null = null;
   let bestDist = (8 / pxPerSec) * 1e6;
@@ -105,7 +105,7 @@ function trackTops(tracks: Track[]): number[] {
 }
 
 // ---------------------------------------------------------------------------
-// Dibujo
+// Drawing
 // ---------------------------------------------------------------------------
 
 function pickTickStep(pxPerSec: number): number {
@@ -151,7 +151,7 @@ function drawRuler(
     }
   }
 
-  // banda del rango de trabajo I-O
+  // working range band I-O
   const [rin, rout] = range;
   if (rin != null || rout != null) {
     const a = usToX(rin ?? view.viewStartUs);
@@ -163,7 +163,7 @@ function drawRuler(
     if (rout != null) ctx.fillRect(b - 2, 0, 2, RULER_H - 1);
   }
 
-  // marcadores de secuencia
+  // sequence markers
   for (const m of activeSequence(project).markers) {
     const x = usToX(m.t);
     if (x < -10 || x > w + 10) continue;
@@ -231,7 +231,7 @@ function drawClip(
   if (!isAudio && !isText) {
     const thumbH = h - 14;
     if (visuals?.strip && visuals.stripMeta && media) {
-      // miniaturas reales: cada celda muestra el frame de su tiempo de fuente
+      // real thumbnails: each cell shows the frame at its source time
       const m = visuals.stripMeta;
       const cellW = Math.max(24, thumbH * (m.tile_w / m.tile_h));
       for (let cx = 0; cx < w; cx += cellW) {
@@ -253,7 +253,7 @@ function drawClip(
       ctx.fillStyle = "rgba(0,0,0,0.1)";
       ctx.fillRect(x, y, w, thumbH);
     } else {
-      // filmstrip determinista (demo navegador / miniaturas aún generándose)
+      // deterministic filmstrip (browser demo / thumbnails still generating)
       const rng = mulberry32(seed);
       const cell = 22;
       for (let cx = 0; cx < w; cx += cell) {
@@ -269,7 +269,7 @@ function drawClip(
     const maxAmp = (h - 18) / 2;
     ctx.fillStyle = hi + "66";
     if (visuals?.peaks && media) {
-      // waveform real: columna → tiempo de fuente → bin de picos
+      // real waveform: column → source time → peaks bin
       const peaks = visuals.peaks;
       for (let cx = 1.5; cx < w - 1.5; cx += 2.5) {
         const tlUs = (cx / w) * clip.duration;
@@ -279,7 +279,7 @@ function drawClip(
         ctx.fillRect(x + cx, mid - amp, 1.6, amp * 2);
       }
     } else {
-      // waveform determinista (demo navegador / picos aún calculándose)
+      // deterministic waveform (browser demo / peaks still computing)
       const rng = mulberry32(seed);
       let prev = 0.4;
       for (let cx = 1.5; cx < w - 1.5; cx += 2.5) {
@@ -289,7 +289,7 @@ function drawClip(
         ctx.fillRect(x + cx, mid - amp, 1.6, amp * 2);
       }
     }
-    // fades como rampas oscuras
+    // fades as dark ramps
     const fadeW = (us: number) => (us / 1e6) * ((w / clip.duration) * 1e6);
     if (clip.audio.fade_in_us > 0) {
       const fw = fadeW(clip.audio.fade_in_us);
@@ -312,7 +312,7 @@ function drawClip(
       ctx.fill();
     }
   } else if (genColor) {
-    // clip generador: franja con su color real
+    // generator clip: stripe with its real color
     ctx.fillStyle = genColor + "55";
     ctx.fillRect(x, y, w, h - 14);
     ctx.fillStyle = genColor;
@@ -326,15 +326,15 @@ function drawClip(
     if (w > 50) {
       ctx.fillText(
         clip.payload.type === "generator" && clip.payload.generator_id === "core.gradient"
-          ? "▦ Degradado"
-          : "▦ Forma",
+          ? "▦ Gradient"
+          : "▦ Shape",
         x + 6,
         y + (h - 14) / 2 + 1,
         w - 12,
       );
     }
   } else {
-    // clip de texto
+    // text clip
     ctx.fillStyle = "rgba(0,0,0,0.25)";
     ctx.fillRect(x, y + h - 14, w, 14);
     ctx.fillStyle = hi;
@@ -345,7 +345,7 @@ function drawClip(
     if (clip.payload.type === "subtitles" && w > 60) {
       ctx.fillStyle = "rgba(233,228,219,0.85)";
       ctx.font = '500 10px "Inter", sans-serif';
-      ctx.fillText("Subtítulos automáticos", x + 20, y + (h - 14) / 2 + 1, w - 28);
+      ctx.fillText("Auto subtitles", x + 20, y + (h - 14) / 2 + 1, w - 28);
     }
     if (clip.payload.type === "text" && w > 60) {
       ctx.fillStyle = "rgba(233,228,219,0.85)";
@@ -354,7 +354,7 @@ function drawClip(
     }
   }
 
-  // rombos de keyframes (solo en el clip seleccionado)
+  // keyframe diamonds (only on the selected clip)
   if (selected && w > 20) {
     const times = clipKeyframeTimes(clip);
     if (times.length) {
@@ -373,7 +373,7 @@ function drawClip(
     }
   }
 
-  // indicador de clip enlazado (video+audio)
+  // linked clip indicator (video+audio)
   if (clip.group && w > 30) {
     ctx.fillStyle = "rgba(233,228,219,0.55)";
     ctx.font = '9px "Inter", sans-serif';
@@ -382,7 +382,7 @@ function drawClip(
     ctx.fillText("🔗", x + w - 4, y + 3);
   }
 
-  // etiqueta
+  // label
   if (label && w > 46) {
     ctx.fillStyle = "rgba(233,228,219,0.9)";
     ctx.font = '500 9.5px "Inter", sans-serif';
@@ -392,13 +392,13 @@ function drawClip(
   }
   ctx.restore();
 
-  // borde
+  // border
   roundedRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, 5);
   ctx.lineWidth = selected ? 1.6 : 1;
   ctx.strokeStyle = selected ? COLORS.accent : "rgba(0,0,0,0.5)";
   ctx.stroke();
 
-  // asas de trim en la selección
+  // trim handles on the selection
   if (selected && w > 26) {
     ctx.fillStyle = COLORS.accent;
     roundedRect(ctx, x + 2.5, y + h / 2 - 7, 3.5, 14, 2);
@@ -446,7 +446,7 @@ function drawTimeline(
   tracks.forEach((t, i) => {
     const th = trackHeight(t);
     for (const clip of t.clips) {
-      if (ghost && ghost.clipId === clip.id && ghost.moved) continue; // se dibuja como fantasma
+      if (ghost && ghost.clipId === clip.id && ghost.moved) continue; // drawn as a ghost
       const x = usToX(clip.start);
       const cw = (clip.duration / 1e6) * view.pxPerSec;
       if (x + cw < 0 || x > w) continue;
@@ -465,7 +465,7 @@ function drawTimeline(
     }
   });
 
-  // fantasma de drag (mover o recortar)
+  // drag ghost (move or trim)
   if (ghost && ghost.moved) {
     const found = activeSequence(project)
       .tracks.flatMap((t) => t.clips.map((c) => ({ c, t })))
@@ -503,7 +503,7 @@ function drawTimeline(
     }
   }
 
-  // guía de imán durante el arrastre
+  // snap guide during the drag
   if (ghost?.snapUs != null) {
     const sx = usToX(ghost.snapUs);
     ctx.save();
@@ -517,7 +517,7 @@ function drawTimeline(
     ctx.restore();
   }
 
-  // playhead (aguja ámbar, la firma)
+  // playhead (amber needle, the signature)
   const px = usToX(playheadUs);
   if (px >= -8 && px <= w + 8) {
     ctx.strokeStyle = COLORS.accent;
@@ -526,7 +526,7 @@ function drawTimeline(
     ctx.moveTo(px, RULER_H - 4);
     ctx.lineTo(px, h);
     ctx.stroke();
-    // capuchón
+    // cap
     ctx.fillStyle = COLORS.accent;
     ctx.beginPath();
     ctx.moveTo(px - 5.5, 4);
@@ -540,7 +540,7 @@ function drawTimeline(
 }
 
 // ---------------------------------------------------------------------------
-// Cabeceras de pista (DOM)
+// Track headers (DOM)
 // ---------------------------------------------------------------------------
 
 function TrackHeader({ track }: { track: Track }) {
@@ -574,21 +574,21 @@ function TrackHeader({ track }: { track: Track }) {
         className={`w-7 shrink-0 cursor-text font-[var(--font-display)] text-[12px] font-semibold ${
           track.kind === "video" ? "text-clip-video-hi" : "text-clip-audio-hi"
         }`}
-        title="Doble click para renombrar"
+        title="Double click to rename"
         onDoubleClick={() => {
-          const name = window.prompt("Nombre de la pista", track.name);
+          const name = window.prompt("Track name", track.name);
           if (name) void renameTrack(track.id, name);
         }}
       >
         {track.name}
       </span>
-      {btn(track.muted, "M", "Silenciar pista", "muted")}
+      {btn(track.muted, "M", "Mute track", "muted")}
       {btn(track.solo, "S", "Solo", "solo")}
-      {btn(track.locked, "🔒", "Bloquear pista", "locked")}
+      {btn(track.locked, "🔒", "Lock track", "locked")}
       {track.kind === "audio" && (
         <span
           className="ml-auto cursor-ns-resize select-none font-[var(--font-mono)] text-[9.5px] text-ink-faint hover:text-ink"
-          title="Arrastra vertical para cambiar el volumen de la pista (doble click: 0 dB)"
+          title="Drag vertically to change the track volume (double click: 0 dB)"
           onDoubleClick={() => void setTrackVolume(track.id, 0)}
           onMouseDown={(e) => {
             e.preventDefault();
@@ -612,11 +612,11 @@ function TrackHeader({ track }: { track: Track }) {
       )}
       <button
         className={`${track.kind === "audio" ? "" : "ml-auto "}focus-ring h-5 w-5 rounded text-[10px] leading-none text-ink-faint opacity-0 transition-opacity hover:bg-bg3 hover:text-danger group-hover:opacity-100`}
-        title="Eliminar pista (deshacible)"
+        title="Delete track (undoable)"
         onClick={() => {
           if (
             track.clips.length === 0 ||
-            window.confirm(`La pista ${track.name} tiene ${track.clips.length} clip(s). ¿Eliminarla igualmente?`)
+            window.confirm(`Track ${track.name} has ${track.clips.length} clip(s). Delete it anyway?`)
           )
             void removeTrack(track.id);
         }}
@@ -628,7 +628,7 @@ function TrackHeader({ track }: { track: Track }) {
 }
 
 // ---------------------------------------------------------------------------
-// Componente principal
+// Main component
 // ---------------------------------------------------------------------------
 
 export function Timeline() {
@@ -665,11 +665,12 @@ export function Timeline() {
   const setActiveSequence = useStore((s) => s.setActiveSequence);
   const addTrack = useStore((s) => s.addTrack);
   const addGeneratorClip = useStore((s) => s.addGeneratorClip);
+  const removeSequence = useStore((s) => s.removeSequence);
   const rangeInUs = useStore((s) => s.rangeInUs);
   const rangeOutUs = useStore((s) => s.rangeOutUs);
   const visualsBump = useStore((s) => s.visualsBump);
 
-  // seguir el playhead durante la reproducción
+  // follow the playhead during playback
   useEffect(() => {
     if (!playing) return;
     const rightEdge = viewStartUs + ((size.w - 80) / pxPerSec) * 1e6;
@@ -677,7 +678,7 @@ export function Timeline() {
       setView(playheadUs - ((size.w * 0.15) / pxPerSec) * 1e6, pxPerSec);
   }, [playing, playheadUs, viewStartUs, pxPerSec, size.w, setView]);
 
-  // observar tamaño
+  // observe size
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -689,7 +690,7 @@ export function Timeline() {
     return () => obs.disconnect();
   }, []);
 
-  // dibujar
+  // draw
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -753,7 +754,7 @@ export function Timeline() {
     const hit = hitTest(x, y);
     if (hit.clip) {
       select([hit.clip.id], e.shiftKey);
-      // ¿agarró un borde? → trim
+      // grabbed an edge? → trim
       const edgePx = 8;
       const clipX1 = ((hit.clip.start - viewStartUs) / 1e6) * pxPerSec;
       const clipX2 = clipX1 + (hit.clip.duration / 1e6) * pxPerSec;
@@ -775,7 +776,7 @@ export function Timeline() {
         snapUs: null,
       });
     } else if (y >= RULER_H) {
-      // selección por marco sobre área vacía
+      // marquee selection over empty area
       marqueeRef.current = { x0: x, y0: y, x1: x, y1: y, additive: e.shiftKey };
       if (!e.shiftKey) select([]);
     } else {
@@ -801,7 +802,7 @@ export function Timeline() {
       }
       const drag = dragRef.current;
       if (drag) {
-        // clips del grupo enlazado no son objetivos de imán del propio arrastre
+        // clips in the linked group aren't snap targets for their own drag
         const dragged = activeSequence(project)
           .tracks.flatMap((t) => t.clips)
           .find((c) => c.id === drag.clipId);
@@ -840,13 +841,13 @@ export function Timeline() {
         for (let i = 0; i < tracks.length; i++) {
           if (y >= tops[i] && y < tops[i] + trackHeight(tracks[i])) trackIdx = i;
         }
-        // solo pistas del mismo tipo
+        // only tracks of the same type
         if (tracks[trackIdx].kind !== tracks[drag.startTrackIdx].kind)
           trackIdx = drag.startTrackIdx;
         let startUs = Math.max(0, xToUs(x) - drag.grabOffsetUs);
         let snapUs: number | null = null;
         if (dragged) {
-          // imantar el borde más cercano (inicio o fin del clip)
+          // snap the nearest edge (clip start or end)
           const snapStart = nearestSnap(startUs, targets, pxPerSec);
           const snapEnd = nearestSnap(startUs + dragged.duration, targets, pxPerSec);
           const dStart = snapStart != null ? Math.abs(snapStart - startUs) : Infinity;
@@ -944,69 +945,82 @@ export function Timeline() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-line-soft px-2">
-        <h2 className="panel-eyebrow mr-2">Línea de tiempo</h2>
+        <h2 className="panel-eyebrow mr-2">Timeline</h2>
         <button
           className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
           onClick={() => void splitAtPlayhead()}
-          title="Dividir en el playhead (S)"
+          title="Split at the playhead (S)"
         >
-          ✂ Dividir
+          ✂ Split
         </button>
         <button
           className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
           onClick={() => void deleteSelection(false)}
-          title="Eliminar selección (Supr)"
+          title="Delete selection (Del)"
         >
-          Eliminar
+          Delete
         </button>
         <button
           className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
           onClick={() => void deleteSelection(true)}
-          title="Eliminar y cerrar hueco (⇧Supr)"
+          title="Delete and close gap (⇧Del)"
         >
-          Eliminar y cerrar
+          Delete and close
         </button>
         <button
           className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
           onClick={() => void addTextClip()}
-          title="Añadir un título en el playhead"
+          title="Add a title at the playhead"
         >
-          + Título
+          + Title
         </button>
         <button
           className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
           onClick={() => void generateVertical()}
-          title="Genera una copia vertical 1080x1920 con fondo desenfocado (Shorts/Reels)"
+          title="Generate a vertical copy (1080x1920) with a blurred background (Shorts/Reels)"
         >
           📱 Vertical
         </button>
         <button
           className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
           onClick={() => void addGeneratorClip("core.solid")}
-          title="Añadir un rectángulo de color en el playhead (Inspector: color, tamaño, degradado)"
+          title="Add a color rectangle at the playhead (Inspector: color, size, gradient)"
         >
-          ▦ Forma
+          ▦ Shape
         </button>
         <button
           className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
           onClick={() => void addTrack("video")}
-          title="Añadir pista de video"
+          title="Add video track"
         >
           +V
         </button>
         <button
           className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
           onClick={() => void addTrack("audio")}
-          title="Añadir pista de audio"
+          title="Add audio track"
         >
           +A
         </button>
+        {project.sequences.length > 1 && (
+          <button
+            className="focus-ring rounded-md px-1.5 py-1 text-[11.5px] text-ink-faint hover:bg-bg3 hover:text-danger"
+            onClick={() => {
+              const seq = activeSequence(project);
+              if (window.confirm(`Delete the sequence "${seq.name}"? (undoable)`))
+                void removeSequence(seq.id);
+            }}
+            title="Delete the active sequence (undoable)"
+          >
+            ✕
+          </button>
+        )}
         {project.sequences.length > 1 && (
           <select
             className="focus-ring cursor-pointer rounded-md border border-line bg-bg2 px-1.5 py-0.5 text-[11px] text-ink"
             value={activeSequence(project).id}
             onChange={(e) => void setActiveSequence(e.target.value)}
-            title="Secuencia activa"
+            title="Active sequence"
           >
             {project.sequences.map((sq) => (
               <option key={sq.id} value={sq.id}>
@@ -1019,9 +1033,9 @@ export function Timeline() {
         <button
           className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
           onClick={zoomFit}
-          title="Ajustar todo el timeline a la vista"
+          title="Fit the whole timeline to the view"
         >
-          Ajustar
+          Fit
         </button>
         <input
           type="range"

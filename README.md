@@ -1,228 +1,229 @@
 # UberEditor
+*[Español](README.es.md)*
 
-Editor de video de escritorio multiplataforma (Tauri 2 + Rust + React) pensado para creadores de contenido, con superpoderes de IA: **edición basada en texto** (Whisper palabra a palabra), **silencios fuera con un click**, **verticales automáticos**, **avatar reactivo por emociones**, **subtítulos karaoke** y un **servidor MCP embebido** para que un agente (Claude, etc.) edite tu proyecto por ti.
+Cross-platform desktop video editor (Tauri 2 + Rust + React) built for content creators, with AI superpowers: **text-based editing** (word-by-word Whisper), **silences gone with one click**, **automatic verticals**, **emotion-reactive avatar**, **karaoke subtitles**, and an **embedded MCP server** so an agent (Claude, etc.) can edit your project for you.
 
-**El plan maestro está en [PLAN.md](PLAN.md)** — arquitectura, las 16 features al detalle, mapeo del Youtubers-toolkit y roadmap.
+**The master plan lives in [PLAN.md](PLAN.md)** — architecture, all 16 features in detail, the Youtubers-toolkit mapping, and the roadmap.
 
-- UI 100 % en español · tema carbón cálido con acento ámbar
-- Todo deshacible: cada operación (incluidas las de IA y las del MCP) es **una** entrada de undo
-- Mismo motor de render en preview y export (cadenas ffmpeg compartidas): lo que ves es lo que sale
-- 105 tests (unitarios, de píxeles sobre exports reales y 13 pasos visuales con Playwright)
+- UI is 100% in English · warm charcoal theme with an amber accent
+- Everything is undoable: every operation (including the AI and MCP ones) is **one** undo entry
+- Same render engine in preview and export (shared ffmpeg chains): what you see is what you get
+- 105 tests (unit, pixel tests over real exports, and 13 visual steps with Playwright)
 
 ---
 
-## Requisitos
+## Requirements
 
-| Qué | Versión | Notas |
+| What | Version | Notes |
 |---|---|---|
-| **FFmpeg + FFprobe** | ≥ 6 en el `PATH` | El corazón del render. `brew install ffmpeg` / `apt install ffmpeg`. Se puede apuntar a binarios concretos con `UE_FFMPEG` y `UE_FFPROBE` |
-| **Rust** | estable | Solo para compilar |
-| **Node** | ≥ 20 | Solo para compilar / desarrollo |
+| **FFmpeg + FFprobe** | ≥ 6 on the `PATH` | The heart of the render. `brew install ffmpeg` / `apt install ffmpeg`. You can point to specific binaries with `UE_FFMPEG` and `UE_FFPROBE` |
+| **Rust** | stable | Only for building |
+| **Node** | ≥ 20 | Only for building / development |
 
 ```bash
 npm install
-npx tauri dev        # la app de escritorio completa
+npx tauri dev        # the full desktop app
 ```
 
-Sin instalar nada más: los modelos de Whisper se descargan solos la primera vez que transcribes (a la carpeta de datos de la app).
+Nothing else to install: the Whisper models download themselves the first time you transcribe (into the app's data folder).
 
 ---
 
-## La interfaz
+## The interface
 
 ```
 ┌────────────┬──────────────────────────────┬─────────────┐
-│ Medios /   │                              │  Inspector  │
-│ Texto      │        Preview               │  (del clip  │
-│ (pool +    │  (frames reales + overlays)  │  seleccio-  │
-│ transcript)│                              │  nado)      │
+│ Media /    │                              │  Inspector  │
+│ Text       │        Preview               │  (of the    │
+│ (pool +    │   (real frames + overlays)   │  selected   │
+│ transcript)│                              │  clip)      │
 ├────────────┴──────────────────────────────┴─────────────┤
-│  Línea de tiempo (pistas V/A, waveforms y thumbs reales) │
-├──────────────────────────────────────────────────────────┤
-│  Barra de estado (guardado, selección, última acción)    │
-└──────────────────────────────────────────────────────────┘
+│  Timeline (V/A tracks, real waveforms and thumbs)       │
+├─────────────────────────────────────────────────────────┤
+│  Status bar (saved, selection, last action)             │
+└─────────────────────────────────────────────────────────┘
 ```
 
-- **Medios**: importa con `+ Importar` o arrastrando archivos desde el Finder/Explorador; **doble click** sobre un medio lo añade al timeline.
-- **Texto**: aparece cuando hay transcripciones; desde ahí se edita el video borrando o moviendo palabras.
-- **Preview**: frames reales del motor (usa un proxy ligero si el archivo es grande). En pausa, el frame es exacto al export.
-- **Inspector**: todas las propiedades del clip seleccionado; sin selección muestra los ajustes de IA (modelo/idioma de Whisper).
+- **Media**: import with `+ Import` or by dragging files from Finder/Explorer; **double-click** a media item to add it to the timeline.
+- **Text**: appears when there are transcripts; from there you edit the video by deleting or moving words.
+- **Preview**: real frames from the engine (uses a lightweight proxy if the file is large). When paused, the frame is exact to the export.
+- **Inspector**: all the properties of the selected clip; with nothing selected it shows the AI settings (Whisper model/language).
 
 ---
 
-## Atajos de teclado
+## Keyboard shortcuts
 
-| Tecla | Acción |
+| Key | Action |
 |---|---|
-| `Espacio` | Reproducir / pausar |
-| `J` / `K` / `L` | Shuttle: atrás / pausa / adelante (repetir duplica: 1→2→4→8×) |
-| `S` (o `⌘K`) | Dividir el clip bajo el playhead (los enlazados se dividen juntos) |
-| `Supr` / `Retroceso` | Eliminar selección · con `⇧` elimina **y cierra el hueco** (ripple) |
-| `←` / `→` | Un frame atrás/adelante · con `⇧` diez frames |
-| `Inicio` | Ir a 0 |
-| `I` / `O` | Marcar entrada / salida del **rango de trabajo** (banda ámbar en la regla) |
-| `⇧X` | Limpiar el rango I–O |
-| `⌘Z` / `⌘⇧Z` | Deshacer / rehacer |
-| `⌘S` / `⌘O` | Guardar / abrir proyecto |
-| `Alt` (durante un arrastre) | Desactiva el imán (snapping) |
+| `Space` | Play / pause |
+| `J` / `K` / `L` | Shuttle: back / pause / forward (repeat doubles: 1→2→4→8×) |
+| `S` (or `⌘K`) | Split the clip under the playhead (linked clips split together) |
+| `Del` / `Backspace` | Delete selection · with `⇧` it deletes **and closes the gap** (ripple) |
+| `←` / `→` | One frame back/forward · with `⇧` ten frames |
+| `Home` | Go to 0 |
+| `I` / `O` | Mark in / out of the **work range** (amber band on the ruler) |
+| `⇧X` | Clear the I–O range |
+| `⌘Z` / `⌘⇧Z` | Undo / redo |
+| `⌘S` / `⌘O` | Save / open project |
+| `Alt` (while dragging) | Disables snapping |
 
 ---
 
-## Edición en el timeline
+## Timeline editing
 
-- **Mover**: arrastra un clip; el **imán** lo pega a bordes de otros clips, al playhead, al 0, al rango I–O y a los marcadores (guía punteada al engancharse; `Alt` lo desactiva).
-- **Recortar**: arrastra los **bordes** de un clip (asas visibles al seleccionar).
-- **Selección múltiple**: arrastra un **rectángulo** sobre área vacía (marquee); `⇧` acumula. La barra de estado muestra cuántos clips llevas.
-- **Clips enlazados 🔗**: al añadir un video con audio se crean dos clips (video en `V*`, audio en `A*`) que se comportan como uno: dividir, mover, recortar, cambiar velocidad o borrar afecta a ambos. `Inspector → Enlace → Desenlazar` los separa.
-- **Pistas**: `+V` / `+A` añaden pistas; en la cabecera: `M` silencia, `S` solo, 🔒 bloquea, **doble click en el nombre** renombra, ✕ elimina (deshacible), y en pistas de audio el **dB se arrastra** verticalmente (doble click → 0 dB).
-- **Multicapa real**: la pista de video más baja es la base; los clips de pistas superiores se componen encima (con su posición, escala y opacidad) también en el export.
-- **Velocidad**: presets 0.25×–4× en el Inspector. En el export **el tono de la voz se conserva** (atempo); en la reproducción en vivo el pitch cambia por ahora.
+- **Move**: drag a clip; the **magnet** snaps it to other clips' edges, the playhead, 0, the I–O range, and markers (a dotted guide appears when it snaps; `Alt` disables it).
+- **Trim**: drag a clip's **edges** (handles visible when selected).
+- **Multi-selection**: drag a **rectangle** over empty area (marquee); `⇧` adds to the selection. The status bar shows how many clips you have so far.
+- **Linked clips 🔗**: adding a video with audio creates two clips (video on `V*`, audio on `A*`) that behave as one: split, move, trim, change speed, or delete affects both. `Inspector → Link → Unlink` separates them.
+- **Tracks**: `+V` / `+A` add tracks; in the header: `M` mutes, `S` solos, 🔒 locks, **double-click the name** renames, ✕ deletes (undoable), and on audio tracks the **dB is dragged** vertically (double-click → 0 dB).
+- **Real multi-layer**: the lowest video track is the base; clips on higher tracks are composited on top (with their position, scale, and opacity) in the export too.
+- **Speed**: 0.25×–4× presets in the Inspector. In the export **the voice's pitch is preserved** (atempo); in live playback the pitch changes for now.
 
-## Transformación y keyframes
+## Transform and keyframes
 
-Cada clip tiene **Posición X/Y, Opacidad, Escala y Rotación** (y el audio, **Ganancia**). Junto a cada slider:
+Every clip has **Position X/Y, Opacity, Scale, and Rotation** (and audio, **Gain**). Next to each slider:
 
-- `◇` — la propiedad no anima; click = **crear keyframe** en el playhead (la propiedad pasa a animada).
-- `◆` — hay keyframe justo en el playhead; click = quitarlo.
-- Con la propiedad animada, **mover el slider escribe un keyframe** en el playhead (como Premiere/Resolve) y el valor mostrado es el del playhead.
-- Debajo aparece el **editor de curvas**: arrastra los rombos (tiempo y valor), **doble click** añade o borra keys, y al seleccionar un key eliges su interpolación (**lineal / escalón / suave**).
-- Los rombos también se dibujan sobre el clip seleccionado en el timeline.
+- `◇` — the property doesn't animate; click = **create a keyframe** at the playhead (the property becomes animated).
+- `◆` — there's a keyframe right at the playhead; click = remove it.
+- With the property animated, **moving the slider writes a keyframe** at the playhead (like Premiere/Resolve) and the displayed value is the one at the playhead.
+- Below it, the **curve editor** appears: drag the diamonds (time and value), **double-click** adds or removes keys, and when you select a key you choose its interpolation (**linear / step / smooth**).
+- The diamonds are also drawn on the selected clip in the timeline.
 
-La animación se ve **igual en pausa, reproduciendo y en el export** (misma matemática de curvas en los tres caminos). El crop existe pero aún no es animable desde la UI.
+The animation looks **the same when paused, playing, and in the export** (same curve math on all three paths). Crop exists but isn't animatable from the UI yet.
 
-## Efectos (packs modulares)
+## Effects (modular packs)
 
-`Inspector → Efectos → + Añadir efecto`. Incluidos: **Chroma Key**, Corrección de color, Desenfoque gaussiano y Relleno vertical. Cada efecto sale de un `manifest.json` (parámetros + plantilla ffmpeg), así que preview y export usan exactamente la misma cadena.
+`Inspector → Effects → + Add effect`. Included: **Chroma Key**, Color correction, Gaussian blur, and Vertical: blurred background. Each effect comes from a `manifest.json` (parameters + ffmpeg template), so preview and export use exactly the same chain.
 
-**Packs propios**: crea una carpeta en `«config de la app»/effects/<mi-efecto>/manifest.json` y pulsa `↻ packs`. Un manifest inválido no rompe nada (se reporta) y un pack con el mismo `id` que uno core lo reemplaza.
+**Your own packs**: create a folder at `«app config»/effects/<my-effect>/manifest.json` and press `↻ packs`. An invalid manifest breaks nothing (it's reported) and a pack with the same `id` as a core one replaces it.
 
-## Generadores (formas y fondos)
+## Generators (shapes and backgrounds)
 
-Botón **▦ Forma** en el timeline → añade un clip generado:
+**▦ Shape** button in the timeline → adds a generated clip:
 
-- **Rectángulo sólido**: color, ancho y alto.
-- **Degradado**: dos colores (diagonal).
+- **Solid rectangle**: color, width, and height.
+- **Gradient**: two colors (diagonal).
 
-Se cambia el tipo y los parámetros en `Inspector → Generador`. Como son clips normales, la transformación completa les aplica: puedes animar con keyframes un panel que entra deslizándose, ponerlo semitransparente detrás de un título, etc. Mismo sistema de manifests que los efectos (carpeta `generators/`).
+You change the type and parameters in `Inspector → Generator`. Since they're normal clips, the full transform applies to them: you can keyframe a panel that slides in, make it semi-transparent behind a title, etc. Same manifest system as the effects (`generators/` folder).
 
-## Texto, títulos y plantillas
+## Text, titles, and templates
 
-- **+ Título** añade un texto en el playhead (en una pista libre).
-- `Inspector → Texto`: contenido, **fuente del sistema** (todas las instaladas), tamaño, color, alineación izquierda/centro/derecha y posición X/Y.
-- **Plantillas**: guarda un estilo con nombre y aplícalo a cualquier título después.
-- Todo se quema en el export con la misma fuente y colocación que ves en el preview.
+- **+ Title** adds text at the playhead (on a free track).
+- `Inspector → Text`: content, **system font** (all installed ones), size, color, left/center/right alignment, and position X/Y.
+- **Templates**: save a named style and apply it to any title later.
+- Everything is burned into the export with the same font and placement you see in the preview.
 
-## Transiciones
+## Transitions
 
-`Inspector → Transición` (en el clip de la derecha del corte): **11 tipos** (crossfade, wipes, slides, círculo, dissolve, pixelize, radial) con duración configurable. Los handles se extienden hacia ambos lados limitados por el material disponible, y funcionan también entre clips con velocidades distintas.
+`Inspector → Transition` (on the clip to the right of the cut): **11 types** (crossfade, wipes, slides, circle, dissolve, pixelize, radial) with configurable duration. The handles extend to both sides, limited by the available material, and they also work between clips at different speeds.
 
 ---
 
-## IA
+## AI
 
-### Transcripción (Whisper)
+### Transcription (Whisper)
 
-- Botón **T** sobre un medio del pool → transcribe palabra a palabra (el modelo se descarga solo). `T✓` = ya transcrito.
-- **Modelo e idioma** se eligen en el Inspector con nada seleccionado (`IA · Whisper`): tiny/base/small/medium/large-v3-turbo, idioma auto/es/en/…
+- **T** button on a media item in the pool → transcribes word by word (the model downloads itself). `T✓` = already transcribed.
+- **Model and language** are chosen in the Inspector with nothing selected (`AI · Whisper`): tiny/base/small/medium/large-v3-turbo, language auto/es/en/…
 
-### Edición por texto
+### Text-based editing
 
-Pestaña **Texto**: la transcripción completa, con la palabra actual resaltada al reproducir (click en una palabra = seek).
+**Text** tab: the full transcript, with the current word highlighted during playback (click a word = seek).
 
-- Marca palabras y **✂ Cortar** — elimina esos trozos del video **en todas las pistas** y cierra los huecos (1 undo).
-- **⇢ Mover** — reordena un rango de material a otro punto del timeline (reordena frases habladas sin tocar cuchillas).
+- Mark words and **✂ Cut** — removes those pieces of the video **on all tracks** and closes the gaps (1 undo).
+- **⇢ Move** — reorders a range of material to another point in the timeline (reorders spoken phrases without touching blades).
 
-### Silencios
+### Silences
 
-`Inspector → Silencios` (clip con audio):
+`Inspector → Silences` (clip with audio):
 
-- **🔇 Eliminar** — corta los silencios y cierra los huecos (todas las pistas, 1 undo).
-- **⏩ Acelerar 4×** — en vez de borrar, acelera los tramos silenciosos.
-- Sliders de **umbral (dB)**, **duración mínima** y **margen** alrededor del habla.
+- **🔇 Remove** — cuts the silences and closes the gaps (all tracks, 1 undo).
+- **⏩ Speed up 4×** — instead of deleting, it speeds up the silent stretches.
+- Sliders for **threshold (dB)**, **minimum duration**, and **margin** around speech.
 
-### Subtítulos automáticos
+### Automatic subtitles
 
-Botón **💬** en un clip transcrito. Tres modos en `Inspector → Subtítulos`:
+**💬** button on a transcribed clip. Three modes in `Inspector → Subtitles`:
 
-- **Por frases** — una línea por segmento.
-- **Palabra a palabra** — una palabra grande cada vez (estilo shorts).
-- **Karaoke** — la frase completa visible y **cada palabra se enciende al sonar** (color de resaltado configurable).
+- **By phrases** — one line per segment.
+- **Word by word** — one big word at a time (shorts style).
+- **Karaoke** — the full phrase visible and **each word lights up as it's spoken** (configurable highlight color).
 
-### Vertical automático (Shorts/Reels)
+### Automatic vertical (Shorts/Reels)
 
-Botón **📱 Vertical** → genera una secuencia 1080×1920 con fondo desenfocado y el video centrado. El selector de secuencias (junto a los botones del timeline) permite volver a la horizontal. Cada secuencia se exporta por separado.
+**📱 Vertical** button → generates a 1080×1920 sequence with a blurred background and the video centered. The sequence selector (next to the timeline buttons) lets you switch back to the horizontal one. Each sequence exports separately.
 
-### Avatar reactivo
+### Reactive avatar
 
-Botón **🧑‍🎤** en un clip transcrito → elige el `config.json` de avatares (formato compatible con el Youtubers-toolkit: un video en loop por emoción). El avatar aparece en la esquina, **cambia de emoción según lo que dices** (clasificador de energía/ritmo offline, u OpenAI-compatible si defines `OPENAI_API_KEY`) y en el export tiembla al ritmo del volumen. Visible en pausa, reproducción y export.
+**🧑‍🎤** button on a transcribed clip → pick the avatar `config.json` (Youtubers-toolkit-compatible format: one looping video per emotion). The avatar appears in the corner, **changes emotion based on what you say** (offline energy/rhythm classifier, or OpenAI-compatible if you set `OPENAI_API_KEY`) and in the export it shakes to the beat of the volume. Visible when paused, playing, and in the export.
 
 ---
 
 ## Audio
 
-- **Ganancia** (animable con keyframes), **Pan** (ley de balance), **fades** de entrada/salida por clip.
-- Volumen por **pista** (arrastra el dB de la cabecera).
-- **Medidores RMS L/R** en la barra de transporte durante la reproducción.
-- El audio es el **reloj maestro**: la posición viene de los frames servidos al dispositivo (sin drift).
+- **Gain** (animatable with keyframes), **Pan** (balance law), in/out **fades** per clip.
+- Per-**track** volume (drag the dB in the header).
+- **RMS L/R meters** in the transport bar during playback.
+- Audio is the **master clock**: the position comes from the frames served to the device (no drift).
 
 ## Export
 
-Botón **Exportar…**:
+**Export…** button:
 
-- **Presets**: YouTube 1080p, YouTube 4K, Máxima calidad, Borrador rápido, **Solo audio (M4A)** y **GIF**.
-- Ajustables: resolución máxima, calidad CRF, velocidad del códec, bitrate de audio.
-- **Normalización R128** opcional (−14 LUFS, estilo YouTube).
-- **Rango I–O**: exporta solo el rango marcado con `I`/`O`.
-- Progreso en vivo sobre el botón y **Cancelar** que limpia el archivo a medias.
+- **Presets**: YouTube 1080p, YouTube 4K, Maximum quality, Quick draft, **Audio only (M4A)**, and **GIF**.
+- Adjustable: maximum resolution, CRF quality, codec speed, audio bitrate.
+- Optional **R128 normalization** (−14 LUFS, YouTube style).
+- **Range I–O**: exports only the range marked with `I`/`O`.
+- Live progress on the button and a **Cancel** that cleans up the half-written file.
 
-## Proyectos
+## Projects
 
-- Formato **`.uep`** (JSON legible), **portable**: las rutas de los medios se guardan relativas al proyecto — mueve la carpeta entera a otro disco/máquina y ábrela.
-- Medios que no aparecen quedan **offline** (en rojo) con botón **Relocalizar…**.
-- **Autoguardado**: cada minuto (si hay cambios) se escribe una copia `.uep.autosave`; si la app muere, al arrancar ofrece **recuperar**. Guardar de verdad la invalida.
-- Los cachés (audio conformado, proxies, waveforms, miniaturas) viven fuera del proyecto, indexados por hash del contenido: se regeneran solos en otra máquina.
+- **`.uep`** format (readable JSON), **portable**: media paths are stored relative to the project — move the whole folder to another disk/machine and open it.
+- Media that can't be found stay **offline** (in red) with a **Relink…** button.
+- **Autosave**: every minute (if there are changes) a `.uep.autosave` copy is written; if the app dies, on startup it offers to **recover**. A real save invalidates it.
+- The caches (conformed audio, proxies, waveforms, thumbnails) live outside the project, indexed by content hash: they regenerate themselves on another machine.
 
 ---
 
-## Servidor MCP (edición por agentes)
+## MCP server (agent-based editing)
 
-Al arrancar, la app levanta un servidor MCP en `http://127.0.0.1:4599/mcp` (solo loopback) **protegido con token** (se genera al arrancar; míralo en el pill «MCP» del header, que incluye el comando de conexión listo para copiar):
+On startup, the app brings up an MCP server at `http://127.0.0.1:4599/mcp` (loopback only) **protected with a token** (generated at startup; find it in the «MCP» pill in the header, which includes the connection command ready to copy):
 
 ```bash
 claude mcp add --transport http ubereditor http://127.0.0.1:4599/mcp \
   --header "Authorization: Bearer <token>"
 ```
 
-14 herramientas: `get_project_summary`, `get_timeline`, `get_media_pool`, `get_effects_catalog`, `get_transcript`, `add_clip`, `split_clip`, `delete_clips`, `set_clip_transition`, `remove_silences` (con modo y parámetros), `move_range`, `generate_vertical`, `undo`, `redo`. Todo lo que hace un agente es deshacible desde la UI.
+14 tools: `get_project_summary`, `get_timeline`, `get_media_pool`, `get_effects_catalog`, `get_transcript`, `add_clip`, `split_clip`, `delete_clips`, `set_clip_transition`, `remove_silences` (with mode and parameters), `move_range`, `generate_vertical`, `undo`, `redo`. Everything an agent does is undoable from the UI.
 
 ---
 
-## Desarrollo
+## Development
 
 ```bash
-cargo test                    # toda la suite Rust (unitaria + píxeles sobre ffmpeg real)
+cargo test                    # the whole Rust suite (unit + pixel over real ffmpeg)
 cargo clippy --workspace --all-targets
 
-npm run dev                   # UI en el navegador con motor MOCK (http://localhost:5175)
+npm run dev                   # UI in the browser with the MOCK engine (http://localhost:5175)
 npm run typecheck
 
-npx tauri dev                 # la app real
+npx tauri dev                 # the real app
 
-npm run screenshot            # pruebas visuales: 13 pasos con aserciones funcionales
-                              #   → screenshots/<fecha>/*.png (arranca vite solo si hace falta)
+npm run screenshot            # visual tests: 13 steps with functional assertions
+                              #   → screenshots/<date>/*.png (starts vite only if needed)
 ```
 
-### Arquitectura (crates)
+### Architecture (crates)
 
-| Crate | Qué hace |
+| Crate | What it does |
 |---|---|
-| `ue-core` | Modelo puro, acciones con inversas mecánicas, historial transaccional, curvas de keyframes |
-| `ue-media` | ffprobe, hashing, frames de preview (MJPEG), proxies, miniaturas, conformado de audio |
-| `ue-audio` | WAV por mmap, mezclador puro (testeable), salida cpal (reloj maestro), picos |
-| `ue-render` | Packs de efectos y generadores (manifest → cadena ffmpeg), transform y expresiones de animación |
-| `ue-export` | EDL, grafo ffmpeg (multicapa, transiciones, texto/karaoke, avatar), progreso y cancelación |
-| `ue-ai` | Detección de silencios (histéresis + padding), clasificación de emociones |
-| `ue-whisper` | whisper-rs (Metal/CUDA), timestamps por palabra, descarga de modelos |
-| `src-tauri` | Comandos IPC, FrameService, servidor MCP, autosave |
+| `ue-core` | Pure model, actions with mechanical inverses, transactional history, keyframe curves |
+| `ue-media` | ffprobe, hashing, preview frames (MJPEG), proxies, thumbnails, audio conforming |
+| `ue-audio` | mmap'd WAV, pure mixer (testable), cpal output (master clock), peaks |
+| `ue-render` | Effect and generator packs (manifest → ffmpeg chain), transform and animation expressions |
+| `ue-export` | EDL, ffmpeg graph (multi-layer, transitions, text/karaoke, avatar), progress and cancellation |
+| `ue-ai` | Silence detection (hysteresis + padding), emotion classification |
+| `ue-whisper` | whisper-rs (Metal/CUDA), per-word timestamps, model downloads |
+| `src-tauri` | IPC commands, FrameService, MCP server, autosave |
 
-Convención de tiempo: microsegundos (`i64`) en todo el modelo; fps racional; ids ULID. El frontend espeja los tipos de serde a mano (`src/engine/types.ts`) y tiene dos motores intercambiables: `TauriEngine` (IPC real) y `MockEngine` (demo del navegador).
+Time convention: microseconds (`i64`) throughout the model; rational fps; ULID ids. The frontend mirrors the serde types by hand (`src/engine/types.ts`) and has two interchangeable engines: `TauriEngine` (real IPC) and `MockEngine` (browser demo).

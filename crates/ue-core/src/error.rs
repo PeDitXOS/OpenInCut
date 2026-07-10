@@ -2,17 +2,17 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum UeError {
-    #[error("no encontrado: {0}")]
+    #[error("not found: {0}")]
     NotFound(String),
-    #[error("operación inválida: {0}")]
+    #[error("invalid operation: {0}")]
     Invalid(String),
-    #[error("los clips se solapan: {0}")]
+    #[error("clips overlap: {0}")]
     Overlap(String),
-    #[error("pista bloqueada: {0}")]
+    #[error("track locked: {0}")]
     Locked(String),
-    #[error("error de serialización: {0}")]
+    #[error("serialization error: {0}")]
     Serde(String),
-    #[error("versión de proyecto no soportada: {0} (máx {1})")]
+    #[error("unsupported project version: {0} (max {1})")]
     SchemaVersion(u32, u32),
 }
 

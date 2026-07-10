@@ -1,8 +1,8 @@
 /**
- * MockEngine: implementación en memoria del contrato EngineClient para
- * desarrollo en navegador y pruebas visuales. Replica la semántica de ue-core
- * (split cuantizado a frame, ripple, historial por snapshots) de forma
- * simplificada; el escritorio usa el backend real.
+ * MockEngine: in-memory implementation of the EngineClient contract for
+ * browser development and visual checks. Replicates ue-core semantics
+ * (frame-quantized split, ripple, snapshot-based history) in a
+ * simplified way; the desktop uses the real backend.
  */
 
 import { quantizeToFrame } from "../lib/time";
@@ -85,21 +85,21 @@ export class MockEngine implements EngineClient {
     return this.snapshot();
   }
 
-  // ---- contrato ----
+  // ---- contract ----
 
   async getState(): Promise<StateSnapshot> {
     return this.snapshot();
   }
 
   async splitClip(clipId: Id, tUs: TimeUs): Promise<StateSnapshot> {
-    return this.transaction("Dividir clip", () => {
+    return this.transaction("Split clip", () => {
       const found = this.locate(clipId);
-      if (!found) throw new Error("clip no encontrado");
+      if (!found) throw new Error("clip not found");
       const { track, clip, index } = found;
-      if (track.locked) throw new Error("pista bloqueada");
+      if (track.locked) throw new Error("track locked");
       const tq = quantizeToFrame(tUs, this.sequence.fps);
       if (tq <= clip.start || tq >= clip.start + clip.duration)
-        throw new Error("punto de corte fuera del clip");
+        throw new Error("cut point outside the clip");
       const offset = tq - clip.start;
 
       const left: Clip = structuredClone(clip);
@@ -122,12 +122,12 @@ export class MockEngine implements EngineClient {
   }
 
   async deleteClips(ids: Id[], ripple: boolean): Promise<StateSnapshot> {
-    return this.transaction(ripple ? "Eliminar (ripple)" : "Eliminar", () => {
+    return this.transaction(ripple ? "Delete (ripple)" : "Delete", () => {
       const removed: { trackId: Id; start: TimeUs; end: TimeUs }[] = [];
       for (const id of ids) {
         const found = this.locate(id);
         if (!found) continue;
-        if (found.track.locked) throw new Error("pista bloqueada");
+        if (found.track.locked) throw new Error("track locked");
         removed.push({
           trackId: found.track.id,
           start: found.clip.start,
@@ -156,18 +156,18 @@ export class MockEngine implements EngineClient {
     toStartUs: TimeUs,
     _overwrite: boolean,
   ): Promise<StateSnapshot> {
-    return this.transaction("Mover clip", () => {
+    return this.transaction("Move clip", () => {
       const found = this.locate(clipId);
       const target = this.sequence.tracks.find((t) => t.id === toTrack);
-      if (!found || !target) throw new Error("clip o pista no encontrados");
-      if (found.track.locked || target.locked) throw new Error("pista bloqueada");
-      if (target.kind !== found.track.kind) throw new Error("tipo de pista incompatible");
+      if (!found || !target) throw new Error("clip or track not found");
+      if (found.track.locked || target.locked) throw new Error("track locked");
+      if (target.kind !== found.track.kind) throw new Error("incompatible track type");
       const startQ = Math.max(0, quantizeToFrame(toStartUs, this.sequence.fps));
       const dur = found.clip.duration;
       const collides = target.clips.some(
         (c) => c.id !== clipId && c.start < startQ + dur && startQ < c.start + c.duration,
       );
-      if (collides) throw new Error("colisión");
+      if (collides) throw new Error("collision");
       found.track.clips.splice(found.index, 1);
       found.clip.start = startQ;
       target.clips.push(found.clip);
@@ -176,9 +176,9 @@ export class MockEngine implements EngineClient {
   }
 
   async trimClip(clipId: Id, left: boolean, newEdgeUs: TimeUs): Promise<StateSnapshot> {
-    return this.transaction("Recortar clip", () => {
+    return this.transaction("Trim clip", () => {
       const found = this.locate(clipId);
-      if (!found) throw new Error("clip no encontrado");
+      if (!found) throw new Error("clip not found");
       const { clip } = found;
       const edge = quantizeToFrame(newEdgeUs, this.sequence.fps);
       if (left) {
@@ -216,23 +216,23 @@ export class MockEngine implements EngineClient {
   }
 
   async setClipAudio(clipId: Id, audio: AudioProps): Promise<StateSnapshot> {
-    return this.transaction("Editar audio", () => {
+    return this.transaction("Edit audio", () => {
       const found = this.locate(clipId);
-      if (!found) throw new Error("clip no encontrado");
+      if (!found) throw new Error("clip not found");
       found.clip.audio = audio;
     });
   }
 
   async setClipTransform(clipId: Id, transform: Transform2D): Promise<StateSnapshot> {
-    return this.transaction("Editar transformación", () => {
+    return this.transaction("Edit transform", () => {
       const found = this.locate(clipId);
-      if (!found) throw new Error("clip no encontrado");
+      if (!found) throw new Error("clip not found");
       found.clip.transform = transform;
     });
   }
 
   async pickMediaFiles(): Promise<string[] | null> {
-    return null; // solo disponible en la app de escritorio
+    return null; // only available in the desktop app
   }
 
   async importMedia(_paths: string[]): Promise<StateSnapshot> {
@@ -240,12 +240,12 @@ export class MockEngine implements EngineClient {
   }
 
   async addClip(assetId: Id, atUs: TimeUs): Promise<StateSnapshot> {
-    return this.transaction("Añadir clip", () => {
+    return this.transaction("Add clip", () => {
       const asset = this.project.assets.find((a) => a.id === assetId);
-      if (!asset) throw new Error("asset no encontrado");
+      if (!asset) throw new Error("asset not found");
       const kind = asset.kind === "audio" ? "audio" : "video";
       const track = this.sequence.tracks.find((t) => t.kind === kind && !t.locked);
-      if (!track) throw new Error("no hay pista compatible");
+      if (!track) throw new Error("no compatible track");
       const duration = asset.kind === "image" ? 5 * S : asset.probe.duration_us;
       let start = Math.max(0, quantizeToFrame(atUs, this.sequence.fps));
       const collides = (s: number) =>
@@ -259,23 +259,23 @@ export class MockEngine implements EngineClient {
   }
 
   async renderFrame(): Promise<Uint8Array | null> {
-    return null; // el mock dibuja su propio preview
+    return null; // the mock draws its own preview
   }
 
   async pickSavePath(): Promise<string | null> {
-    return null; // solo escritorio
+    return null; // desktop only
   }
 
   async exportVideo(_path?: string, _settings?: unknown): Promise<string> {
-    throw new Error("Exportar requiere la app de escritorio (npx tauri dev)");
+    throw new Error("Export requires the desktop app (npx tauri dev)");
   }
 
-  // el mock no reproduce audio: la UI usa su reloj local (rAF)
+  // the mock does not play audio: the UI uses its local clock (rAF)
   async playbackPlay(): Promise<void> {
-    throw new Error("sin audio en navegador");
+    throw new Error("no audio in the browser");
   }
   async playbackPause(): Promise<number> {
-    throw new Error("sin audio en navegador");
+    throw new Error("no audio in the browser");
   }
   async playbackSeek(): Promise<void> {}
   async playbackSetRate(): Promise<void> {}
@@ -283,7 +283,7 @@ export class MockEngine implements EngineClient {
     return null;
   }
   async recoverProject(): Promise<StateSnapshot> {
-    throw new Error("sin recuperación en navegador");
+    throw new Error("no recovery in the browser");
   }
   async discardRecovery(): Promise<void> {}
   async getAudioPeaks(): Promise<number[] | null> {
@@ -296,17 +296,17 @@ export class MockEngine implements EngineClient {
     return null;
   }
   async playbackPosition(): Promise<[number, boolean, number, number]> {
-    throw new Error("sin audio en navegador");
+    throw new Error("no audio in the browser");
   }
   async onStateChanged(): Promise<() => void> {
     return () => {};
   }
 
   async saveProject(): Promise<string> {
-    throw new Error("Guardar requiere la app de escritorio (npx tauri dev)");
+    throw new Error("Saving requires the desktop app (npx tauri dev)");
   }
   async openProject(): Promise<StateSnapshot> {
-    throw new Error("Abrir requiere la app de escritorio (npx tauri dev)");
+    throw new Error("Opening requires the desktop app (npx tauri dev)");
   }
   async pickProjectSavePath(): Promise<string | null> {
     return null;
@@ -319,7 +319,7 @@ export class MockEngine implements EngineClient {
   }
 
   async getEffectsCatalog(): Promise<EffectDef[]> {
-    // los mismos manifests que embebe el backend (fuente única de verdad)
+    // the same manifests the backend embeds (single source of truth)
     const manifests = await Promise.all([
       import("../../effects/core/color_correct/manifest.json"),
       import("../../effects/core/chroma_key/manifest.json"),
@@ -333,38 +333,38 @@ export class MockEngine implements EngineClient {
   }
 
   async setClipEffects(clipId: Id, effects: EffectInstance[]): Promise<StateSnapshot> {
-    return this.transaction("Editar efectos", () => {
+    return this.transaction("Edit effects", () => {
       const found = this.locate(clipId);
-      if (!found) throw new Error("clip no encontrado");
+      if (!found) throw new Error("clip not found");
       found.clip.effects = effects;
     });
   }
 
   async setClipTransition(clipId: Id, transition: TransitionRef | null): Promise<StateSnapshot> {
-    return this.transaction("Editar transición", () => {
+    return this.transaction("Edit transition", () => {
       const found = this.locate(clipId);
-      if (!found) throw new Error("clip no encontrado");
+      if (!found) throw new Error("clip not found");
       found.clip.transition_in = transition;
     });
   }
 
   async moveRange(): Promise<StateSnapshot> {
-    throw new Error("Mover texto requiere la app de escritorio (npx tauri dev)");
+    throw new Error("Moving text requires the desktop app (npx tauri dev)");
   }
 
   async cutRanges(): Promise<StateSnapshot> {
-    throw new Error("La edición por texto requiere la app de escritorio (npx tauri dev)");
+    throw new Error("Text-based editing requires the desktop app (npx tauri dev)");
   }
 
   async addAvatarClip(): Promise<StateSnapshot> {
-    throw new Error("El avatar requiere la app de escritorio (npx tauri dev)");
+    throw new Error("The avatar requires the desktop app (npx tauri dev)");
   }
   async pickAvatarConfig(): Promise<string | null> {
     return null;
   }
 
   async generateVertical(): Promise<StateSnapshot> {
-    return this.transaction("Generar vertical", () => {
+    return this.transaction("Generate vertical", () => {
       const src = this.sequence;
       const copy: Sequence = structuredClone(src);
       copy.id = newId("seq");
@@ -391,26 +391,26 @@ export class MockEngine implements EngineClient {
   }
 
   async setActiveSequence(sequenceId: Id): Promise<StateSnapshot> {
-    return this.transaction("Cambiar secuencia", () => {
+    return this.transaction("Change sequence", () => {
       if (!this.project.sequences.some((s) => s.id === sequenceId))
-        throw new Error("secuencia no encontrada");
+        throw new Error("sequence not found");
       this.project.active_sequence = sequenceId;
     });
   }
 
   async addSubtitlesClip(clipId: Id): Promise<StateSnapshot> {
-    return this.transaction("Subtítulos automáticos", () => {
+    return this.transaction("Auto subtitles", () => {
       const found = this.locate(clipId);
-      if (!found || found.clip.payload.type !== "media") throw new Error("clip inválido");
+      if (!found || found.clip.payload.type !== "media") throw new Error("invalid clip");
       const assetId = found.clip.payload.asset_id;
       const doc = this.project.transcripts.find((t) => t.asset_id === assetId);
-      if (!doc) throw new Error("el medio no tiene transcripción");
+      if (!doc) throw new Error("the media has no transcript");
       const track = [...this.sequence.tracks].reverse().find((t) => t.kind === "video" && !t.locked);
-      if (!track) throw new Error("no hay pista de video");
+      if (!track) throw new Error("no video track");
       const collides = track.clips.some(
         (c) => c.start < found.clip.start + found.clip.duration && found.clip.start < c.start + c.duration,
       );
-      if (collides) throw new Error("la pista superior está ocupada en ese rango");
+      if (collides) throw new Error("the top track is occupied in that range");
       track.clips.push({
         group: null,
         id: newId("clip"),
@@ -434,13 +434,13 @@ export class MockEngine implements EngineClient {
   }
 
   async transcribeAsset(): Promise<void> {
-    throw new Error("Transcribir requiere la app de escritorio (npx tauri dev)");
+    throw new Error("Transcribing requires the desktop app (npx tauri dev)");
   }
 
   async setClipSpeed(clipId: Id, speed: number): Promise<StateSnapshot> {
-    return this.transaction("Cambiar velocidad", () => {
+    return this.transaction("Change speed", () => {
       const found = this.locate(clipId);
-      if (!found || found.clip.payload.type !== "media") throw new Error("clip inválido");
+      if (!found || found.clip.payload.type !== "media") throw new Error("invalid clip");
       const srcLen = found.clip.payload.src_out - found.clip.payload.src_in;
       found.clip.speed = speed;
       found.clip.duration = Math.max(33_333, Math.round(srcLen / speed));
@@ -448,14 +448,14 @@ export class MockEngine implements EngineClient {
   }
 
   async removeSilences(): Promise<{ removed: number; removed_us: number; snapshot: StateSnapshot }> {
-    throw new Error("Eliminar silencios requiere la app de escritorio (npx tauri dev)");
+    throw new Error("Removing silences requires the desktop app (npx tauri dev)");
   }
 
   async mcpStatus(): Promise<[number, string] | null> {
     return null;
   }
   async setProjectSettings(lang: string, model: string): Promise<StateSnapshot> {
-    return this.transaction("Ajustes de IA", () => {
+    return this.transaction("AI settings", () => {
       this.project.settings.whisper_language = lang;
       this.project.settings.whisper_model = model;
     });
@@ -467,11 +467,11 @@ export class MockEngine implements EngineClient {
   }
 
   async addTextClip(content: string, atUs: TimeUs): Promise<StateSnapshot> {
-    return this.transaction("Añadir título", () => {
+    return this.transaction("Add title", () => {
       const track = [...this.sequence.tracks]
         .reverse()
         .find((t) => t.kind === "video" && !t.locked);
-      if (!track) throw new Error("no hay pista de video");
+      if (!track) throw new Error("no video track");
       const duration = 4 * S;
       let start = Math.max(0, quantizeToFrame(atUs, this.sequence.fps));
       const collides = (st: number) =>
@@ -488,19 +488,19 @@ export class MockEngine implements EngineClient {
     style: TextStyle,
     mode: "phrase" | "word" | "karaoke",
   ): Promise<StateSnapshot> {
-    return this.transaction("Editar subtítulos", () => {
+    return this.transaction("Edit subtitles", () => {
       const found = this.locate(clipId);
       if (!found || found.clip.payload.type !== "subtitles")
-        throw new Error("no es un clip de subtítulos");
+        throw new Error("not a subtitles clip");
       found.clip.payload.style = style;
       found.clip.payload.mode = mode;
     });
   }
 
   async setClipText(clipId: Id, content: string, style: TextStyle): Promise<StateSnapshot> {
-    return this.transaction("Editar texto", () => {
+    return this.transaction("Edit text", () => {
       const found = this.locate(clipId);
-      if (!found || found.clip.payload.type !== "text") throw new Error("no es un clip de texto");
+      if (!found || found.clip.payload.type !== "text") throw new Error("not a text clip");
       found.clip.payload.content = content;
       found.clip.payload.style = style;
     });
@@ -524,7 +524,7 @@ export class MockEngine implements EngineClient {
   }
 
   async relinkAsset(): Promise<StateSnapshot> {
-    throw new Error("Relocalizar requiere la app de escritorio");
+    throw new Error("Relinking requires the desktop app");
   }
   async newProject(name: string): Promise<StateSnapshot> {
     this.project = demoProject();
@@ -537,9 +537,9 @@ export class MockEngine implements EngineClient {
   }
 
   async unlinkClip(clipId: Id): Promise<StateSnapshot> {
-    return this.transaction("Desenlazar clips", () => {
+    return this.transaction("Unlink clips", () => {
       const found = this.locate(clipId);
-      if (!found?.clip.group) throw new Error("el clip no está enlazado");
+      if (!found?.clip.group) throw new Error("the clip is not linked");
       const group = found.clip.group;
       for (const track of this.sequence.tracks)
         for (const c of track.clips) if (c.group === group) c.group = null;
@@ -551,9 +551,9 @@ export class MockEngine implements EngineClient {
     prop: "muted" | "solo" | "locked",
     value: boolean,
   ): Promise<StateSnapshot> {
-    return this.transaction("Pista", () => {
+    return this.transaction("Track", () => {
       const track = this.sequence.tracks.find((t) => t.id === trackId);
-      if (!track) throw new Error("pista no encontrada");
+      if (!track) throw new Error("track not found");
       track[prop] = value;
     });
   }
@@ -562,9 +562,9 @@ export class MockEngine implements EngineClient {
     return MOCK_GENERATORS;
   }
   async addGeneratorClip(generatorId: string, atUs: number): Promise<StateSnapshot> {
-    return this.transaction("Añadir generador", () => {
+    return this.transaction("Add generator", () => {
       const track = this.sequence.tracks.filter((t) => t.kind === "video").at(-1);
-      if (!track) throw new Error("sin pista de video");
+      if (!track) throw new Error("no video track");
       track.clips.push({
         ...emptyClipDefaults(),
         id: `gen_${Math.random().toString(36).slice(2, 8)}`,
@@ -581,7 +581,7 @@ export class MockEngine implements EngineClient {
     params: Record<string, Param>,
     colorParams: Record<string, string>,
   ): Promise<StateSnapshot> {
-    return this.transaction("Editar generador", () => {
+    return this.transaction("Edit generator", () => {
       for (const t of this.sequence.tracks) {
         const clip = t.clips.find((c) => c.id === clipId);
         if (clip && clip.payload.type === "generator") {
@@ -594,11 +594,22 @@ export class MockEngine implements EngineClient {
           return;
         }
       }
-      throw new Error("clip generador no encontrado");
+      throw new Error("generator clip not found");
+    });
+  }
+  async removeSequence(sequenceId: Id): Promise<StateSnapshot> {
+    return this.transaction("Delete sequence", () => {
+      if (this.project.sequences.length <= 1)
+        throw new Error("cannot delete the last sequence");
+      const idx = this.project.sequences.findIndex((s) => s.id === sequenceId);
+      if (idx < 0) throw new Error("sequence not found");
+      this.project.sequences.splice(idx, 1);
+      if (this.project.active_sequence === sequenceId)
+        this.project.active_sequence = this.project.sequences[0].id;
     });
   }
   async addTrack(kind: "video" | "audio"): Promise<StateSnapshot> {
-    return this.transaction("Añadir pista", () => {
+    return this.transaction("Add track", () => {
       const n = this.sequence.tracks.filter((t) => t.kind === kind).length;
       this.sequence.tracks.push({
         id: `trk_${Math.random().toString(36).slice(2, 8)}`,
@@ -613,26 +624,26 @@ export class MockEngine implements EngineClient {
     });
   }
   async removeTrack(trackId: Id): Promise<StateSnapshot> {
-    return this.transaction("Eliminar pista", () => {
+    return this.transaction("Delete track", () => {
       const tracks = this.sequence.tracks;
       const idx = tracks.findIndex((t) => t.id === trackId);
-      if (idx < 0) throw new Error("pista no encontrada");
+      if (idx < 0) throw new Error("track not found");
       if (tracks.filter((t) => t.kind === tracks[idx].kind).length <= 1)
-        throw new Error("no se puede eliminar la última pista de su tipo");
+        throw new Error("cannot delete the last track of its type");
       tracks.splice(idx, 1);
     });
   }
   async renameTrack(trackId: Id, name: string): Promise<StateSnapshot> {
-    return this.transaction("Renombrar pista", () => {
+    return this.transaction("Rename track", () => {
       const track = this.sequence.tracks.find((t) => t.id === trackId);
-      if (!track) throw new Error("pista no encontrada");
+      if (!track) throw new Error("track not found");
       track.name = name;
     });
   }
   async setTrackVolume(trackId: Id, db: number): Promise<StateSnapshot> {
-    return this.transaction("Volumen de pista", () => {
+    return this.transaction("Track volume", () => {
       const track = this.sequence.tracks.find((t) => t.id === trackId);
-      if (!track) throw new Error("pista no encontrada");
+      if (!track) throw new Error("track not found");
       track.volume_db = db;
     });
   }
@@ -641,28 +652,28 @@ export class MockEngine implements EngineClient {
 const MOCK_GENERATORS: GeneratorDef[] = [
   {
     id: "core.solid",
-    name: "Rectángulo sólido",
+    name: "Solid rectangle",
     params: [
       { key: "color", label: "Color", type: "color", default: "#ff3355" },
-      { key: "width", label: "Ancho", type: "float", default: 640, min: 16, max: 4096 },
-      { key: "height", label: "Alto", type: "float", default: 360, min: 16, max: 4096 },
+      { key: "width", label: "Width", type: "float", default: 640, min: 16, max: 4096 },
+      { key: "height", label: "Height", type: "float", default: 360, min: 16, max: 4096 },
     ],
     source: "color",
   },
   {
     id: "core.gradient",
-    name: "Degradado",
+    name: "Gradient",
     params: [
       { key: "color_a", label: "Color A", type: "color", default: "#ffb224" },
       { key: "color_b", label: "Color B", type: "color", default: "#16130f" },
-      { key: "width", label: "Ancho", type: "float", default: 1920, min: 16, max: 4096 },
-      { key: "height", label: "Alto", type: "float", default: 1080, min: 16, max: 4096 },
+      { key: "width", label: "Width", type: "float", default: 1920, min: 16, max: 4096 },
+      { key: "height", label: "Height", type: "float", default: 1080, min: 16, max: 4096 },
     ],
     source: "gradients",
   },
 ];
 
-/** Campos comunes de un clip nuevo del mock. */
+/** Common fields for a new mock clip. */
 function emptyClipDefaults() {
   return {
     speed: 1,
@@ -676,7 +687,7 @@ function emptyClipDefaults() {
 }
 
 // ---------------------------------------------------------------------------
-// Proyecto demo (misma forma que ue-core)
+// Demo project (same shape as ue-core)
 // ---------------------------------------------------------------------------
 
 function makeAsset(
@@ -765,43 +776,43 @@ function track(kind: Track["kind"], name: string, clips: Clip[], volumeDb = 0): 
 }
 
 export function demoProject(): Project {
-  const cam = makeAsset("video", "media/intro_camara.mp4", 28);
-  const gameplay = makeAsset("video", "media/gameplay_fisicas.mp4", 84, {
+  const cam = makeAsset("video", "media/intro_camera.mp4", 28);
+  const gameplay = makeAsset("video", "media/gameplay_physics.mp4", 84, {
     fps: [60, 1],
     width: 2560,
     height: 1440,
     vcodec: "hevc",
   });
-  const screen = makeAsset("video", "media/pantalla_codigo.mp4", 152, {
+  const screen = makeAsset("video", "media/code_screen.mp4", 152, {
     audio_channels: 0,
     acodec: null,
   });
-  const voz = makeAsset("audio", "media/voz_off.wav", 58, { acodec: "pcm_s16le", audio_channels: 1 });
-  const musica = makeAsset("audio", "media/musica_lofi.mp3", 130, { acodec: "mp3" });
-  const logo = makeAsset("image", "media/logo_canal.png", 0);
+  const voice = makeAsset("audio", "media/voiceover.wav", 58, { acodec: "pcm_s16le", audio_channels: 1 });
+  const music = makeAsset("audio", "media/lofi_music.mp3", 130, { acodec: "mp3" });
+  const logo = makeAsset("image", "media/channel_logo.png", 0);
 
   const seq: Sequence = {
     id: newId("seq"),
-    name: "Principal",
+    name: "Main",
     resolution: [1920, 1080],
     fps: [30, 1],
     sample_rate: 48000,
     markers: [
-      { id: newId("mk"), t: 8.5 * S, name: "Demo código", color: "#6fa3b5" },
+      { id: newId("mk"), t: 8.5 * S, name: "Code demo", color: "#6fa3b5" },
       { id: newId("mk"), t: 22.5 * S, name: "Gameplay", color: "#8fb573" },
     ],
     tracks: [
       track(
         "audio",
         "A2",
-        [mediaClip(musica, 0, 46, 0, { audio: { gain_db: -14, fade_in_us: 1.5 * S, fade_out_us: 3 * S } })],
+        [mediaClip(music, 0, 46, 0, { audio: { gain_db: -14, fade_in_us: 1.5 * S, fade_out_us: 3 * S } })],
         -12,
       ),
       track("audio", "A1", [
-        mediaClip(voz, 0, 7.5, 0.8),
-        mediaClip(voz, 8.1, 16.4, 8.3),
-        mediaClip(voz, 17.0, 29.2, 16.7),
-        mediaClip(voz, 30.1, 41.0, 29.0),
+        mediaClip(voice, 0, 7.5, 0.8),
+        mediaClip(voice, 8.1, 16.4, 8.3),
+        mediaClip(voice, 17.0, 29.2, 16.7),
+        mediaClip(voice, 30.1, 41.0, 29.0),
       ]),
       track("video", "V1", [
         mediaClip(cam, 2, 10.5, 0),
@@ -810,57 +821,57 @@ export function demoProject(): Project {
         mediaClip(cam, 14, 22, 37),
       ]),
       track("video", "V2", [
-        textClip("CÓMO HICE UN MOTOR DE FÍSICAS", 1.2, 4.4),
-        textClip("suscríbete →", 30, 3.5),
+        textClip("HOW I BUILT A PHYSICS ENGINE", 1.2, 4.4),
+        textClip("subscribe →", 30, 3.5),
       ]),
     ],
   };
 
-  // transcripción demo de la voz en off (para el panel de Texto)
-  const frases = [
-    "hola a todos bienvenidos a un nuevo devlog",
-    "hoy vamos a construir un motor de físicas desde cero",
-    "eee bueno primero lo primero las colisiones",
+  // demo transcript of the voiceover (for the Text panel)
+  const phrases = [
+    "hey everyone welcome back to another devlog",
+    "today we're building a physics engine from scratch",
+    "um so first let's talk about collisions",
   ];
   const words: Project["transcripts"][number]["words"] = [];
   const segments: Project["transcripts"][number]["segments"] = [];
   let t = 300_000;
-  for (const frase of frases) {
+  for (const phrase of phrases) {
     const from = words.length;
-    for (const palabra of frase.split(" ")) {
-      const dur = 180_000 + palabra.length * 30_000;
-      words.push({ text: palabra, start_us: t, end_us: t + dur, confidence: 0.95, rejected: false });
+    for (const word of phrase.split(" ")) {
+      const dur = 180_000 + word.length * 30_000;
+      words.push({ text: word, start_us: t, end_us: t + dur, confidence: 0.95, rejected: false });
       t += dur + 60_000;
     }
     segments.push({
-      text: frase,
+      text: phrase,
       start_us: words[from].start_us,
       end_us: words[words.length - 1].end_us,
       word_range: [from, words.length],
       emotion: null,
       volume_rms: 0,
     });
-    t += 1_200_000; // pausa entre frases
+    t += 1_200_000; // pause between phrases
   }
-  const vozTranscript: Project["transcripts"][number] = {
+  const voiceTranscript: Project["transcripts"][number] = {
     id: newId("tr"),
-    asset_id: voz.id,
-    language: "es",
+    asset_id: voice.id,
+    language: "en",
     model: "base",
     words,
     segments,
     global_avg_volume: 0,
   };
-  voz.transcript = vozTranscript.id;
+  voice.transcript = voiceTranscript.id;
 
   return {
     schema_version: 1,
     id: newId("proj"),
-    name: "Devlog 12 — Motor de físicas",
+    name: "Devlog 12 — Physics engine",
     created_at: "",
     settings: { whisper_language: "auto", whisper_model: "base", autosave_secs: 60 },
-    assets: [cam, gameplay, screen, voz, musica, logo],
-    transcripts: [vozTranscript],
+    assets: [cam, gameplay, screen, voice, music, logo],
+    transcripts: [voiceTranscript],
     sequences: [seq],
     active_sequence: seq.id,
   };

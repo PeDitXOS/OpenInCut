@@ -10,7 +10,7 @@
 @import "@fontsource/jetbrains-mono/700.css";
 
 @theme {
-  /* Carbón cálido, cromáticamente silencioso: el material manda. */
+  /* Warm charcoal, chromatically quiet: the material rules. */
   --color-bg0: #131110;
   --color-bg1: #1a1816;
   --color-bg2: #221f1c;
@@ -20,10 +20,10 @@
   --color-ink: #e9e4db;
   --color-ink-dim: #a49b8f;
   --color-ink-faint: #6e675e;
-  /* Único acento: ámbar "luz de REC". Playhead, timecode, acción primaria. */
+  /* Single accent: amber "REC light". Playhead, timecode, primary action. */
   --color-accent: #ffb224;
   --color-accent-deep: #cc8a10;
-  /* Colores funcionales de clip, apagados a propósito. */
+  /* Functional clip colors, muted on purpose. */
   --color-clip-video: #43626e;
   --color-clip-video-hi: #6fa3b5;
   --color-clip-audio: #4a5c3d;
@@ -62,7 +62,7 @@ body,
   background: transparent;
 }
 
-/* Etiqueta de panel: versalitas pequeñas, tracking ancho. */
+/* Panel label: small caps, wide tracking. */
 .panel-eyebrow {
   font-family: var(--font-display);
   font-size: 10px;

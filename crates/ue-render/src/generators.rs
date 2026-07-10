@@ -1,10 +1,10 @@
-//! Generadores: clips de contenido procedural (sólidos, degradados, …).
-//! Mismo espíritu que los packs de efectos: un manifest declara los params y
-//! una plantilla de FUENTE lavfi; preview y export usan la misma cadena.
+//! Generators: procedural content clips (solids, gradients, …).
+//! Same spirit as the effect packs: a manifest declares the params and a
+//! lavfi SOURCE template; preview and export use the same chain.
 //!
-//! Placeholders reservados que rellena el renderer: `{d}` duración en s,
-//! `{fps}` frame rate. El resto sale de los params del manifest (los tamaños
-//! se redondean a entero par).
+//! Reserved placeholders the renderer fills in: `{d}` duration in s,
+//! `{fps}` frame rate. The rest comes from the manifest params (sizes are
+//! rounded to an even integer).
 
 use std::collections::BTreeMap;
 
@@ -18,13 +18,13 @@ pub struct GeneratorDef {
     pub name: String,
     #[serde(default)]
     pub params: Vec<ParamDef>,
-    /// Plantilla de fuente lavfi con {claves}.
+    /// lavfi source template with {keys}.
     pub source: String,
     #[serde(default)]
     pub notes: Option<String>,
 }
 
-/// Generadores core embebidos.
+/// Embedded core generators.
 pub fn core_generators() -> Vec<GeneratorDef> {
     const MANIFESTS: &[&str] = &[
         include_str!("../../../generators/core/solid/manifest.json"),
@@ -32,7 +32,7 @@ pub fn core_generators() -> Vec<GeneratorDef> {
     ];
     MANIFESTS
         .iter()
-        .map(|m| serde_json::from_str(m).expect("manifest core de generador válido"))
+        .map(|m| serde_json::from_str(m).expect("core generator manifest is valid"))
         .collect()
 }
 
@@ -40,8 +40,8 @@ pub fn find_generator<'a>(registry: &'a [GeneratorDef], id: &str) -> Option<&'a 
     registry.iter().find(|d| d.id == id)
 }
 
-/// Renderiza la fuente lavfi de un generador: sustituye params (con clamps y
-/// defaults del manifest), y los reservados {d}/{fps}.
+/// Renders a generator's lavfi source: substitutes params (with clamps and
+/// manifest defaults), and the reserved {d}/{fps}.
 pub fn render_generator(
     def: &GeneratorDef,
     params: &BTreeMap<String, ue_core::keyframe::Param>,
@@ -59,8 +59,8 @@ pub fn render_generator(
                     .map(|param| param.eval(0))
                     .unwrap_or(*default)
                     .clamp(*min, *max);
-                // los tamaños/coordenadas de fuentes lavfi van como enteros;
-                // par para no pelear con yuv420p
+                // sizes/coordinates of lavfi sources go as integers;
+                // even to avoid fighting with yuv420p
                 if p.key.contains("width") || p.key.contains("height") {
                     (((v.round() as i64) / 2) * 2).max(2).to_string()
                 } else {
@@ -70,7 +70,7 @@ pub fn render_generator(
             ParamKind::Color { default } => {
                 let hex = color_params.get(&p.key).map(String::as_str).unwrap_or(default);
                 crate::format_color(hex)
-                    .unwrap_or_else(|| crate::format_color(default).expect("default válido"))
+                    .unwrap_or_else(|| crate::format_color(default).expect("valid default"))
             }
         };
         out = out.replace(&placeholder, &value);
@@ -81,9 +81,9 @@ pub fn render_generator(
     out
 }
 
-/// Catálogo serializable para la UI.
+/// Serializable catalog for the UI.
 pub fn generators_catalog_json(registry: &[GeneratorDef]) -> serde_json::Value {
-    serde_json::to_value(registry).expect("registry serializable")
+    serde_json::to_value(registry).expect("registry is serializable")
 }
 
 #[cfg(test)]
@@ -100,7 +100,7 @@ mod tests {
         let mut colors = BTreeMap::new();
         colors.insert("color".to_string(), "#ff3355".to_string());
         let mut params = BTreeMap::new();
-        params.insert("width".to_string(), 401.0.into()); // impar → par
+        params.insert("width".to_string(), 401.0.into()); // odd → even
         params.insert("height".to_string(), 200.0.into());
         let src = render_generator(solid, &params, &colors, (30, 1), 2_000_000);
         assert!(src.contains("color=c=0xFF3355"), "{src}");
@@ -119,8 +119,8 @@ mod tests {
         let gens = core_generators();
         let solid = find_generator(&gens, "core.solid").unwrap();
         let mut colors = BTreeMap::new();
-        colors.insert("color".to_string(), "no-es-color".to_string());
+        colors.insert("color".to_string(), "not-a-color".to_string());
         let src = render_generator(solid, &BTreeMap::new(), &colors, (30, 1), 1_000_000);
-        assert!(src.contains("0x"), "cae al default del manifest: {src}");
+        assert!(src.contains("0x"), "falls back to the manifest default: {src}");
     }
 }

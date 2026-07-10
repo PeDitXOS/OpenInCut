@@ -1,22 +1,22 @@
-//! Tiempo en microsegundos enteros (`TimeUs`) y cuantización a frames.
+//! Time in integer microseconds (`TimeUs`) and frame quantization.
 
 pub type TimeUs = i64;
 pub const US_PER_SEC: i64 = 1_000_000;
 
-/// Redondea `t` al frame más cercano de una secuencia con fps racional `(num, den)`
-/// y devuelve el tiempo (en µs) de ese frame. Garantiza que los cortes caen en
-/// frontera de frame exacta.
+/// Rounds `t` to the nearest frame of a sequence with rational fps `(num, den)`
+/// and returns the time (in µs) of that frame. Guarantees that cuts land on an
+/// exact frame boundary.
 pub fn quantize_to_frame(t: TimeUs, fps: (u32, u32)) -> TimeUs {
     let frame = time_to_frame(t, fps);
     frame_to_time(frame, fps)
 }
 
-/// Frame más cercano a `t` (µs).
+/// Nearest frame to `t` (µs).
 pub fn time_to_frame(t: TimeUs, fps: (u32, u32)) -> i64 {
     let (num, den) = (fps.0 as i128, fps.1 as i128);
     let numer = t as i128 * num;
     let denom = den * US_PER_SEC as i128;
-    // división redondeada (t >= 0 en la práctica; soportamos negativos por robustez)
+    // rounded division (t >= 0 in practice; we support negatives for robustness)
     let half = denom / 2;
     let r = if numer >= 0 {
         (numer + half) / denom
@@ -26,7 +26,7 @@ pub fn time_to_frame(t: TimeUs, fps: (u32, u32)) -> i64 {
     r as i64
 }
 
-/// Tiempo (µs) del frame `frame`.
+/// Time (µs) of frame `frame`.
 pub fn frame_to_time(frame: i64, fps: (u32, u32)) -> TimeUs {
     let (num, den) = (fps.0 as i128, fps.1 as i128);
     let numer = frame as i128 * den * US_PER_SEC as i128;
@@ -39,7 +39,7 @@ pub fn frame_to_time(frame: i64, fps: (u32, u32)) -> TimeUs {
     r as TimeUs
 }
 
-/// Duración de un frame en µs (redondeada), útil para mínimos.
+/// Duration of a frame in µs (rounded), useful for minimums.
 pub fn frame_duration_us(fps: (u32, u32)) -> TimeUs {
     (frame_to_time(1, fps)).max(1)
 }
@@ -62,7 +62,7 @@ mod tests {
     fn quantize_snaps_to_nearest() {
         let fps = (30, 1);
         let frame_dur = frame_duration_us(fps); // 33_333
-        // apenas por debajo de la mitad → frame 0; por encima → frame 1
+        // just below half → frame 0; above → frame 1
         assert_eq!(quantize_to_frame(frame_dur / 2 - 10, fps), 0);
         assert_eq!(quantize_to_frame(frame_dur / 2 + 10, fps), frame_dur);
     }

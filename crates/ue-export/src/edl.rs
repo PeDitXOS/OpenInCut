@@ -1,5 +1,5 @@
-//! Aplana el timeline de video a una EDL: lista de tramos consecutivos donde
-//! cada tramo es o bien un rango de un asset (gana la pista superior) o negro.
+//! Flattens the video timeline into an EDL: a list of consecutive segments where
+//! each segment is either a range of an asset (the top track wins) or black.
 
 use std::collections::BTreeSet;
 
@@ -10,8 +10,8 @@ use crate::{ExportError, ExportResult};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Segment {
-    /// Fuente lavfi generada (rectángulo, degradado, …), ya renderizada con
-    /// su duración de ventana.
+    /// Generated lavfi source (rectangle, gradient, …), already rendered with
+    /// its window duration.
     Gen {
         source: String,
         duration: TimeUs,
@@ -21,19 +21,19 @@ pub enum Segment {
         asset_id: Id,
         src_in: TimeUs,
         src_out: TimeUs,
-        /// Velocidad del clip (rate stretch): salida = fuente / speed.
+        /// Clip speed (rate stretch): output = source / speed.
         speed: f64,
-        /// Cadena de efectos+transform del clip (ue-render), ya renderizada.
+        /// Clip effects+transform chain (ue-render), already rendered.
         vf: Option<String>,
-        /// Transición con el tramo anterior: (duración de salida µs, effect_id).
-        /// Los handles ya están extendidos en src_in/src_out por el post-pass.
+        /// Transition with the previous segment: (output duration µs, effect_id).
+        /// The handles are already extended in src_in/src_out by the post-pass.
         transition_in: Option<(TimeUs, String)>,
     },
     Black { duration: TimeUs },
 }
 
 impl Segment {
-    /// Duración de SALIDA del tramo (la fuente dividida por la velocidad).
+    /// OUTPUT duration of the segment (the source divided by the speed).
     pub fn duration(&self) -> TimeUs {
         match self {
             Segment::Source { src_in, src_out, speed, .. } => {
@@ -45,13 +45,13 @@ impl Segment {
     }
 }
 
-/// Construye la EDL con solo los packs core (atajo para tests y usos simples).
+/// Builds the EDL with only the core packs (shortcut for tests and simple uses).
 pub fn build_video_edl(project: &Project, sequence_id: Id) -> ExportResult<Vec<Segment>> {
     build_video_edl_with(project, sequence_id, &[])
 }
 
-/// Construye la EDL de video de la secuencia (packs core + `extra_packs`).
-/// Error si hay speed != 1 en un clip visible o si el timeline está vacío.
+/// Builds the sequence's video EDL (core packs + `extra_packs`).
+/// Errors if there is speed != 1 on a visible clip or if the timeline is empty.
 pub fn build_video_edl_with(
     project: &Project,
     sequence_id: Id,
@@ -61,7 +61,7 @@ pub fn build_video_edl_with(
         .sequence(sequence_id)
         .ok_or(ExportError::NoSequence(sequence_id))?;
 
-    // fronteras: inicios y finales de todos los clips media de pistas de video visibles
+    // boundaries: starts and ends of all media clips on visible video tracks
     let mut cuts: BTreeSet<TimeUs> = BTreeSet::new();
     cuts.insert(0);
     for track in seq.tracks.iter().filter(|t| t.kind == TrackKind::Video && !t.muted) {
@@ -77,7 +77,7 @@ pub fn build_video_edl_with(
         return Err(ExportError::EmptyTimeline);
     }
 
-    // por tramo, resolver el clip visible (pista superior gana)
+    // per segment, resolve the visible clip (top track wins)
     let registry = ue_render::merge_registries(ue_render::core_registry(), extra_packs.to_vec());
     let generators = ue_render::core_generators();
     let mut segments: Vec<Segment> = vec![];
@@ -121,7 +121,7 @@ pub fn build_video_edl_with(
                             *src_in + ((a - clip.start) as f64 * clip.speed).round() as TimeUs;
                         let s_out =
                             *src_in + ((b - clip.start) as f64 * clip.speed).round() as TimeUs;
-                        // la transición pertenece al PRIMER tramo del clip
+                        // the transition belongs to the FIRST segment of the clip
                         let transition_in = if a == clip.start {
                             clip.transition_in
                                 .as_ref()
@@ -148,7 +148,7 @@ pub fn build_video_edl_with(
         segments.push(found.unwrap_or(Segment::Black { duration: b - a }));
     }
 
-    // recortar negro final (después del último tramo con contenido)
+    // trim trailing black (after the last segment with content)
     while matches!(segments.last(), Some(Segment::Black { .. })) {
         segments.pop();
     }
@@ -156,8 +156,8 @@ pub fn build_video_edl_with(
         return Err(ExportError::EmptyTimeline);
     }
 
-    // fusionar tramos contiguos del mismo asset con fuente continua, mismos
-    // efectos y sin transición de por medio
+    // merge contiguous segments of the same asset with a continuous source, the same
+    // effects and no transition in between
     let mut merged: Vec<Segment> = vec![];
     for seg in segments {
         match (merged.last_mut(), &seg) {
@@ -185,8 +185,8 @@ pub fn build_video_edl_with(
     Ok(merged)
 }
 
-/// Duración total de SALIDA de la EDL en µs (los crossfades solapan material,
-/// así que restan su duración).
+/// Total OUTPUT duration of the EDL in µs (crossfades overlap material,
+/// so they subtract their duration).
 pub fn edl_duration(segments: &[Segment]) -> TimeUs {
     let raw: TimeUs = segments.iter().map(|s| s.duration()).sum();
     let overlapped: TimeUs = segments
@@ -199,11 +199,11 @@ pub fn edl_duration(segments: &[Segment]) -> TimeUs {
     raw - overlapped
 }
 
-/// Post-pass de transiciones: valida que haya un tramo Source contiguo antes,
-/// extiende los handles (mitad a cada lado, limitado por el material del
-/// archivo) y reduce o elimina la transición si no hay material suficiente.
+/// Transition post-pass: validates that there is a contiguous Source segment before,
+/// extends the handles (half on each side, limited by the file's
+/// material) and reduces or removes the transition if there is not enough material.
 fn apply_transition_handles(project: &Project, segments: &mut [Segment]) {
-    const MIN_TRANSITION: TimeUs = 40_000; // por debajo de ~1 frame no vale la pena
+    const MIN_TRANSITION: TimeUs = 40_000; // below ~1 frame it's not worth it
     for i in 0..segments.len() {
         let Segment::Source {
             transition_in: Some((want, _)),
@@ -215,14 +215,14 @@ fn apply_transition_handles(project: &Project, segments: &mut [Segment]) {
             continue;
         };
         let (want, cur_in, cur_speed) = (*want, *cur_in, *cur_speed);
-        // sin tramo Source justo antes → sin transición
+        // no Source segment right before → no transition
         if i == 0 {
             if let Segment::Source { transition_in, .. } = &mut segments[i] {
                 *transition_in = None;
             }
             continue;
         }
-        // disponibilidad en TIEMPO DE SALIDA (asset / speed de cada lado)
+        // availability in OUTPUT TIME (asset / speed on each side)
         let prev = match &segments[i - 1] {
             Segment::Source { asset_id, src_out, speed, .. } => {
                 let dur = project.asset(*asset_id).map(|a| a.probe.duration_us).unwrap_or(0);

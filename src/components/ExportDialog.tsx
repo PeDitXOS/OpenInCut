@@ -17,10 +17,10 @@ interface Preset {
 const PRESETS: Preset[] = [
   { name: "YouTube 1080p", hint: "H.264 · CRF 18", maxHeight: 1080, crf: 18, preset: "veryfast", audioBitrateK: 256, format: "mp4" },
   { name: "YouTube 4K", hint: "H.264 · CRF 17", maxHeight: 2160, crf: 17, preset: "veryfast", audioBitrateK: 320, format: "mp4" },
-  { name: "Máxima calidad", hint: "nativa · CRF 15", maxHeight: null, crf: 15, preset: "medium", audioBitrateK: 320, format: "mp4" },
-  { name: "Borrador rápido", hint: "720p · CRF 26", maxHeight: 720, crf: 26, preset: "ultrafast", audioBitrateK: 128, format: "mp4" },
-  { name: "Solo audio", hint: "AAC .m4a", maxHeight: null, crf: 18, preset: "veryfast", audioBitrateK: 256, format: "m4a" },
-  { name: "GIF", hint: "480px · 12 fps · sin audio", maxHeight: null, crf: 18, preset: "veryfast", audioBitrateK: 128, format: "gif" },
+  { name: "Maximum quality", hint: "native · CRF 15", maxHeight: null, crf: 15, preset: "medium", audioBitrateK: 320, format: "mp4" },
+  { name: "Fast draft", hint: "720p · CRF 26", maxHeight: 720, crf: 26, preset: "ultrafast", audioBitrateK: 128, format: "mp4" },
+  { name: "Audio only", hint: "AAC .m4a", maxHeight: null, crf: 18, preset: "veryfast", audioBitrateK: 256, format: "m4a" },
+  { name: "GIF", hint: "480px · 12 fps · no audio", maxHeight: null, crf: 18, preset: "veryfast", audioBitrateK: 128, format: "gif" },
 ];
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -84,7 +84,7 @@ export function ExportDialog() {
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="mb-3 font-[var(--font-display)] text-[15px] font-semibold text-ink">
-          Exportar video
+          Export video
         </h2>
 
         <div className="mb-3 grid grid-cols-2 gap-1.5">
@@ -105,7 +105,7 @@ export function ExportDialog() {
         </div>
 
         <div className="flex flex-col gap-2 rounded-lg border border-line-soft bg-bg2/40 p-2.5">
-          <Field label="Resolución">
+          <Field label="Resolution">
             <select
               className={selectCls}
               value={maxHeight ?? 0}
@@ -114,14 +114,14 @@ export function ExportDialog() {
                 setPresetIdx(-1);
               }}
             >
-              <option value={0}>Nativa (secuencia)</option>
-              <option value={2160}>Hasta 2160p (4K)</option>
-              <option value={1440}>Hasta 1440p</option>
-              <option value={1080}>Hasta 1080p</option>
-              <option value={720}>Hasta 720p</option>
+              <option value={0}>Native (sequence)</option>
+              <option value={2160}>Up to 2160p (4K)</option>
+              <option value={1440}>Up to 1440p</option>
+              <option value={1080}>Up to 1080p</option>
+              <option value={720}>Up to 720p</option>
             </select>
           </Field>
-          <Field label={`Calidad CRF ${crf}`}>
+          <Field label={`Quality CRF ${crf}`}>
             <input
               type="range"
               className="h-1 min-w-0 flex-1 cursor-pointer appearance-none rounded-full bg-bg3 accent-(--color-accent)"
@@ -135,10 +135,10 @@ export function ExportDialog() {
               }}
             />
             <span className="w-16 shrink-0 text-right text-[10.5px] text-ink-faint">
-              {crf <= 17 ? "más calidad" : crf >= 24 ? "más ligero" : "equilibrado"}
+              {crf <= 17 ? "higher quality" : crf >= 24 ? "lighter" : "balanced"}
             </span>
           </Field>
-          <Field label="Códec">
+          <Field label="Codec">
             <select
               className={selectCls}
               value={codecPreset}
@@ -147,10 +147,10 @@ export function ExportDialog() {
                 setPresetIdx(-1);
               }}
             >
-              <option value="ultrafast">Ultra rápido</option>
-              <option value="veryfast">Rápido</option>
-              <option value="medium">Medio</option>
-              <option value="slow">Lento (mejor compresión)</option>
+              <option value="ultrafast">Ultra fast</option>
+              <option value="veryfast">Fast</option>
+              <option value="medium">Medium</option>
+              <option value="slow">Slow (better compression)</option>
             </select>
           </Field>
           <Field label="Audio">
@@ -176,12 +176,12 @@ export function ExportDialog() {
               checked={loudnorm}
               onChange={(e) => setLoudnorm(e.target.checked)}
             />
-            Normalizar sonoridad (R128, −14 LUFS)
+            Normalize loudness (R128, −14 LUFS)
           </label>
         </div>
 
         <div className="mt-2.5 flex items-center gap-3 text-[12px] text-ink">
-          <span className="w-24 shrink-0 text-[11px] text-ink-dim">Rango</span>
+          <span className="w-24 shrink-0 text-[11px] text-ink-dim">Range</span>
           <label className="flex cursor-pointer items-center gap-1.5">
             <input
               type="radio"
@@ -189,11 +189,11 @@ export function ExportDialog() {
               checked={!useRange}
               onChange={() => setUseRange(false)}
             />
-            Todo
+            All
           </label>
           <label
             className={`flex items-center gap-1.5 ${hasRange ? "cursor-pointer" : "opacity-40"}`}
-            title={hasRange ? "" : "Marca el rango con las teclas I y O sobre la línea de tiempo"}
+            title={hasRange ? "" : "Mark the range with the I and O keys on the timeline"}
           >
             <input
               type="radio"
@@ -202,7 +202,7 @@ export function ExportDialog() {
               checked={useRange && hasRange}
               onChange={() => setUseRange(true)}
             />
-            Rango I–O
+            Range I–O
             {hasRange && (
               <span className="font-[var(--font-mono)] text-[11px] text-ink-faint">
                 {usToDuration(rangeInUs)}–{usToDuration(rangeOutUs)}
@@ -216,13 +216,13 @@ export function ExportDialog() {
             className="focus-ring rounded-md border border-line px-3 py-1.5 text-[12px] text-ink hover:bg-bg2"
             onClick={() => setShow(false)}
           >
-            Cancelar
+            Cancel
           </button>
           <button
             className="focus-ring rounded-md bg-(--color-accent) px-3 py-1.5 text-[12px] font-semibold text-black hover:brightness-110"
             onClick={() => void exportVideo(settings)}
           >
-            Exportar…
+            Export…
           </button>
         </div>
       </div>

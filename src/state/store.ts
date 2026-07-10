@@ -32,7 +32,7 @@ export interface UiState {
   selection: Id[];
   playheadUs: TimeUs;
   playing: boolean;
-  /** true = la posición la dicta el reloj de audio del backend */
+  /** true = the position is dictated by the backend audio clock */
   engineClock: boolean;
   viewStartUs: TimeUs;
   pxPerSec: number;
@@ -42,7 +42,7 @@ export interface UiState {
   seek: (us: TimeUs) => void;
   select: (ids: Id[], additive?: boolean) => void;
   togglePlay: () => void;
-  /** Velocidad de shuttle JKL actual (1 = normal, negativa = reversa). */
+  /** Current JKL shuttle rate (1 = normal, negative = reverse). */
   shuttleRate: number;
   shuttle: (direction: -1 | 0 | 1) => void;
   setView: (viewStartUs: TimeUs, pxPerSec: number) => void;
@@ -55,7 +55,7 @@ export interface UiState {
   importMedia: () => Promise<void>;
   addClipFromAsset: (assetId: Id) => Promise<void>;
   exporting: boolean;
-  /** Rango de trabajo I-O en µs (para export por rango). */
+  /** I-O working range in µs (for range export). */
   rangeInUs: number | null;
   rangeOutUs: number | null;
   setRangeIn: (us: number | null) => void;
@@ -71,10 +71,10 @@ export interface UiState {
   relinkAsset: (assetId: Id) => Promise<void>;
   mcpPort: number | null;
   mcpToken: string | null;
-  /** RMS 0..1 por canal del último buffer (solo motor tauri). */
+  /** RMS 0..1 per channel from the last buffer (tauri engine only). */
   meterL: number;
   meterR: number;
-  /** Se incrementa cuando llegan waveforms/miniaturas nuevas (redibujar). */
+  /** Increments when new waveforms/thumbnails arrive (redraw). */
   visualsBump: number;
   setAiSettings: (lang: string, model: string) => Promise<void>;
   fonts: [string, string][];
@@ -95,7 +95,7 @@ export interface UiState {
   addTextClip: () => Promise<void>;
   removeSilences: (
     clipId: Id,
-    mode: "delete" | "speedup",
+    mode: "delete" | "speedup" | "split",
     params?: { thresholdDb?: number; minSilenceMs?: number; padMs?: number },
   ) => Promise<void>;
   setClipSpeed: (clipId: Id, speed: number) => Promise<void>;
@@ -115,6 +115,9 @@ export interface UiState {
   ) => Promise<void>;
   toggleTrack: (trackId: Id, prop: "muted" | "solo" | "locked") => Promise<void>;
   addTrack: (kind: "video" | "audio") => Promise<void>;
+  removeSequence: (sequenceId: Id) => Promise<void>;
+  /** Assets currently being transcribed (background jobs). */
+  transcribingIds: Id[];
   removeTrack: (trackId: Id) => Promise<void>;
   renameTrack: (trackId: Id, name: string) => Promise<void>;
   setTrackVolume: (trackId: Id, db: number) => Promise<void>;
@@ -122,11 +125,11 @@ export interface UiState {
   redo: () => Promise<void>;
 }
 
-/** El proyecto vacío inicial se sustituye en init() con el estado del engine. */
+/** The initial empty project is replaced in init() with the engine state. */
 const emptyProject: Project = {
   schema_version: 1,
   id: "pending",
-  name: "Cargando…",
+  name: "Loading…",
   created_at: "",
   settings: { whisper_language: "auto", whisper_model: "base", autosave_secs: 60 },
   assets: [],
@@ -134,7 +137,7 @@ const emptyProject: Project = {
   sequences: [
     {
       id: "seq_pending",
-      name: "Principal",
+      name: "Main",
       resolution: [1920, 1080],
       fps: [30, 1],
       sample_rate: 48000,
@@ -147,7 +150,7 @@ const emptyProject: Project = {
 
 export const useStore = create<UiState>((set, get) => {
   const applySnapshot = (snap: StateSnapshot, label?: string) =>
-    set({
+    set((st) => ({
       project: snap.project,
       version: snap.version,
       dirty: snap.dirty,
@@ -155,9 +158,13 @@ export const useStore = create<UiState>((set, get) => {
       canRedo: snap.can_redo,
       lastActionLabel: label,
       ready: true,
-    });
+      // a finished transcription shows up in the snapshot
+      transcribingIds: st.transcribingIds.filter(
+        (id) => !snap.project.transcripts.some((d) => d.asset_id === id),
+      ),
+    }));
 
-  /** Ejecuta una op del engine; los errores van a la barra de estado. */
+  /** Runs an engine op; errors go to the status bar. */
   const run = async (label: string, op: () => Promise<StateSnapshot>) => {
     try {
       applySnapshot(await op(), label);
@@ -183,23 +190,23 @@ export const useStore = create<UiState>((set, get) => {
 
     init: async () => {
       applySnapshot(await engine.getState());
-      // ¿quedó una copia de recuperación de una sesión anterior?
+      // is there a recovery copy left from a previous session?
       try {
         const autosave = await engine.checkRecovery();
         if (autosave) {
-          if (window.confirm("Hay una copia de recuperación más reciente que el proyecto. ¿Cargarla?")) {
+          if (window.confirm("There is a recovery copy newer than the project. Load it?")) {
             applySnapshot(
               await engine.recoverProject(autosave, null),
-              "Proyecto recuperado del autoguardado",
+              "Project recovered from autosave",
             );
           } else {
             await engine.discardRecovery();
           }
         }
       } catch {
-        /* sin recuperación */
+        /* no recovery */
       }
-      // refrescar cuando el backend termina jobs (conformado, etc.)
+      // refresh when the backend finishes jobs (conform, etc.)
       void engine.onStateChanged(async () => {
         applySnapshot(await engine.getState());
       });
@@ -207,18 +214,18 @@ export const useStore = create<UiState>((set, get) => {
       try {
         set({ effectsCatalog: await engine.getEffectsCatalog() });
       } catch {
-        /* sin catálogo: el panel de efectos queda vacío */
+        /* no catalog: the effects panel stays empty */
       }
       try {
         set({ generatorsCatalog: await engine.getGenerators() });
       } catch {
-        /* sin generadores */
+        /* no generators */
       }
       try {
         const status = await engine.mcpStatus();
         if (status) set({ mcpPort: status[0], mcpToken: status[1] });
       } catch {
-        /* sin MCP */
+        /* no MCP */
       }
       try {
         set({
@@ -226,14 +233,14 @@ export const useStore = create<UiState>((set, get) => {
           textTemplates: await engine.listTextTemplates(),
         });
       } catch {
-        /* sin fuentes/plantillas */
+        /* no fonts/templates */
       }
     },
 
     seek: (us) => {
-      const clamped = Math.max(0, us);
+      const clamped = Math.max(0, Math.round(us));
       set({ playheadUs: clamped });
-      // mantener el reloj de audio alineado si está sonando
+      // keep the audio clock aligned if it is playing
       if (engine.kind === "tauri" && get().playing) {
         void engine.playbackSeek(clamped).catch(() => {});
       }
@@ -250,7 +257,7 @@ export const useStore = create<UiState>((set, get) => {
         if (s.playing) s.togglePlay();
         return;
       }
-      // repetir la tecla duplica la velocidad: 1→2→4→8 (o arranca en 1)
+      // repeating the key doubles the rate: 1→2→4→8 (or starts at 1)
       const prev = s.playing ? s.shuttleRate : 0;
       const sameDir = Math.sign(prev) === direction;
       const next = sameDir ? Math.min(Math.abs(prev) * 2, 8) * direction : direction;
@@ -277,11 +284,11 @@ export const useStore = create<UiState>((set, get) => {
           .playbackPlay(s.playheadUs)
           .then(() => set({ playing: true, engineClock: true }))
           .catch((e) => {
-            // sin dispositivo de audio → reloj local silencioso
+            // no audio device → silent local clock
             set({
               playing: true,
               engineClock: false,
-              lastActionLabel: `⚠ audio no disponible: ${e instanceof Error ? e.message : e}`,
+              lastActionLabel: `⚠ audio unavailable: ${e instanceof Error ? e.message : e}`,
             });
           });
       } else {
@@ -311,9 +318,9 @@ export const useStore = create<UiState>((set, get) => {
       for (const c of candidates) {
         try {
           const snap = await engine.splitClip(c.id, playheadUs);
-          applySnapshot(snap, "Dividir clip");
+          applySnapshot(snap, "Split clip");
         } catch {
-          /* clip no divisible en ese punto */
+          /* clip not splittable at that point */
         }
       }
       set({ selection: newSelection });
@@ -322,35 +329,35 @@ export const useStore = create<UiState>((set, get) => {
     deleteSelection: async (ripple) => {
       const { selection } = get();
       if (!selection.length) return;
-      await run(ripple ? "Eliminar (ripple)" : "Eliminar", () =>
+      await run(ripple ? "Delete (ripple)" : "Delete", () =>
         engine.deleteClips(selection, ripple),
       );
       set({ selection: [] });
     },
 
     moveClip: (clipId, toTrackId, toStartUs) =>
-      run("Mover clip", () => engine.moveClip(clipId, toTrackId, toStartUs, false)),
+      run("Move clip", () => engine.moveClip(clipId, toTrackId, toStartUs, false)),
 
     trimClip: (clipId, left, newEdgeUs) =>
-      run("Recortar clip", () => engine.trimClip(clipId, left, newEdgeUs)),
+      run("Trim clip", () => engine.trimClip(clipId, left, newEdgeUs)),
 
     setClipAudio: (clipId, audio) =>
-      run("Editar audio", () => engine.setClipAudio(clipId, audio)),
+      run("Edit audio", () => engine.setClipAudio(clipId, audio)),
 
     setClipTransform: (clipId, transform) =>
-      run("Editar transformación", () => engine.setClipTransform(clipId, transform)),
+      run("Edit transform", () => engine.setClipTransform(clipId, transform)),
 
     importMedia: async () => {
       const paths = await engine.pickMediaFiles();
       if (!paths) {
-        set({ lastActionLabel: "⚠ Importar requiere la app de escritorio (npx tauri dev)" });
+        set({ lastActionLabel: "⚠ Import requires the desktop app (npx tauri dev)" });
         return;
       }
-      await run(`Importar ${paths.length} archivo(s)`, () => engine.importMedia(paths));
+      await run(`Import ${paths.length} file(s)`, () => engine.importMedia(paths));
     },
 
     addClipFromAsset: (assetId) =>
-      run("Añadir clip", () => engine.addClip(assetId, get().playheadUs)),
+      run("Add clip", () => engine.addClip(assetId, get().playheadUs)),
 
     exporting: false,
     rangeInUs: null,
@@ -367,17 +374,17 @@ export const useStore = create<UiState>((set, get) => {
         const path = await engine.pickSavePath(name, ext);
         if (!path) {
           if (engine.kind === "mock")
-            set({ lastActionLabel: "⚠ Exportar requiere la app de escritorio (npx tauri dev)" });
+            set({ lastActionLabel: "⚠ Export requires the desktop app (npx tauri dev)" });
           return;
         }
         set({
           exporting: true,
           exportProgress: 0,
           showExportDialog: false,
-          lastActionLabel: "Exportando…",
+          lastActionLabel: "Exporting…",
         });
         const written = await engine.exportVideo(path, settings);
-        set({ exporting: false, exportProgress: null, lastActionLabel: `Exportado a ${written}` });
+        set({ exporting: false, exportProgress: null, lastActionLabel: `Exported to ${written}` });
       } catch (e) {
         set({
           exporting: false,
@@ -397,7 +404,7 @@ export const useStore = create<UiState>((set, get) => {
       try {
         await engine.cancelExport();
       } catch {
-        /* sin export en curso */
+        /* no export in progress */
       }
     },
 
@@ -407,13 +414,13 @@ export const useStore = create<UiState>((set, get) => {
     meterR: 0,
     visualsBump: 0,
     setAiSettings: (lang, model) =>
-      run("Ajustes de IA", () => engine.setProjectSettings(lang, model)),
+      run("AI settings", () => engine.setProjectSettings(lang, model)),
     fonts: [],
     textTemplates: {},
     saveTextTemplate: async (name, style) => {
       try {
         set({ textTemplates: await engine.saveTextTemplate(name, style) });
-        set({ lastActionLabel: `Plantilla «${name}» guardada` });
+        set({ lastActionLabel: `Template "${name}" saved` });
       } catch (e) {
         set({ lastActionLabel: `⚠ ${e instanceof Error ? e.message : String(e)}` });
       }
@@ -421,19 +428,19 @@ export const useStore = create<UiState>((set, get) => {
     effectsCatalog: [],
     generatorsCatalog: [],
     addGeneratorClip: (generatorId) =>
-      run("Añadir generador", () => engine.addGeneratorClip(generatorId, get().playheadUs)),
+      run("Add generator", () => engine.addGeneratorClip(generatorId, get().playheadUs)),
     setClipGenerator: (clipId, generatorId, params, colorParams) =>
-      run("Editar generador", () =>
+      run("Edit generator", () =>
         engine.setClipGenerator(clipId, generatorId, params, colorParams),
       ),
     setClipEffects: (clipId, effects) =>
-      run("Editar efectos", () => engine.setClipEffects(clipId, effects)),
+      run("Edit effects", () => engine.setClipEffects(clipId, effects)),
     setClipTransition: (clipId, transition) =>
-      run("Editar transición", () => engine.setClipTransition(clipId, transition)),
+      run("Edit transition", () => engine.setClipTransition(clipId, transition)),
 
     moveTimelineRange: async (fromUs, toUs, destUs) => {
       const seqId = activeSequence(get().project).id;
-      await run("Mover rango por texto", () =>
+      await run("Move range by text", () =>
         engine.moveRange(seqId, fromUs, toUs, destUs),
       );
     },
@@ -441,52 +448,56 @@ export const useStore = create<UiState>((set, get) => {
     cutTimelineRanges: async (ranges) => {
       if (!ranges.length) return;
       const seqId = activeSequence(get().project).id;
-      await run(`Cortar ${ranges.length} rango(s) por texto`, () =>
+      await run(`Cut ${ranges.length} range(s) by text`, () =>
         engine.cutRanges(seqId, ranges, true),
       );
     },
 
-    generateVertical: () => run("Generar vertical", () => engine.generateVertical()),
+    generateVertical: () => run("Generate vertical", () => engine.generateVertical()),
 
     addAvatarClip: async (clipId) => {
       const path = await engine.pickAvatarConfig();
       if (!path) {
         if (engine.kind === "mock")
-          set({ lastActionLabel: "⚠ El avatar requiere la app de escritorio (npx tauri dev)" });
+          set({ lastActionLabel: "⚠ The avatar requires the desktop app (npx tauri dev)" });
         return;
       }
-      await run("Añadir avatar", () => engine.addAvatarClip(clipId, path));
+      await run("Add avatar", () => engine.addAvatarClip(clipId, path));
     },
     setActiveSequence: (sequenceId) =>
-      run("Cambiar secuencia", () => engine.setActiveSequence(sequenceId)),
+      run("Change sequence", () => engine.setActiveSequence(sequenceId)),
 
     addSubtitlesClip: (clipId) =>
-      run("Subtítulos automáticos", () => engine.addSubtitlesClip(clipId)),
+      run("Auto subtitles", () => engine.addSubtitlesClip(clipId)),
 
     transcribeAsset: async (assetId) => {
       try {
+        set((st) => ({ transcribingIds: [...st.transcribingIds, assetId] }));
         await engine.transcribeAsset(assetId);
         set({
           lastActionLabel:
-            "Transcribiendo en segundo plano… (descarga el modelo la primera vez)",
+            "Transcribing in the background… (downloads the model the first time)",
         });
       } catch (e) {
-        set({ lastActionLabel: `⚠ ${e instanceof Error ? e.message : String(e)}` });
+        set((st) => ({
+          transcribingIds: st.transcribingIds.filter((id) => id !== assetId),
+          lastActionLabel: `⚠ ${e instanceof Error ? e.message : String(e)}`,
+        }));
       }
     },
 
     removeSilences: async (clipId, mode, params) => {
       try {
-        set({ lastActionLabel: "Analizando silencios…" });
+        set({ lastActionLabel: "Analyzing silences…" });
         const r = await engine.removeSilences(clipId, mode, params);
         const secs = (r.removed_us / 1e6).toFixed(1);
         applySnapshot(
           r.snapshot,
           r.removed > 0
             ? mode === "speedup"
-              ? `Acelerados ${r.removed} silencios 4× (${secs} s)`
-              : `Eliminados ${r.removed} silencios (${secs} s)`
-            : "No se encontraron silencios",
+              ? `Sped up ${r.removed} silences 4× (${secs} s)`
+              : `Removed ${r.removed} silences (${secs} s)`
+            : "No silences found",
         );
       } catch (e) {
         set({ lastActionLabel: `⚠ ${e instanceof Error ? e.message : String(e)}` });
@@ -494,16 +505,16 @@ export const useStore = create<UiState>((set, get) => {
     },
 
     setClipSpeed: (clipId, speed) =>
-      run(`Velocidad ${speed}×`, () => engine.setClipSpeed(clipId, speed)),
-    unlinkClip: (clipId) => run("Desenlazar", () => engine.unlinkClip(clipId)),
+      run(`Speed ${speed}×`, () => engine.setClipSpeed(clipId, speed)),
+    unlinkClip: (clipId) => run("Unlink", () => engine.unlinkClip(clipId)),
 
     addTextClip: async () => {
-      await run("Añadir título", () => engine.addTextClip("Título", get().playheadUs));
+      await run("Add title", () => engine.addTextClip("Title", get().playheadUs));
     },
     setClipText: (clipId, content, style) =>
-      run("Editar texto", () => engine.setClipText(clipId, content, style)),
+      run("Edit text", () => engine.setClipText(clipId, content, style)),
     setSubtitlesProps: (clipId, style, mode) =>
-      run("Editar subtítulos", () => engine.setSubtitlesProps(clipId, style, mode)),
+      run("Edit subtitles", () => engine.setSubtitlesProps(clipId, style, mode)),
 
     reloadEffectPacks: async () => {
       try {
@@ -511,8 +522,8 @@ export const useStore = create<UiState>((set, get) => {
         set({
           effectsCatalog: r.catalog,
           lastActionLabel: r.errors.length
-            ? `⚠ packs con errores: ${r.errors.join("; ")}`
-            : `Packs recargados (${r.catalog.length})${r.dir ? ` desde ${r.dir}` : ""}`,
+            ? `⚠ packs with errors: ${r.errors.join("; ")}`
+            : `Packs reloaded (${r.catalog.length})${r.dir ? ` from ${r.dir}` : ""}`,
         });
       } catch (e) {
         set({ lastActionLabel: `⚠ ${e instanceof Error ? e.message : String(e)}` });
@@ -522,14 +533,17 @@ export const useStore = create<UiState>((set, get) => {
     toggleTrack: async (trackId, prop) => {
       const track = activeSequence(get().project).tracks.find((t) => t.id === trackId);
       if (!track) return;
-      await run("Pista", () => engine.setTrackProp(trackId, prop, !track[prop]));
+      await run("Track", () => engine.setTrackProp(trackId, prop, !track[prop]));
     },
-    addTrack: (kind) => run("Añadir pista", () => engine.addTrack(kind)),
-    removeTrack: (trackId) => run("Eliminar pista", () => engine.removeTrack(trackId)),
+    addTrack: (kind) => run("Add track", () => engine.addTrack(kind)),
+    removeSequence: (sequenceId) =>
+      run("Delete sequence", () => engine.removeSequence(sequenceId)),
+    transcribingIds: [],
+    removeTrack: (trackId) => run("Delete track", () => engine.removeTrack(trackId)),
     renameTrack: (trackId, name) =>
-      run("Renombrar pista", () => engine.renameTrack(trackId, name)),
+      run("Rename track", () => engine.renameTrack(trackId, name)),
     setTrackVolume: (trackId, db) =>
-      run("Volumen de pista", () => engine.setTrackVolume(trackId, db)),
+      run("Track volume", () => engine.setTrackVolume(trackId, db)),
 
     saveProject: async () => {
       try {
@@ -538,13 +552,13 @@ export const useStore = create<UiState>((set, get) => {
           written = await engine.saveProject(null);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
-          if (!msg.includes("no hay ruta")) throw e;
-          const name = `${get().project.name.replace(/[^\p{L}\p{N} _-]/gu, "").trim() || "proyecto"}.uep`;
+          if (!msg.includes("no save path")) throw e;
+          const name = `${get().project.name.replace(/[^\p{L}\p{N} _-]/gu, "").trim() || "project"}.uep`;
           const path = await engine.pickProjectSavePath(name);
           if (!path) return;
           written = await engine.saveProject(path);
         }
-        applySnapshot(await engine.getState(), `Guardado en ${written}`);
+        applySnapshot(await engine.getState(), `Saved to ${written}`);
       } catch (e) {
         set({ lastActionLabel: `⚠ ${e instanceof Error ? e.message : String(e)}` });
       }
@@ -552,12 +566,12 @@ export const useStore = create<UiState>((set, get) => {
 
     newProject: async () => {
       const s = get();
-      if (s.dirty && !window.confirm("Hay cambios sin guardar. ¿Descartarlos y crear un proyecto nuevo?"))
+      if (s.dirty && !window.confirm("There are unsaved changes. Discard them and create a new project?"))
         return;
       try {
-        const snap = await engine.newProject("Proyecto sin título");
+        const snap = await engine.newProject("Untitled project");
         set({ selection: [], playheadUs: 0, playing: false, viewStartUs: 0 });
-        applySnapshot(snap, "Proyecto nuevo");
+        applySnapshot(snap, "New project");
       } catch (e) {
         set({ lastActionLabel: `⚠ ${e instanceof Error ? e.message : String(e)}` });
       }
@@ -566,7 +580,7 @@ export const useStore = create<UiState>((set, get) => {
     relinkAsset: async (assetId) => {
       const paths = await engine.pickMediaFiles();
       if (!paths?.length) return;
-      await run("Relocalizar medio", () => engine.relinkAsset(assetId, paths[0]));
+      await run("Relink media", () => engine.relinkAsset(assetId, paths[0]));
     },
 
     openProject: async () => {
@@ -574,12 +588,12 @@ export const useStore = create<UiState>((set, get) => {
         const path = await engine.pickProjectOpenPath();
         if (!path) {
           if (engine.kind === "mock")
-            set({ lastActionLabel: "⚠ Abrir requiere la app de escritorio (npx tauri dev)" });
+            set({ lastActionLabel: "⚠ Open requires the desktop app (npx tauri dev)" });
           return;
         }
         const snap = await engine.openProject(path);
         set({ selection: [], playheadUs: 0, playing: false });
-        applySnapshot(snap, `Abierto ${path}`);
+        applySnapshot(snap, `Opened ${path}`);
       } catch (e) {
         set({ lastActionLabel: `⚠ ${e instanceof Error ? e.message : String(e)}` });
       }
@@ -587,12 +601,12 @@ export const useStore = create<UiState>((set, get) => {
 
     undo: async () => {
       const snap = await engine.undo();
-      applySnapshot(snap, "Deshacer");
+      applySnapshot(snap, "Undo");
     },
 
     redo: async () => {
       const snap = await engine.redo();
-      applySnapshot(snap, "Rehacer");
+      applySnapshot(snap, "Redo");
     },
   };
 });

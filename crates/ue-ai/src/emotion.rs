@@ -1,15 +1,15 @@
-//! Análisis de emociones por segmento para el avatar (PLAN §7.E.1).
-//! Port de avatar_video_generation.py del Youtubers-toolkit:
-//! - Volumen RMS por segmento (sobre el WAV conformado).
-//! - Clasificación: heurística offline por energía/velocidad, u opcionalmente
-//!   una API OpenAI-compatible (mismo prompt del toolkit) vía curl.
+//! Per-segment emotion analysis for the avatar (PLAN §7.E.1).
+//! Port of Youtubers-toolkit's avatar_video_generation.py:
+//! - RMS volume per segment (over the conformed WAV).
+//! - Classification: offline heuristic by energy/speed, or optionally
+//!   an OpenAI-compatible API (same prompt as the toolkit) via curl.
 
 use std::collections::BTreeMap;
 
 use ue_audio::wav::WavMap;
 use ue_core::model::TranscriptDoc;
 
-/// RMS lineal de un rango del WAV (mono mezclado).
+/// Linear RMS of a WAV range (mixed to mono).
 fn range_rms(wav: &WavMap, from_us: i64, to_us: i64) -> f64 {
     let rate = wav.sample_rate as i64;
     let from = from_us * rate / 1_000_000;
@@ -17,7 +17,7 @@ fn range_rms(wav: &WavMap, from_us: i64, to_us: i64) -> f64 {
     if to <= from {
         return 0.0;
     }
-    // muestreo con paso para segmentos largos (suficiente para una media)
+    // stepped sampling for long segments (enough for an average)
     let step = (((to - from) / 4800).max(1)) as usize;
     let mut acc = 0.0f64;
     let mut n = 0u64;
@@ -32,7 +32,7 @@ fn range_rms(wav: &WavMap, from_us: i64, to_us: i64) -> f64 {
     if n == 0 { 0.0 } else { (acc / n as f64).sqrt() }
 }
 
-/// Rellena volume_rms y global_avg_volume de un transcript.
+/// Fills in a transcript's volume_rms and global_avg_volume.
 pub fn measure_volumes(doc: &mut TranscriptDoc, wav: &WavMap) {
     let mut sum = 0.0;
     for seg in &mut doc.segments {
@@ -46,7 +46,7 @@ pub fn measure_volumes(doc: &mut TranscriptDoc, wav: &WavMap) {
     };
 }
 
-/// El prompt del toolkit (build_emotion_system_prompt).
+/// The toolkit's prompt (build_emotion_system_prompt).
 pub fn emotion_system_prompt(labels: &[String]) -> String {
     format!(
         "You are an emotion classifier. Given a short phrase in any language, \
@@ -56,8 +56,8 @@ pub fn emotion_system_prompt(labels: &[String]) -> String {
     )
 }
 
-/// Heurística offline: energía relativa + velocidad del habla → etiqueta.
-/// Solo usa las emociones DISPONIBLES en el mapa (matching laxo como el toolkit).
+/// Offline heuristic: relative energy + speech rate → label.
+/// Only uses the emotions AVAILABLE in the map (loose matching like the toolkit).
 pub fn classify_heuristic(
     seg_volume: f64,
     avg_volume: f64,
@@ -88,8 +88,8 @@ pub fn classify_heuristic(
     choice.unwrap_or_else(|| available.first().cloned().unwrap_or_default())
 }
 
-/// Clasifica vía una API OpenAI-compatible (curl). Devuelve None si falla
-/// (sin red, sin clave, respuesta rara) — el caller cae a la heurística.
+/// Classifies via an OpenAI-compatible API (curl). Returns None on failure
+/// (no network, no key, weird response) — the caller falls back to the heuristic.
 pub fn classify_via_api(
     api_base: &str,
     api_key: &str,
@@ -122,14 +122,14 @@ pub fn classify_via_api(
         .as_str()?
         .trim()
         .to_lowercase();
-    // matching laxo por substring, como classify_emotion() del toolkit
+    // loose substring matching, like the toolkit's classify_emotion()
     available
         .iter()
         .find(|k| raw.contains(&k.to_lowercase()))
         .cloned()
 }
 
-/// Config del clasificador por API, leída del entorno (como el toolkit .env).
+/// API classifier config, read from the environment (like the toolkit's .env).
 pub struct ApiConfig {
     pub base: String,
     pub key: String,
@@ -148,8 +148,8 @@ impl ApiConfig {
     }
 }
 
-/// Clasifica todos los segmentos de un transcript (API si hay, si no heurística)
-/// y escribe `segments[].emotion`. `avatars` = mapa emoción→ruta disponible.
+/// Classifies all segments of a transcript (API if available, otherwise heuristic)
+/// and writes `segments[].emotion`. `avatars` = available emotion→path map.
 pub fn classify_segments(
     doc: &mut TranscriptDoc,
     avatars: &BTreeMap<String, String>,

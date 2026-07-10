@@ -1,8 +1,8 @@
-//! Acciones primitivas con inversa mecánica. Toda mutación del proyecto pasa
-//! por `apply()`, que devuelve la acción inversa (base del undo/redo).
+//! Primitive actions with a mechanical inverse. Every project mutation goes
+//! through `apply()`, which returns the inverse action (the basis of undo/redo).
 //!
-//! Las primitivas NO comprueban `locked` (eso lo hace la capa de ops/UI):
-//! así el undo funciona siempre, incluso si el usuario bloquea una pista después.
+//! The primitives do NOT check `locked` (the ops/UI layer does that): this way
+//! undo always works, even if the user locks a track afterwards.
 
 use serde::{Deserialize, Serialize};
 
@@ -12,17 +12,17 @@ use crate::time::TimeUs;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "op")]
-#[allow(clippy::large_enum_variant)] // las acciones viven poco y viajan por historial; Box-ear Clip complicaría las inversas
+#[allow(clippy::large_enum_variant)] // actions are short-lived and travel through history; boxing Clip would complicate the inverses
 pub enum Action {
     SetProjectName { name: String },
     AddTrack { sequence_id: Id, index: usize, track: Track },
     RemoveTrack { track_id: Id },
     InsertClip { track_id: Id, clip: Clip },
     RemoveClip { clip_id: Id },
-    /// Quita `remove_ids` de la pista e inserta `insert` (ordenados). Primitiva
-    /// central para split/join y overwrite. Su inversa es otra ReplaceClips.
+    /// Removes `remove_ids` from the track and inserts `insert` (ordered). The
+    /// central primitive for split/join and overwrite. Its inverse is another ReplaceClips.
     ReplaceClips { track_id: Id, remove_ids: Vec<Id>, insert: Vec<Clip> },
-    /// Reposiciona/recorta un clip. `src_in/src_out` solo aplican a payload Media.
+    /// Repositions/trims a clip. `src_in/src_out` only apply to a Media payload.
     SetClipBounds {
         clip_id: Id,
         start: TimeUs,
@@ -36,7 +36,7 @@ pub enum Action {
     SetClipAudio { clip_id: Id, audio: AudioProps },
     SetClipEffects { clip_id: Id, effects: Vec<EffectInstance> },
     SetClipTransition { clip_id: Id, transition: Option<TransitionRef> },
-    /// Cambia contenido y estilo de un clip de texto (payload Text).
+    /// Changes the content and style of a text clip (Text payload).
     SetClipText { clip_id: Id, content: String, style: TextStyle },
     SetClipGenerator {
         clip_id: Id,
@@ -44,10 +44,10 @@ pub enum Action {
         params: std::collections::BTreeMap<String, crate::keyframe::Param>,
         color_params: std::collections::BTreeMap<String, String>,
     },
-    /// Cambia estilo y modo de un clip de subtítulos (payload Subtitles).
+    /// Changes the style and mode of a subtitles clip (Subtitles payload).
     SetClipSubtitles { clip_id: Id, style: TextStyle, mode: SubtitleMode },
-    /// Cambia la velocidad de un clip media (rate stretch: mismo material
-    /// fuente, duración = fuente/velocidad). `duration` viene precalculada.
+    /// Changes the speed of a media clip (rate stretch: same source
+    /// material, duration = source/speed). `duration` comes precomputed.
     SetClipSpeed { clip_id: Id, speed: f64, duration: TimeUs },
     SetClipGroup { clip_id: Id, group: Option<Id> },
     AddSequence { sequence: Sequence },
@@ -65,7 +65,7 @@ pub enum TrackProp {
     VolumeDb(f32),
 }
 
-/// Tipo de pista natural de un clip por su payload (para colocación por defecto).
+/// A clip's natural track kind based on its payload (for default placement).
 pub fn natural_track_kind(project: &Project, clip: &Clip) -> TrackKind {
     match &clip.payload {
         ClipPayload::Media { asset_id, .. } => match project.asset(*asset_id) {
@@ -76,14 +76,14 @@ pub fn natural_track_kind(project: &Project, clip: &Clip) -> TrackKind {
     }
 }
 
-/// ¿Puede este clip vivir en una pista de este tipo? Un asset de VIDEO puede
-/// ir también en una pista de audio (se usa solo su audio: clips enlazados).
+/// Can this clip live on a track of this kind? A VIDEO asset can also go on
+/// an audio track (only its audio is used: linked clips).
 fn clip_allowed_on(project: &Project, clip: &Clip, kind: TrackKind) -> bool {
     match &clip.payload {
         ClipPayload::Media { asset_id, .. } => match project.asset(*asset_id).map(|a| a.kind) {
             Some(MediaKind::Audio) => kind == TrackKind::Audio,
             Some(MediaKind::Image) => kind == TrackKind::Video,
-            Some(MediaKind::Video) => true, // video o (solo audio) en pista de audio
+            Some(MediaKind::Video) => true, // video or (audio only) on an audio track
             None => true,
         },
         _ => kind == TrackKind::Video,
@@ -93,7 +93,7 @@ fn clip_allowed_on(project: &Project, clip: &Clip, kind: TrackKind) -> bool {
 fn check_kind(project: &Project, track: &Track, clip: &Clip) -> UeResult<()> {
     if !clip_allowed_on(project, clip, track.kind) {
         return Err(UeError::Invalid(format!(
-            "el clip {} no puede ir en una pista de tipo {:?}",
+            "clip {} cannot go on a track of kind {:?}",
             clip.id, track.kind
         )));
     }
@@ -103,7 +103,7 @@ fn check_kind(project: &Project, track: &Track, clip: &Clip) -> UeResult<()> {
 fn insert_sorted(track: &mut Track, clip: Clip) -> UeResult<()> {
     if track.collides(clip.start, clip.duration, None) {
         return Err(UeError::Overlap(format!(
-            "clip {} en [{}, {}) sobre pista {}",
+            "clip {} at [{}, {}) over track {}",
             clip.id,
             clip.start,
             clip.end(),
@@ -115,7 +115,7 @@ fn insert_sorted(track: &mut Track, clip: Clip) -> UeResult<()> {
     Ok(())
 }
 
-/// Aplica la acción y devuelve su inversa.
+/// Applies the action and returns its inverse.
 pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
     match action {
         Action::SetProjectName { name } => {
@@ -127,7 +127,7 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
             let track_id = track.id;
             let seq = project
                 .sequence_mut(sequence_id)
-                .ok_or_else(|| UeError::NotFound(format!("secuencia {sequence_id}")))?;
+                .ok_or_else(|| UeError::NotFound(format!("sequence {sequence_id}")))?;
             let index = index.min(seq.tracks.len());
             seq.tracks.insert(index, track);
             Ok(Action::RemoveTrack { track_id })
@@ -140,11 +140,11 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
                     return Ok(Action::AddTrack { sequence_id: seq.id, index: idx, track });
                 }
             }
-            Err(UeError::NotFound(format!("pista {track_id}")))
+            Err(UeError::NotFound(format!("track {track_id}")))
         }
 
         Action::InsertClip { track_id, clip } => {
-            check_kind(project, project.track(track_id).ok_or_else(|| UeError::NotFound(format!("pista {track_id}")))?, &clip)?;
+            check_kind(project, project.track(track_id).ok_or_else(|| UeError::NotFound(format!("track {track_id}")))?, &clip)?;
             let clip_id = clip.id;
             let track = project.track_mut(track_id).unwrap();
             insert_sorted(track, clip)?;
@@ -161,14 +161,14 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
         }
 
         Action::ReplaceClips { track_id, remove_ids, insert } => {
-            // Validar primero (atomicidad): todos los ids existen en la pista y
-            // los nuevos clips no colisionan con lo que queda ni entre sí.
+            // Validate first (atomicity): all ids exist in the track and the
+            // new clips don't collide with what remains nor with each other.
             let track = project
                 .track(track_id)
-                .ok_or_else(|| UeError::NotFound(format!("pista {track_id}")))?;
+                .ok_or_else(|| UeError::NotFound(format!("track {track_id}")))?;
             for id in &remove_ids {
                 if track.clip_index(*id).is_none() {
-                    return Err(UeError::NotFound(format!("clip {id} en pista {track_id}")));
+                    return Err(UeError::NotFound(format!("clip {id} in track {track_id}")));
                 }
             }
             for c in &insert {
@@ -189,12 +189,12 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
                 for w in all.windows(2) {
                     if w[0].1 > w[1].0 {
                         return Err(UeError::Overlap(format!(
-                            "replace_clips produciría solape en pista {track_id}"
+                            "replace_clips would produce an overlap in track {track_id}"
                         )));
                     }
                 }
             }
-            // Mutar.
+            // Mutate.
             let track = project.track_mut(track_id).unwrap();
             let mut removed: Vec<Clip> = Vec::with_capacity(remove_ids.len());
             for id in &remove_ids {
@@ -211,14 +211,14 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
 
         Action::SetClipBounds { clip_id, start, duration, src_in, src_out } => {
             if duration <= 0 {
-                return Err(UeError::Invalid("duración <= 0".into()));
+                return Err(UeError::Invalid("duration <= 0".into()));
             }
             let (si, ti, ci) = project
                 .locate_clip(clip_id)
                 .ok_or_else(|| UeError::NotFound(format!("clip {clip_id}")))?;
             let track = &project.sequences[si].tracks[ti];
             if track.collides(start, duration, Some(clip_id)) {
-                return Err(UeError::Overlap(format!("set_clip_bounds de {clip_id}")));
+                return Err(UeError::Overlap(format!("set_clip_bounds of {clip_id}")));
             }
             let track = &mut project.sequences[si].tracks[ti];
             let clip = &mut track.clips[ci];
@@ -242,7 +242,7 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
                 }
                 _ => (None, None),
             };
-            // Reordenar la pista por start (el clip pudo saltar de posición).
+            // Re-sort the track by start (the clip may have jumped position).
             track.clips.sort_by_key(|c| c.start);
             Ok(Action::SetClipBounds {
                 clip_id,
@@ -264,10 +264,10 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
 
             let target = project
                 .track(to_track)
-                .ok_or_else(|| UeError::NotFound(format!("pista {to_track}")))?;
+                .ok_or_else(|| UeError::NotFound(format!("track {to_track}")))?;
             let exclude = if to_track == from_track { Some(clip_id) } else { None };
             if target.collides(to_start, duration, exclude) {
-                return Err(UeError::Overlap(format!("move de {clip_id} a {to_track}@{to_start}")));
+                return Err(UeError::Overlap(format!("move of {clip_id} to {to_track}@{to_start}")));
             }
             check_kind(project, target, clip_ref)?;
 
@@ -285,7 +285,7 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
         Action::SetTrackProp { track_id, prop } => {
             let track = project
                 .track_mut(track_id)
-                .ok_or_else(|| UeError::NotFound(format!("pista {track_id}")))?;
+                .ok_or_else(|| UeError::NotFound(format!("track {track_id}")))?;
             let old = match prop {
                 TrackProp::Name(v) => TrackProp::Name(std::mem::replace(&mut track.name, v)),
                 TrackProp::Muted(v) => TrackProp::Muted(std::mem::replace(&mut track.muted, v)),
@@ -336,7 +336,7 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
                     let old_style = std::mem::replace(st, style);
                     Ok(Action::SetClipText { clip_id, content: old_content, style: old_style })
                 }
-                _ => Err(UeError::Invalid("el clip no es de texto".into())),
+                _ => Err(UeError::Invalid("clip is not a text clip".into())),
             }
         }
 
@@ -359,7 +359,7 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
                     };
                     Ok(old)
                 }
-                _ => Err(UeError::Invalid("el clip no es un generador".into())),
+                _ => Err(UeError::Invalid("clip is not a generator".into())),
             }
         }
 
@@ -374,7 +374,7 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
 
         Action::SetClipSpeed { clip_id, speed, duration } => {
             if speed <= 0.0 || duration <= 0 {
-                return Err(UeError::Invalid("velocidad o duración inválida".into()));
+                return Err(UeError::Invalid("invalid speed or duration".into()));
             }
             let (si, ti, ci) = project
                 .locate_clip(clip_id)
@@ -383,7 +383,7 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
             let start = track.clips[ci].start;
             if track.collides(start, duration, Some(clip_id)) {
                 return Err(UeError::Overlap(format!(
-                    "cambiar la velocidad de {clip_id} chocaría con el siguiente clip"
+                    "changing the speed of {clip_id} would collide with the next clip"
                 )));
             }
             let clip = &mut project.sequences[si].tracks[ti].clips[ci];
@@ -405,7 +405,7 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
                     let old_mode = std::mem::replace(md, mode);
                     Ok(Action::SetClipSubtitles { clip_id, style: old_style, mode: old_mode })
                 }
-                _ => Err(UeError::Invalid("el clip no es de subtítulos".into())),
+                _ => Err(UeError::Invalid("clip is not a subtitles clip".into())),
             }
         }
 
@@ -418,21 +418,21 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
         Action::RemoveSequence { sequence_id } => {
             if project.active_sequence == sequence_id {
                 return Err(UeError::Invalid(
-                    "no se puede eliminar la secuencia activa".into(),
+                    "cannot delete the active sequence".into(),
                 ));
             }
             let idx = project
                 .sequences
                 .iter()
                 .position(|s| s.id == sequence_id)
-                .ok_or_else(|| UeError::NotFound(format!("secuencia {sequence_id}")))?;
+                .ok_or_else(|| UeError::NotFound(format!("sequence {sequence_id}")))?;
             let sequence = project.sequences.remove(idx);
             Ok(Action::AddSequence { sequence })
         }
 
         Action::SetActiveSequence { sequence_id } => {
             if project.sequence(sequence_id).is_none() {
-                return Err(UeError::NotFound(format!("secuencia {sequence_id}")));
+                return Err(UeError::NotFound(format!("sequence {sequence_id}")));
             }
             let old = std::mem::replace(&mut project.active_sequence, sequence_id);
             Ok(Action::SetActiveSequence { sequence_id: old })

@@ -1,5 +1,5 @@
-//! Tiras de miniaturas (filmstrip) por asset para el timeline: un solo JPEG
-//! horizontal de N tiles a intervalos regulares, cacheado por hash de contenido.
+//! Thumbnail strips (filmstrip) per asset for the timeline: a single
+//! horizontal JPEG of N tiles at regular intervals, cached by content hash.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -20,8 +20,8 @@ pub struct ThumbStrip {
     pub interval_us: i64,
 }
 
-/// Genera (o reutiliza del caché) la tira de miniaturas de un video.
-/// `hash` clava el nombre del archivo en caché; regenera solo si no existe.
+/// Generates (or reuses from the cache) a video's thumbnail strip.
+/// `hash` pins the cache file name; regenerates only if it doesn't exist.
 pub fn generate_thumb_strip(
     src: &Path,
     duration_us: i64,
@@ -29,7 +29,7 @@ pub fn generate_thumb_strip(
     hash: &str,
 ) -> MediaResult<ThumbStrip> {
     let dur_s = (duration_us as f64 / 1e6).max(0.5);
-    // ≤60 tiles; para videos cortos ~1 tile por segundo
+    // ≤60 tiles; for short videos ~1 tile per second
     let count = (dur_s.ceil() as u32).clamp(4, 60);
     let interval_us = duration_us / count as i64;
     let out = cache_dir.join(format!("{hash}.thumbs.jpg"));
@@ -48,8 +48,8 @@ pub fn generate_thumb_strip(
     let fps = count as f64 / dur_s;
     let mut cmd = Command::new(ffmpeg_bin());
     cmd.args(["-y", "-v", "error"]);
-    // en archivos largos, decodificar solo keyframes (mucho más rápido);
-    // en cortos hay pocos keyframes y saldrían tiles repetidos
+    // on long files, decode only keyframes (much faster);
+    // on short ones there are few keyframes and tiles would come out repeated
     if dur_s > 300.0 {
         cmd.args(["-skip_frame", "nokey"]);
     }
@@ -69,7 +69,7 @@ pub fn generate_thumb_strip(
         .map_err(|e| MediaError::Spawn("ffmpeg".into(), e.to_string()))?;
     if !status.success() || !tmp.exists() {
         let _ = std::fs::remove_file(&tmp);
-        return Err(MediaError::Tool("ffmpeg".into(), "tira de miniaturas falló".into()));
+        return Err(MediaError::Tool("ffmpeg".into(), "thumbnail strip failed".into()));
     }
     std::fs::rename(&tmp, &out)?;
     Ok(strip)

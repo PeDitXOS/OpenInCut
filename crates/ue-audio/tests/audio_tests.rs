@@ -1,6 +1,6 @@
-//! Tests de ue-audio: parser WAV, mezclador con señales sintéticas exactas,
-//! colección de clips audibles, conformado real (ffmpeg) y salida cpal
-//! (con salto elegante si no hay dispositivo).
+//! ue-audio tests: WAV parser, mixer with exact synthetic signals,
+//! audible-clip collection, real conforming (ffmpeg) and cpal output
+//! (with a graceful skip if there's no device).
 
 use std::path::{Path, PathBuf};
 
@@ -20,7 +20,7 @@ fn tmp(name: &str) -> PathBuf {
     dir.join(name)
 }
 
-/// WAV estéreo 48k con generador por frame.
+/// 48k stereo WAV with a per-frame generator.
 fn write_wav(name: &str, frames: i64, gen: impl Fn(i64) -> (i16, i16)) -> PathBuf {
     let path = tmp(name);
     let spec = hound::WavSpec {
@@ -68,12 +68,12 @@ fn wav_roundtrip_and_bounds() {
     assert!((l - 160.0 / 32768.0).abs() < 1e-6);
     assert!((r + 160.0 / 32768.0).abs() < 1e-6);
     assert_eq!(wav.frame(-1), (0.0, 0.0));
-    assert_eq!(wav.frame(1000), (0.0, 0.0), "fuera de rango → silencio");
+    assert_eq!(wav.frame(1000), (0.0, 0.0), "out of range → silence");
 }
 
 #[test]
 fn compute_peaks_reflects_signal_shape() {
-    // 1 s de silencio + 1 s a plena escala → mitad de bins ~0, mitad ~1
+    // 1 s of silence + 1 s at full scale → half the bins ~0, half ~1
     let frames = 2 * RATE as i64;
     let path = write_wav("peaks.wav", frames, |i| {
         if i < RATE as i64 { (0, 0) } else { (32767, 32767) }
@@ -81,8 +81,8 @@ fn compute_peaks_reflects_signal_shape() {
     let wav = WavMap::open(&path).unwrap();
     let peaks = ue_audio::wav::compute_peaks(&wav, 25);
     assert_eq!(peaks.len(), 50, "2 s × 25 bins/s");
-    assert!(peaks[..25].iter().all(|p| *p < 0.01), "primera mitad silencio");
-    assert!(peaks[25..].iter().all(|p| *p > 0.9), "segunda mitad plena escala");
+    assert!(peaks[..25].iter().all(|p| *p < 0.01), "first half silence");
+    assert!(peaks[25..].iter().all(|p| *p > 0.9), "second half full scale");
 }
 
 // ---------------------------------------------------------------------------
@@ -95,30 +95,30 @@ fn gain_in_db_is_applied() {
     let mut item = dc_item(&path, 0, 100);
     item.gain = db_to_linear(-6.0206); // ≈ 0.5×
     let (l, _) = mix_frame(&[item], 50);
-    assert!((l - 0.25).abs() < 1e-3, "0.5 × -6dB ≈ 0.25, fue {l}");
+    assert!((l - 0.25).abs() < 1e-3, "0.5 × -6dB ≈ 0.25, was {l}");
 }
 
 #[test]
 fn pan_balance_law_attenuates_opposite_channel() {
-    let path = write_wav("dc_pan.wav", 100, |_| (16384, 16384)); // 0.5 ambos
-    // pan 1.0 = todo derecha: izquierda muere, derecha intacta
+    let path = write_wav("dc_pan.wav", 100, |_| (16384, 16384)); // 0.5 both
+    // pan 1.0 = full right: left dies, right intact
     let mut item = dc_item(&path, 0, 100);
     item.pan = 1.0;
     let (l, r) = mix_frame(&[item], 50);
-    assert!(l.abs() < 1e-6, "izquierda silenciada, fue {l}");
-    assert!((r - 0.5).abs() < 1e-3, "derecha sin tocar, fue {r}");
-    // pan -0.5: derecha a la mitad, izquierda intacta
+    assert!(l.abs() < 1e-6, "left silenced, was {l}");
+    assert!((r - 0.5).abs() < 1e-3, "right untouched, was {r}");
+    // pan -0.5: right halved, left intact
     let mut item = dc_item(&path, 0, 100);
     item.pan = -0.5;
     let (l, r) = mix_frame(&[item], 50);
-    assert!((l - 0.5).abs() < 1e-3, "izquierda unidad, fue {l}");
-    assert!((r - 0.25).abs() < 1e-3, "derecha a 0.5×, fue {r}");
+    assert!((l - 0.5).abs() < 1e-3, "left unity, was {l}");
+    assert!((r - 0.25).abs() < 1e-3, "right at 0.5×, was {r}");
 }
 
 #[test]
 fn gain_curve_animates_during_playback() {
     use ue_core::keyframe::{Interp, Keyframe, KeyframeCurve};
-    // 1 s de DC 0.5 con curva lineal 0 dB → -20 dB
+    // 1 s of DC 0.5 with a linear curve 0 dB → -20 dB
     let frames = RATE as i64;
     let path = write_wav("dc_curve.wav", frames, |_| (16384, 16384));
     let mut item = dc_item(&path, 0, frames);
@@ -128,10 +128,10 @@ fn gain_curve_animates_during_playback() {
     ]));
     let items = [item];
     let (start, _) = mix_frame(&items, 0);
-    assert!((start - 0.5).abs() < 1e-3, "arranque a 0 dB, fue {start}");
+    assert!((start - 0.5).abs() < 1e-3, "start at 0 dB, was {start}");
     let (mid, _) = mix_frame(&items, frames / 2);
     let expected = 0.5 * db_to_linear(-10.0);
-    assert!((mid - expected).abs() < 2e-3, "centro ≈ -10 dB ({expected}), fue {mid}");
+    assert!((mid - expected).abs() < 2e-3, "center ≈ -10 dB ({expected}), was {mid}");
 }
 
 #[test]
@@ -140,18 +140,18 @@ fn overlapping_items_sum_and_clamp() {
     let a = dc_item(&path, 0, 100);
     let b = dc_item(&path, 0, 100);
     let (l, _) = mix_frame(&[a, b], 10);
-    assert!((l - 0.8).abs() < 1e-3, "suma 0.4+0.4");
+    assert!((l - 0.8).abs() < 1e-3, "sum 0.4+0.4");
 
     let path_hot = write_wav("dc_09.wav", 100, |_| (29491, 29491)); // 0.9
     let a = dc_item(&path_hot, 0, 100);
     let b = dc_item(&path_hot, 0, 100);
     let (l, _) = mix_frame(&[a, b], 10);
-    assert_eq!(l, 1.0, "clamp a 1.0");
+    assert_eq!(l, 1.0, "clamp to 1.0");
 }
 
 #[test]
 fn timeline_offset_and_src_in_mapping() {
-    // señal rampa exacta: frame i vale i*16
+    // exact ramp signal: frame i equals i*16
     let path = write_wav("ramp2.wav", 2000, |i| ((i * 16) as i16, (i * 16) as i16));
     let item = MixItem {
         wav: WavMap::open(&path).unwrap(),
@@ -165,9 +165,9 @@ fn timeline_offset_and_src_in_mapping() {
         fade_in: 0,
         fade_out: 0,
     };
-    // antes del clip → silencio
+    // before the clip → silence
     assert_eq!(mix_frame(&[item], 499).0, 0.0);
-    // el clip re-abre el wav para más asserts
+    // the clip re-opens the wav for more asserts
     let item = MixItem {
         wav: WavMap::open(&path).unwrap(),
         timeline_start: 500,
@@ -180,7 +180,7 @@ fn timeline_offset_and_src_in_mapping() {
         fade_in: 0,
         fade_out: 0,
     };
-    // frame 500 del timeline = frame 100 de la fuente = 1600/32768
+    // timeline frame 500 = source frame 100 = 1600/32768
     let expect = |src: i64| (src * 16) as f32 / 32768.0;
     assert!((mix_frame(&[item], 500).0 - expect(100)).abs() < 1e-6);
     let item = MixItem {
@@ -195,7 +195,7 @@ fn timeline_offset_and_src_in_mapping() {
         fade_in: 0,
         fade_out: 0,
     };
-    // último frame del clip: timeline 799 → fuente 399; y 800 ya es silencio
+    // last frame of the clip: timeline 799 → source 399; and 800 is already silence
     assert!((mix_frame(&[item], 799).0 - expect(399)).abs() < 1e-6);
 }
 
@@ -215,20 +215,20 @@ fn fades_ramp_linearly() {
         fade_out: 200,
     };
     let items = [item];
-    assert_eq!(mix_frame(&items, 0).0, 0.0, "inicio del fade-in");
+    assert_eq!(mix_frame(&items, 0).0, 0.0, "start of the fade-in");
     let mid_in = mix_frame(&items, 100).0;
-    assert!((mid_in - 0.5).abs() < 0.01, "mitad del fade-in ≈ 0.5, fue {mid_in}");
+    assert!((mid_in - 0.5).abs() < 0.01, "middle of the fade-in ≈ 0.5, was {mid_in}");
     let plateau = mix_frame(&items, 500).0;
-    assert!(plateau > 0.99, "meseta a ganancia completa");
+    assert!(plateau > 0.99, "plateau at full gain");
     let mid_out = mix_frame(&items, 900).0;
-    assert!((mid_out - 0.5).abs() < 0.01, "mitad del fade-out ≈ 0.5, fue {mid_out}");
+    assert!((mid_out - 0.5).abs() < 0.01, "middle of the fade-out ≈ 0.5, was {mid_out}");
 }
 
 #[test]
 fn fill_is_contiguous() {
     let path = write_wav("ramp3.wav", 1000, |i| ((i * 16) as i16, (i * 16) as i16));
     let items = [dc_item(&path, 0, 1000)];
-    let mut buf = vec![0f32; 20]; // 10 frames estéreo
+    let mut buf = vec![0f32; 20]; // 10 stereo frames
     fill(&items, 100, &mut buf);
     for k in 0..10i64 {
         let expect = ((100 + k) * 16) as f32 / 32768.0;
@@ -237,7 +237,7 @@ fn fill_is_contiguous() {
 }
 
 // ---------------------------------------------------------------------------
-// Colección desde el proyecto
+// Collection from the project
 // ---------------------------------------------------------------------------
 
 fn asset(kind: MediaKind, channels: u32, dur_s: i64) -> MediaAsset {
@@ -282,11 +282,11 @@ fn collect_respects_mute_solo_and_video_audio() {
     store.insert_clip(vtrack, Clip::new_media(va, 0, 5 * SEC, 0), InsertMode::Strict).unwrap();
     store.insert_clip(vtrack, Clip::new_media(vs, 0, 5 * SEC, 6 * SEC), InsertMode::Strict).unwrap();
 
-    // ambos con audio entran; el video sin audio no
+    // both with audio come in; the video without audio doesn't
     let specs = collect_specs(&store.project, seq_id);
     assert_eq!(specs.len(), 2);
 
-    // mute de la pista de audio → solo queda el del video
+    // muting the audio track → only the video's remains
     store
         .dispatch("mute", vec![ue_core::Action::SetTrackProp {
             track_id: atrack,
@@ -297,7 +297,7 @@ fn collect_respects_mute_solo_and_video_audio() {
     assert_eq!(specs.len(), 1);
     assert_eq!(specs[0].asset_id, va);
 
-    // solo en la pista de audio (desmuteada) → solo la música
+    // solo on the audio track (unmuted) → only the music
     store
         .dispatch("unmute+solo", vec![
             ue_core::Action::SetTrackProp { track_id: atrack, prop: ue_core::action::TrackProp::Muted(false) },
@@ -326,7 +326,7 @@ fn load_items_skips_missing_conform() {
 }
 
 // ---------------------------------------------------------------------------
-// Conformado real (ffmpeg) y reproducción (cpal) — con salto elegante
+// Real conforming (ffmpeg) and playback (cpal) — with a graceful skip
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -337,10 +337,10 @@ fn conform_produces_valid_48k_stereo_wav() {
         .map(|o| o.status.success())
         .unwrap_or(false);
     if !ff_ok {
-        eprintln!("AVISO: sin ffmpeg; test de conformado saltado");
+        eprintln!("WARNING: no ffmpeg; conform test skipped");
         return;
     }
-    // fuente deliberadamente distinta: 22.05 kHz mono
+    // deliberately different source: 22.05 kHz mono
     let src = tmp("tone_22k.wav");
     let st = std::process::Command::new(ue_media::ffmpeg_bin())
         .args(["-y", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=2:sample_rate=22050"])
@@ -354,22 +354,22 @@ fn conform_produces_valid_48k_stereo_wav() {
     let wav = WavMap::open(&out).unwrap();
     assert_eq!(wav.sample_rate, RATE);
     let dur_frames = wav.frames();
-    assert!((dur_frames - 2 * RATE as i64).abs() < RATE as i64 / 10, "≈2 s, fue {dur_frames}");
-    // idempotente: no re-conforma si existe
+    assert!((dur_frames - 2 * RATE as i64).abs() < RATE as i64 / 10, "≈2 s, was {dur_frames}");
+    // idempotent: doesn't re-conform if it exists
     ue_media::conform_audio(&src, &out).unwrap();
-    // hay señal de verdad (la fuente `sine` de ffmpeg es de amplitud baja,
-    // ~0.05: el umbral distingue señal de silencio, no niveles)
+    // there's real signal (ffmpeg's `sine` source is low-amplitude,
+    // ~0.05: the threshold distinguishes signal from silence, not levels)
     let mean_sq: f32 = (0..dur_frames.min(48000))
         .map(|i| wav.frame(i).0.powi(2))
         .sum::<f32>()
         / 48000.0;
-    assert!(mean_sq > 1e-4, "el tono tiene energía (mean²={mean_sq})");
+    assert!(mean_sq > 1e-4, "the tone has energy (mean²={mean_sq})");
 }
 
 #[test]
 fn player_clock_advances_if_device_available() {
     match ue_audio::player::Player::new() {
-        Err(e) => eprintln!("AVISO: sin dispositivo de audio ({e}); test de player saltado"),
+        Err(e) => eprintln!("WARNING: no audio device ({e}); player test skipped"),
         Ok(player) => {
             player.set_items(vec![], 1);
             player.play(1 * SEC);
@@ -378,12 +378,12 @@ fn player_clock_advances_if_device_available() {
             let advanced = pos - 1 * SEC;
             assert!(
                 (100_000..=900_000).contains(&advanced),
-                "el reloj de audio avanzó ~300 ms, fue {advanced} µs"
+                "the audio clock advanced ~300 ms, was {advanced} µs"
             );
-            // seek re-posiciona
+            // seek repositions
             player.seek(10 * SEC);
             assert_eq!(player.position_us(), 10 * SEC);
-            let _ = us_to_frames(0); // silencia unused en builds sin asserts
+            let _ = us_to_frames(0); // silences unused in builds without asserts
         }
     }
 }

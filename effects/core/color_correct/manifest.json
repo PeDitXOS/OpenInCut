@@ -1,11 +1,11 @@
 {
   "id": "core.color_correct",
-  "name": "Corrección de color",
+  "name": "Color correction",
   "category": "color",
   "params": [
-    { "key": "brightness", "label": "Brillo", "type": "float", "default": 0.0, "min": -1.0, "max": 1.0 },
-    { "key": "contrast", "label": "Contraste", "type": "float", "default": 1.0, "min": 0.0, "max": 2.0 },
-    { "key": "saturation", "label": "Saturación", "type": "float", "default": 1.0, "min": 0.0, "max": 3.0 },
+    { "key": "brightness", "label": "Brightness", "type": "float", "default": 0.0, "min": -1.0, "max": 1.0 },
+    { "key": "contrast", "label": "Contrast", "type": "float", "default": 1.0, "min": 0.0, "max": 2.0 },
+    { "key": "saturation", "label": "Saturation", "type": "float", "default": 1.0, "min": 0.0, "max": 3.0 },
     { "key": "gamma", "label": "Gamma", "type": "float", "default": 1.0, "min": 0.1, "max": 3.0 }
   ],
   "ffmpeg": "eq=brightness={brightness}:contrast={contrast}:saturation={saturation}:gamma={gamma}"

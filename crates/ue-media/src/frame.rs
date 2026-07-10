@@ -1,6 +1,6 @@
-//! Extracción de frames reales para el preview (v0: clip de video superior).
-//! El motor wgpu de la Fase 2 sustituirá esta ruta por composición completa;
-//! la interfaz (tiempo de secuencia → imagen) se mantiene.
+//! Real frame extraction for the preview (v0: top video clip).
+//! The Phase 2 wgpu engine will replace this path with full compositing;
+//! the interface (sequence time → image) stays the same.
 
 use std::path::Path;
 use std::process::Command;
@@ -10,25 +10,25 @@ use ue_core::TimeUs;
 
 use crate::{ffmpeg_bin, MediaError, MediaResult};
 
-/// Información del clip activo resuelto (para debug/tests).
+/// Info about the resolved active clip (for debug/tests).
 #[derive(Debug, PartialEq)]
 pub struct ResolvedFrame {
     pub asset_path: String,
     pub src_t_us: TimeUs,
-    /// Tiempo relativo al inicio del clip (µs de timeline): evalúa curvas.
+    /// Time relative to the clip start (timeline µs): evaluates curves.
     pub clip_rel_us: TimeUs,
-    /// Velocidad del clip (para mapear t del stream a tiempo de clip).
+    /// Clip speed (to map the stream's t to clip time).
     pub speed: f64,
-    /// Efectos y transform del clip resuelto (la capa superior decide la cadena).
+    /// Effects and transform of the resolved clip (the upper layer decides the chain).
     pub effects: Vec<EffectInstance>,
     pub transform: Transform2D,
 }
 
-/// Resuelve qué asset y qué instante fuente corresponden al tiempo `t_us`
-/// de la secuencia (clip de video de la pista más alta, sin mute).
+/// Resolves which asset and which source instant correspond to sequence time
+/// `t_us` (video clip from the topmost track, not muted).
 pub fn resolve_top_video(project: &Project, sequence_id: Id, t_us: TimeUs) -> Option<ResolvedFrame> {
     let seq = project.sequence(sequence_id)?;
-    // las pistas se componen de abajo (índice 0) hacia arriba → buscar desde arriba
+    // tracks compose from the bottom (index 0) upward → search from the top
     for track in seq.tracks.iter().rev() {
         if track.kind != TrackKind::Video || track.muted {
             continue;
@@ -39,8 +39,8 @@ pub fn resolve_top_video(project: &Project, sequence_id: Id, t_us: TimeUs) -> Op
                     let asset = project.asset(*asset_id)?;
                     let src_t = *src_in
                         + ((t_us - clip.start) as f64 * clip.speed).round() as TimeUs;
-                    // preview: preferir el proxy (más ligero de decodificar);
-                    // el export usa siempre el original
+                    // preview: prefer the proxy (lighter to decode);
+                    // export always uses the original
                     let path = asset
                         .proxy
                         .clone()
@@ -61,9 +61,9 @@ pub fn resolve_top_video(project: &Project, sequence_id: Id, t_us: TimeUs) -> Op
     None
 }
 
-/// Extrae un frame JPEG del tiempo `t_us` de la secuencia. `None` si no hay
-/// clip de video activo. `base_dir` resuelve rutas relativas de assets.
-/// `extra_vf` es la cadena de efectos del clip (se aplica antes del reescalado).
+/// Extracts a JPEG frame at sequence time `t_us`. `None` if there is no active
+/// video clip. `base_dir` resolves relative asset paths.
+/// `extra_vf` is the clip's effects chain (applied before the rescale).
 pub fn render_frame(
     project: &Project,
     sequence_id: Id,
@@ -98,7 +98,7 @@ pub fn render_frame(
         ));
     }
     if out.stdout.is_empty() {
-        // -ss más allá del final del archivo produce salida vacía
+        // -ss past the end of the file produces empty output
         return Ok(None);
     }
     Ok(Some(out.stdout))

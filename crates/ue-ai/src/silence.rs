@@ -1,12 +1,12 @@
-//! Detección de silencios sobre el WAV conformado (48 kHz estéreo).
+//! Silence detection over the conformed WAV (48 kHz stereo).
 //!
-//! Algoritmo (PLAN §7.C):
-//! 1. RMS por ventanas de `window_us` con paso `hop_us` → dBFS.
-//! 2. Máquina de estados con umbral dual (histéresis): habla si supera
-//!    `threshold_db`; silencio solo si cae por debajo de `threshold_db - hysteresis_db`.
-//! 3. Silencios más cortos que `min_silence_us` se absorben (respiraciones);
-//!    islas de habla más cortas que `min_speech_us` se descartan (clicks).
-//! 4. La habla se expande con `pad_pre/post_us` y se fusionan solapes.
+//! Algorithm (PLAN §7.C):
+//! 1. RMS over `window_us` windows with `hop_us` step → dBFS.
+//! 2. State machine with a dual threshold (hysteresis): speech if it exceeds
+//!    `threshold_db`; silence only if it falls below `threshold_db - hysteresis_db`.
+//! 3. Silences shorter than `min_silence_us` are absorbed (breaths);
+//!    speech islands shorter than `min_speech_us` are dropped (clicks).
+//! 4. Speech is expanded by `pad_pre/post_us` and overlaps are merged.
 
 use serde::{Deserialize, Serialize};
 use ue_audio::wav::WavMap;
@@ -14,7 +14,7 @@ use ue_core::TimeUs;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SilenceParams {
-    /// Umbral de habla en dBFS (el 0.01 lineal del toolkit ≈ -40 dBFS).
+    /// Speech threshold in dBFS (the toolkit's linear 0.01 ≈ -40 dBFS).
     pub threshold_db: f64,
     pub hysteresis_db: f64,
     pub min_silence_us: TimeUs,
@@ -39,7 +39,7 @@ impl Default for SilenceParams {
 const WINDOW_US: TimeUs = 50_000;
 const HOP_US: TimeUs = 10_000;
 
-/// Intervalos de HABLA `[start, end)` en µs dentro del rango `[from, to)` del WAV.
+/// SPEECH intervals `[start, end)` in µs within the WAV's `[from, to)` range.
 pub fn detect_speech(
     wav: &WavMap,
     from_us: TimeUs,
@@ -53,8 +53,8 @@ pub fn detect_speech(
     }
     let win_frames = (WINDOW_US * rate / 1_000_000) as usize;
 
-    // 1. RMS en dB por ventana
-    let mut windows: Vec<(TimeUs, f64)> = vec![]; // (centro, dBFS)
+    // 1. RMS in dB per window
+    let mut windows: Vec<(TimeUs, f64)> = vec![]; // (center, dBFS)
     let mut t = from_us;
     while t + WINDOW_US <= to_us {
         let start_frame = t * rate / 1_000_000;
@@ -73,7 +73,7 @@ pub fn detect_speech(
         return vec![];
     }
 
-    // 2. histéresis
+    // 2. hysteresis
     let t_on = params.threshold_db;
     let t_off = params.threshold_db - params.hysteresis_db;
     let mut speech_flags: Vec<bool> = Vec::with_capacity(windows.len());
@@ -89,7 +89,7 @@ pub fn detect_speech(
         speech_flags.push(talking);
     }
 
-    // 3. tramos crudos
+    // 3. raw spans
     let mut spans: Vec<(TimeUs, TimeUs, bool)> = vec![];
     for (i, &flag) in speech_flags.iter().enumerate() {
         let time = windows[i].0;
@@ -99,7 +99,7 @@ pub fn detect_speech(
         }
     }
 
-    // silencios cortos → habla
+    // short silences → speech
     let merged: Vec<(TimeUs, TimeUs, bool)> = {
         let mut out: Vec<(TimeUs, TimeUs, bool)> = vec![];
         for (s, e, f) in spans {
@@ -113,7 +113,7 @@ pub fn detect_speech(
         out
     };
 
-    // islas de habla cortas → fuera; padding + clamp + fusión
+    // short speech islands → out; padding + clamp + merge
     let mut speech: Vec<(TimeUs, TimeUs)> = vec![];
     for (s, e, f) in merged {
         if !f || (e - s) < params.min_speech_us {
@@ -129,7 +129,7 @@ pub fn detect_speech(
     speech
 }
 
-/// Complemento: intervalos de SILENCIO dentro de `[from, to)`.
+/// Complement: SILENCE intervals within `[from, to)`.
 pub fn detect_silences(
     wav: &WavMap,
     from_us: TimeUs,
@@ -153,7 +153,7 @@ pub fn detect_silences(
     out
 }
 
-/// Silencios de un clip mapeados a TIEMPO DEL TIMELINE, listos para cut_ranges.
+/// A clip's silences mapped to TIMELINE TIME, ready for cut_ranges.
 pub fn clip_silences_on_timeline(
     wav: &WavMap,
     clip_start_us: TimeUs,

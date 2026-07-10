@@ -1,5 +1,5 @@
-//! Tests de ue-export: EDL (unitarios) y exportación real con ffmpeg
-//! (integración, verificable visualmente con el contador de testsrc).
+//! ue-export tests: EDL (unit) and real ffmpeg export
+//! (integration, visually verifiable with the testsrc counter).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -56,7 +56,7 @@ fn project_two_video_tracks() -> (ProjectStore, Id, Id, Id, Id, Id, Id) {
     let (aid, bid) = (a.id, b.id);
     p.assets.push(a);
     p.assets.push(b);
-    // añadir V2 sobre V1
+    // add V2 above V1
     let seq = p.sequence_mut(seq_id).unwrap();
     seq.tracks.push(Track::new(TrackKind::Video, "V2"));
     let v2 = seq.tracks.last().unwrap().id;
@@ -74,7 +74,7 @@ fn edl_with_gap_and_two_sources() {
     let (mut store, seq, v1, _v2, _a1, a, b) = project_two_video_tracks();
     store.insert_clip(v1, Clip::new_media(a, 1 * SEC, 3 * SEC, 0), InsertMode::Strict).unwrap();
     store.insert_clip(v1, Clip::new_media(b, 4 * SEC, 6 * SEC, 2 * SEC), InsertMode::Strict).unwrap();
-    // hueco [4, 5) y luego otra vez A
+    // gap [4, 5) then A again
     store.insert_clip(v1, Clip::new_media(a, 8 * SEC, 9 * SEC, 5 * SEC), InsertMode::Strict).unwrap();
 
     let edl = build_video_edl(&store.project, seq).unwrap();
@@ -93,7 +93,7 @@ fn edl_with_gap_and_two_sources() {
 #[test]
 fn edl_top_track_wins() {
     let (mut store, seq, v1, v2, _a1, a, b) = project_two_video_tracks();
-    // V1: A cubre [0, 6); V2: B cubre [2, 4) → B debe ganar en el medio
+    // V1: A covers [0, 6); V2: B covers [2, 4) → B must win in the middle
     store.insert_clip(v1, Clip::new_media(a, 0, 6 * SEC, 0), InsertMode::Strict).unwrap();
     store.insert_clip(v2, Clip::new_media(b, 0, 2 * SEC, 2 * SEC), InsertMode::Strict).unwrap();
 
@@ -111,7 +111,7 @@ fn edl_top_track_wins() {
 #[test]
 fn edl_merges_contiguous_and_trims_trailing_black() {
     let (mut store, seq, v1, _v2, _a1, a, _b) = project_two_video_tracks();
-    // dos clips contiguos con fuente continua → se fusionan
+    // two contiguous clips with continuous source → they merge
     store.insert_clip(v1, Clip::new_media(a, 1 * SEC, 3 * SEC, 0), InsertMode::Strict).unwrap();
     store.insert_clip(v1, Clip::new_media(a, 3 * SEC, 5 * SEC, 2 * SEC), InsertMode::Strict).unwrap();
     let edl = build_video_edl(&store.project, seq).unwrap();
@@ -128,7 +128,7 @@ fn edl_supports_speed_and_rejects_empty() {
         build_video_edl(&store.project, seq),
         Err(ExportError::EmptyTimeline)
     ));
-    // clip a 2×: usa [0..2s) de la fuente en 1 s de timeline
+    // clip at 2×: uses [0..2s) of the source in 1 s of timeline
     let mut clip = Clip::new_media(a, 0, 2 * SEC, 0);
     clip.speed = 2.0;
     clip.duration = 1 * SEC;
@@ -136,12 +136,12 @@ fn edl_supports_speed_and_rejects_empty() {
     let edl = build_video_edl(&store.project, seq).unwrap();
     match &edl[0] {
         Segment::Source { src_in, src_out, speed, .. } => {
-            assert_eq!((*src_in, *src_out), (0, 2 * SEC), "consume toda la fuente");
+            assert_eq!((*src_in, *src_out), (0, 2 * SEC), "consumes the whole source");
             assert_eq!(*speed, 2.0);
         }
         other => panic!("{other:?}"),
     }
-    assert_eq!(edl_duration(&edl), 1 * SEC, "1 s de salida a 2×");
+    assert_eq!(edl_duration(&edl), 1 * SEC, "1 s of output at 2×");
 }
 
 #[test]
@@ -149,10 +149,10 @@ fn muted_track_is_invisible() {
     let (mut store, seq, v1, v2, _a1, a, b) = project_two_video_tracks();
     store.insert_clip(v1, Clip::new_media(a, 0, 2 * SEC, 0), InsertMode::Strict).unwrap();
     store.insert_clip(v2, Clip::new_media(b, 0, 2 * SEC, 0), InsertMode::Strict).unwrap();
-    // sin mute gana V2 (B)
+    // without mute V2 (B) wins
     let edl = build_video_edl(&store.project, seq).unwrap();
     assert!(matches!(edl[0], Segment::Source { asset_id, .. } if asset_id == b));
-    // con V2 muteada gana V1 (A)
+    // with V2 muted V1 (A) wins
     store
         .dispatch(
             "mute",
@@ -167,7 +167,7 @@ fn muted_track_is_invisible() {
 }
 
 // ---------------------------------------------------------------------------
-// Exportación real (ffmpeg)
+// Real export (ffmpeg)
 // ---------------------------------------------------------------------------
 
 fn ffmpeg_available() -> bool {
@@ -182,7 +182,7 @@ fn media_dir() -> Option<&'static PathBuf> {
     static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
     DIR.get_or_init(|| {
         if !ffmpeg_available() {
-            eprintln!("AVISO: ffmpeg no disponible; test de export saltado");
+            eprintln!("NOTE: ffmpeg not available; export test skipped");
             return None;
         }
         let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-export-media");
@@ -213,9 +213,9 @@ fn ffprobe_json(path: &Path) -> serde_json::Value {
     serde_json::from_slice(&out.stdout).unwrap()
 }
 
-/// Edición: [1..3s) + [4..6s) del mismo archivo, pegadas. El resultado dura 4 s
-/// y el contador quemado debe saltar 1,2 → 4,5. Se validan metadatos con
-/// ffprobe y se extraen frames para verificación visual.
+/// Edit: [1..3s) + [4..6s) of the same file, spliced together. The result lasts 4 s
+/// and the burned-in counter must jump 1,2 → 4,5. Metadata is validated with
+/// ffprobe and frames are extracted for visual check.
 #[test]
 fn export_cut_and_reordered_timeline() {
     let Some(dir) = media_dir() else { return };
@@ -239,20 +239,20 @@ fn export_cut_and_reordered_timeline() {
     let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-export-out.mp4");
     export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
 
-    // metadatos
+    // metadata
     let meta = ffprobe_json(&out);
     let dur: f64 = meta["format"]["duration"].as_str().unwrap().parse().unwrap();
-    assert!((3.9..=4.2).contains(&dur), "duración ≈ 4 s, fue {dur}");
+    assert!((3.9..=4.2).contains(&dur), "duration ≈ 4 s, was {dur}");
     let streams = meta["streams"].as_array().unwrap();
     let v = streams.iter().find(|s| s["codec_type"] == "video").unwrap();
     assert_eq!(v["codec_name"], "h264");
-    assert_eq!(v["width"], 1920); // resolución de la secuencia (con pad)
-    assert!(streams.iter().any(|s| s["codec_type"] == "audio"), "lleva el audio del clip");
+    assert_eq!(v["width"], 1920); // sequence resolution (with pad)
+    assert!(streams.iter().any(|s| s["codec_type"] == "audio"), "carries the clip audio");
 
-    // frames para verificación visual: 0.5s → contador "1"; 2.5s → contador "4"
+    // frames for visual check: 0.5s → counter "1"; 2.5s → counter "4"
     let frames_dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-export-frames");
     std::fs::create_dir_all(&frames_dir).unwrap();
-    for (name, t) in [("salida_0.5s", 0.5f64), ("salida_2.5s", 2.5f64)] {
+    for (name, t) in [("output_0.5s", 0.5f64), ("output_2.5s", 2.5f64)] {
         let st = Command::new(ue_media::ffmpeg_bin())
             .args(["-y", "-v", "error", "-ss", &t.to_string(), "-i"])
             .arg(&out)
@@ -262,18 +262,18 @@ fn export_cut_and_reordered_timeline() {
             .unwrap();
         assert!(st.success());
     }
-    eprintln!("export verificable en {} y frames en {}", out.display(), frames_dir.display());
+    eprintln!("export verifiable at {} and frames at {}", out.display(), frames_dir.display());
 }
 
 // ---------------------------------------------------------------------------
-// Multicapa: overlay de pistas superiores con opacidad
+// Multi-layer: overlay of upper tracks with opacity
 // ---------------------------------------------------------------------------
 
-/// V1 rojo 4s + V2 azul [1s,3s) con opacidad 0.5 → centro: mezcla ~50/50.
+/// V1 red 4s + V2 blue [1s,3s) with opacity 0.5 → center: ~50/50 blend.
 #[test]
 fn multilayer_overlay_blends_with_opacity() {
     let Some(dir) = media_dir() else { return };
-    // fuentes de color sólido
+    // solid color sources
     for (name, color) in [("solid_red.mp4", "red"), ("solid_blue.mp4", "blue")] {
         let out = dir.join(name);
         if !out.exists() {
@@ -290,7 +290,7 @@ fn multilayer_overlay_blends_with_opacity() {
             assert!(st.success());
         }
     }
-    let mut project = Project::new("multicapa");
+    let mut project = Project::new("multilayer");
     let seq_id = project.active_sequence;
     let red = ue_media::import_file(&dir.join("solid_red.mp4")).unwrap();
     let blue = ue_media::import_file(&dir.join("solid_blue.mp4")).unwrap();
@@ -298,7 +298,7 @@ fn multilayer_overlay_blends_with_opacity() {
     project.assets.push(red);
     project.assets.push(blue);
     let mut store = ProjectStore::new(project);
-    // añadir V2 encima de V1
+    // add V2 above V1
     let (seq_idx_len, v2) = {
         let seq = store.project.sequence(seq_id).unwrap();
         (seq.tracks.len(), ue_core::model::Track::new(TrackKind::Video, "V2"))
@@ -330,23 +330,23 @@ fn multilayer_overlay_blends_with_opacity() {
 
     let meta = ffprobe_json(&out);
     let dur: f64 = meta["format"]["duration"].as_str().unwrap().parse().unwrap();
-    assert!((3.9..=4.2).contains(&dur), "dura lo que la base (4 s), fue {dur}");
+    assert!((3.9..=4.2).contains(&dur), "lasts as long as the base (4 s), was {dur}");
     let (r, _g, b) = pixel_at(&out, 0.5, 960, 540);
-    assert!(r > 200 && b < 60, "0.5s: rojo puro, fue ({r},{b})");
+    assert!(r > 200 && b < 60, "0.5s: pure red, was ({r},{b})");
     let (r, _g, b) = pixel_at(&out, 2.0, 960, 540);
     assert!(
         (80..=180).contains(&(r as i32)) && (80..=180).contains(&(b as i32)),
-        "2.0s: mezcla rojo+azul al 50%, fue ({r},{b})"
+        "2.0s: red+blue blend at 50%, was ({r},{b})"
     );
     let (r, _g, b) = pixel_at(&out, 3.5, 960, 540);
-    assert!(r > 200 && b < 60, "3.5s: rojo otra vez, fue ({r},{b})");
+    assert!(r > 200 && b < 60, "3.5s: red again, was ({r},{b})");
 }
 
-/// Generadores: degradado de base + rectángulo sólido como capa posicionada.
+/// Generators: gradient base + solid rectangle as a positioned layer.
 #[test]
 fn generators_render_solid_and_gradient() {
     let Some(dir) = media_dir() else { return };
-    let mut project = Project::new("generadores");
+    let mut project = Project::new("generators");
     let seq_id = project.active_sequence;
     let seq = project.sequence_mut(seq_id).unwrap();
     seq.tracks.push(Track::new(TrackKind::Video, "V2"));
@@ -354,7 +354,7 @@ fn generators_render_solid_and_gradient() {
     let v1 = seq.tracks.iter().find(|t| t.kind == TrackKind::Video && t.name == "V1").unwrap().id;
     let mut store = ProjectStore::new(project);
 
-    // base: degradado a lienzo completo (ámbar → casi negro, diagonal)
+    // base: gradient across the whole canvas (amber → near black, diagonal)
     let mut grad = Clip::new_generator("core.gradient", 0, 2 * SEC);
     if let ClipPayload::Generator { color_params, .. } = &mut grad.payload {
         color_params.insert("color_a".into(), "#ffb224".into());
@@ -362,7 +362,7 @@ fn generators_render_solid_and_gradient() {
     }
     store.insert_clip(v1, grad, InsertMode::Strict).unwrap();
 
-    // capa: rectángulo verde 400x300 desplazado a la derecha
+    // layer: green 400x300 rectangle shifted to the right
     let mut rect = Clip::new_generator("core.solid", 0, 2 * SEC);
     if let ClipPayload::Generator { params, color_params, .. } = &mut rect.payload {
         color_params.insert("color".into(), "#00cc44".into());
@@ -377,22 +377,22 @@ fn generators_render_solid_and_gradient() {
 
     let meta = ffprobe_json(&out);
     let dur: f64 = meta["format"]["duration"].as_str().unwrap().parse().unwrap();
-    assert!((1.9..=2.2).contains(&dur), "≈2 s, fue {dur}");
-    // esquina superior izquierda: ámbar del degradado (color_a)
+    assert!((1.9..=2.2).contains(&dur), "≈2 s, was {dur}");
+    // top-left corner: gradient amber (color_a)
     let (r, g, b) = pixel_at(&out, 1.0, 60, 60);
-    assert!(r > 180 && g > 100 && b < 90, "esquina ámbar, fue ({r},{g},{b})");
-    // esquina inferior derecha: hacia negro (color_b)
+    assert!(r > 180 && g > 100 && b < 90, "amber corner, was ({r},{g},{b})");
+    // bottom-right corner: toward black (color_b)
     let (r, g, b) = pixel_at(&out, 1.0, 1860, 1020);
-    assert!(r < 80 && g < 80 && b < 80, "esquina oscura, fue ({r},{g},{b})");
-    // el rectángulo verde: centro del lienzo + 500px
+    assert!(r < 80 && g < 80 && b < 80, "dark corner, was ({r},{g},{b})");
+    // the green rectangle: canvas center + 500px
     let (r, g, b) = pixel_at(&out, 1.0, 1460, 540);
-    assert!(g > 140 && r < 90 && b < 120, "rectángulo verde en +500px, fue ({r},{g},{b})");
-    // a la izquierda del centro NO hay rectángulo (se ve el degradado)
+    assert!(g > 140 && r < 90 && b < 120, "green rectangle at +500px, was ({r},{g},{b})");
+    // to the left of center there is NO rectangle (the gradient shows)
     let (_r, g2, _b) = pixel_at(&out, 1.0, 500, 540);
-    assert!(g2 < 200, "sin verde sólido a la izquierda");
+    assert!(g2 < 200, "no solid green on the left");
 }
 
-/// Posición animada por keyframes: el bloque rojo viaja de izquierda a derecha.
+/// Position animated by keyframes: the red block travels from left to right.
 #[test]
 fn animated_position_moves_in_export() {
     use ue_core::keyframe::{Interp, Keyframe, KeyframeCurve, Param};
@@ -434,24 +434,24 @@ fn animated_position_moves_in_export() {
     let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-anim-pos.mp4");
     export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
 
-    // temprano: bloque a la izquierda; tarde: a la derecha
+    // early: block on the left; late: on the right
     let (r, _g, _b) = pixel_at(&out, 0.3, 300, 540);
-    assert!(r > 180, "t=0.3: rojo a la izquierda, fue r={r}");
+    assert!(r > 180, "t=0.3: red on the left, was r={r}");
     let (r, _g, _b) = pixel_at(&out, 0.3, 1600, 540);
-    assert!(r < 60, "t=0.3: derecha vacía, fue r={r}");
+    assert!(r < 60, "t=0.3: right side empty, was r={r}");
     let (r, _g, _b) = pixel_at(&out, 3.7, 1600, 540);
-    assert!(r > 180, "t=3.7: rojo a la derecha, fue r={r}");
+    assert!(r > 180, "t=3.7: red on the right, was r={r}");
     let (r, _g, _b) = pixel_at(&out, 3.7, 300, 540);
-    assert!(r < 60, "t=3.7: izquierda vacía, fue r={r}");
+    assert!(r < 60, "t=3.7: left side empty, was r={r}");
 }
 
-/// Escala animada: el bloque rojo crece 0.2→1.0 (eval=frame + lienzo).
+/// Animated scale: the red block grows 0.2→1.0 (eval=frame + canvas).
 #[test]
 fn animated_scale_grows_in_export() {
     use ue_core::keyframe::{Interp, Keyframe, KeyframeCurve, Param};
     let Some(dir) = media_dir() else { return };
     let src = dir.join("solid_red.mp4");
-    assert!(src.exists(), "generado por otros tests o por este");
+    assert!(src.exists(), "generated by other tests or by this one");
     let mut project = Project::new("anim-scale");
     let seq_id = project.active_sequence;
     let asset = ue_media::import_file(&src).unwrap();
@@ -477,16 +477,16 @@ fn animated_scale_grows_in_export() {
     let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-anim-scale.mp4");
     export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
 
-    // el rojo nativo es 640x360; a escala 0.2 NO llega a x=700, a 1.0 sí
+    // the native red is 640x360; at scale 0.2 it does NOT reach x=700, at 1.0 it does
     let (r, _g, _b) = pixel_at(&out, 0.3, 700, 540);
-    assert!(r < 60, "t=0.3: escala pequeña, x=700 negro, fue r={r}");
+    assert!(r < 60, "t=0.3: small scale, x=700 black, was r={r}");
     let (r, _g, _b) = pixel_at(&out, 0.3, 960, 540);
-    assert!(r > 180, "t=0.3: el centro sí es rojo, fue r={r}");
+    assert!(r > 180, "t=0.3: the center is red, was r={r}");
     let (r, _g, _b) = pixel_at(&out, 3.8, 700, 540);
-    assert!(r > 180, "t=3.8: escala 1.0, x=700 rojo, fue r={r}");
+    assert!(r > 180, "t=3.8: scale 1.0, x=700 red, was r={r}");
 }
 
-/// Opacidad animada 0→1 sobre negro: el centro pasa de oscuro a rojo.
+/// Animated opacity 0→1 over black: the center goes from dark to red.
 #[test]
 fn animated_opacity_fades_in_export() {
     use ue_core::keyframe::{Interp, Keyframe, KeyframeCurve, Param};
@@ -520,17 +520,17 @@ fn animated_opacity_fades_in_export() {
     let (r0, _g, _b) = pixel_at(&out, 0.2, 960, 540);
     let (r1, _g, _b) = pixel_at(&out, 2.0, 960, 540);
     let (r2, _g, _b) = pixel_at(&out, 3.8, 960, 540);
-    assert!(r0 < 40, "t=0.2: casi transparente sobre negro, fue r={r0}");
-    assert!((80..190).contains(&(r1 as i32)), "t=2.0: mezcla intermedia, fue r={r1}");
-    assert!(r2 > 200, "t=3.8: opaco, fue r={r2}");
-    assert!(r0 < r1 && r1 < r2, "monótono: {r0} < {r1} < {r2}");
+    assert!(r0 < 40, "t=0.2: nearly transparent over black, was r={r0}");
+    assert!((80..190).contains(&(r1 as i32)), "t=2.0: intermediate blend, was r={r1}");
+    assert!(r2 > 200, "t=3.8: opaque, was r={r2}");
+    assert!(r0 < r1 && r1 < r2, "monotonic: {r0} < {r1} < {r2}");
 }
 
 // ---------------------------------------------------------------------------
-// Audio: pan, curvas de ganancia y loudnorm
+// Audio: pan, gain curves and loudnorm
 // ---------------------------------------------------------------------------
 
-/// PCM s16le intercalado del audio exportado (48k estéreo).
+/// Interleaved s16le PCM of the exported audio (48k stereo).
 fn decode_pcm(path: &Path) -> Vec<i16> {
     let out = Command::new(ue_media::ffmpeg_bin())
         .args(["-v", "error", "-i"])
@@ -555,8 +555,8 @@ fn rms(samples: impl Iterator<Item = i16>) -> f64 {
     if n == 0 { 0.0 } else { (sq / n as f64).sqrt() }
 }
 
-/// pan=1 silencia la izquierda; una curva 0→-40 dB apaga la segunda mitad;
-/// loudnorm aparece en el grafo cuando se pide.
+/// pan=1 silences the left; a 0→-40 dB curve mutes the second half;
+/// loudnorm appears in the graph when requested.
 #[test]
 fn audio_pan_and_gain_curve_apply_in_export() {
     use ue_core::keyframe::{Interp, Keyframe, KeyframeCurve, Param};
@@ -583,47 +583,47 @@ fn audio_pan_and_gain_curve_apply_in_export() {
     let left = rms(pcm.iter().step_by(2).copied());
     let right_first = rms(pcm.chunks_exact(2).take(48000 * 2).map(|c| c[1]));
     let right_second = rms(pcm.chunks_exact(2).skip(48000 * 2 + 24000).map(|c| c[1]));
-    assert!(left < 0.005, "pan=1 debe silenciar la izquierda, RMS fue {left}");
-    // el sine de lavfi es de baja amplitud: basta con que suene claramente
-    assert!(right_first > 0.03, "derecha suena en la primera mitad, RMS fue {right_first}");
+    assert!(left < 0.005, "pan=1 must silence the left, RMS was {left}");
+    // the lavfi sine is low amplitude: it just needs to be clearly audible
+    assert!(right_first > 0.03, "right plays in the first half, RMS was {right_first}");
     assert!(
         right_second < right_first * 0.05,
-        "la curva apaga la segunda mitad: {right_second} vs {right_first}"
+        "the curve mutes the second half: {right_second} vs {right_first}"
     );
 }
 
-/// range=[1s,3s) recorta el máster ya compuesto: dura ≈2 s.
+/// range=[1s,3s) trims the already-composed master: lasts ≈2 s.
 #[test]
 fn range_export_trims_master() {
     let Some(dir) = media_dir() else { return };
-    let (store, seq_id) = simple_store(dir); // clip de 4 s
+    let (store, seq_id) = simple_store(dir); // 4 s clip
     let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-range.mp4");
     let settings = ExportSettings { range: Some((1 * SEC, 3 * SEC)), ..Default::default() };
     export_sequence(&store.project, seq_id, dir, &out, &settings).unwrap();
     let meta = ffprobe_json(&out);
     let dur: f64 = meta["format"]["duration"].as_str().unwrap().parse().unwrap();
-    assert!((1.9..=2.2).contains(&dur), "rango de 2 s, fue {dur}");
+    assert!((1.9..=2.2).contains(&dur), "2 s range, was {dur}");
     assert!(meta["streams"].as_array().unwrap().iter().any(|s| s["codec_type"] == "audio"));
 }
 
-/// M4A: sin stream de video, con audio, duración de la mezcla.
+/// M4A: no video stream, with audio, duration of the mix.
 #[test]
 fn audio_only_export_m4a() {
     let Some(dir) = media_dir() else { return };
-    let (store, seq_id) = simple_store(dir); // clip 4s con tono
+    let (store, seq_id) = simple_store(dir); // 4s clip with tone
     let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-audio-only.m4a");
     let settings =
         ExportSettings { format: ue_export::ExportFormat::M4a, ..Default::default() };
     export_sequence(&store.project, seq_id, dir, &out, &settings).unwrap();
     let meta = ffprobe_json(&out);
     let streams = meta["streams"].as_array().unwrap();
-    assert!(streams.iter().all(|s| s["codec_type"] != "video"), "sin video");
-    assert!(streams.iter().any(|s| s["codec_type"] == "audio"), "con audio");
+    assert!(streams.iter().all(|s| s["codec_type"] != "video"), "no video");
+    assert!(streams.iter().any(|s| s["codec_type"] == "audio"), "with audio");
     let dur: f64 = meta["format"]["duration"].as_str().unwrap().parse().unwrap();
-    assert!((3.8..=4.3).contains(&dur), "≈4 s, fue {dur}");
+    assert!((3.8..=4.3).contains(&dur), "≈4 s, was {dur}");
 }
 
-/// GIF: contenedor gif, ≤480 px de ancho, sin audio.
+/// GIF: gif container, ≤480 px wide, no audio.
 #[test]
 fn gif_export_palette() {
     let Some(dir) = media_dir() else { return };
@@ -631,7 +631,7 @@ fn gif_export_palette() {
     let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-out.gif");
     let settings = ExportSettings {
         format: ue_export::ExportFormat::Gif,
-        range: Some((0, 2 * SEC)), // GIF corto
+        range: Some((0, 2 * SEC)), // short GIF
         ..Default::default()
     };
     export_sequence(&store.project, seq_id, dir, &out, &settings).unwrap();
@@ -651,19 +651,19 @@ fn loudnorm_flag_appends_master_filter() {
     let plan =
         ue_export::graph::build_ffmpeg_args(&store.project, seq_id, dir, &out, &settings).unwrap();
     let fc = plan.args.iter().find(|a| a.contains("amix")).unwrap();
-    assert!(fc.contains("loudnorm=I=-14"), "grafo con loudnorm: {fc}");
+    assert!(fc.contains("loudnorm=I=-14"), "graph with loudnorm: {fc}");
     let settings = ExportSettings::default();
     let plan =
         ue_export::graph::build_ffmpeg_args(&store.project, seq_id, dir, &out, &settings).unwrap();
     let fc = plan.args.iter().find(|a| a.contains("amix")).unwrap();
-    assert!(!fc.contains("loudnorm"), "sin flag no hay loudnorm: {fc}");
+    assert!(!fc.contains("loudnorm"), "without the flag there is no loudnorm: {fc}");
 }
 
 // ---------------------------------------------------------------------------
-// Progreso, cancelación y efectos (chroma key de punta a punta)
+// Progress, cancellation and effects (end-to-end chroma key)
 // ---------------------------------------------------------------------------
 
-/// Timeline mínimo listo para exportar sobre counter.mp4.
+/// Minimal timeline ready to export over counter.mp4.
 fn simple_store(dir: &Path) -> (ProjectStore, Id) {
     let mut project = Project::new("fx-test");
     let seq_id = project.active_sequence;
@@ -702,9 +702,9 @@ fn export_reports_monotonic_progress() {
         &never,
     )
     .unwrap();
-    assert!(!values.is_empty(), "hubo reportes de progreso");
-    assert!(values.windows(2).all(|w| w[0] <= w[1]), "monótono: {values:?}");
-    assert_eq!(*values.last().unwrap(), 1.0, "termina en 1.0");
+    assert!(!values.is_empty(), "there were progress reports");
+    assert!(values.windows(2).all(|w| w[0] <= w[1]), "monotonic: {values:?}");
+    assert_eq!(*values.last().unwrap(), 1.0, "ends at 1.0");
 }
 
 #[test]
@@ -712,7 +712,7 @@ fn export_cancellation_kills_and_cleans() {
     let Some(dir) = media_dir() else { return };
     let (store, seq_id) = simple_store(dir);
     let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-cancel-out.mp4");
-    let cancel = AtomicBool::new(true); // cancelado desde el arranque
+    let cancel = AtomicBool::new(true); // cancelled from the start
     let result = export_sequence_with_progress(
         &store.project,
         seq_id,
@@ -723,15 +723,15 @@ fn export_cancellation_kills_and_cleans() {
         &cancel,
     );
     assert!(matches!(result, Err(ExportError::Cancelled)));
-    assert!(!out.exists(), "el parcial se borra al cancelar");
+    assert!(!out.exists(), "the partial file is deleted on cancel");
 }
 
-/// Lee el píxel RGB (x, y) del frame en `t` segundos de un video de 1920 de ancho.
+/// Reads the RGB pixel (x, y) of the frame at `t` seconds from a 1920-wide video.
 fn pixel_at(video: &Path, t: f64, x: u32, y: u32) -> (u8, u8, u8) {
     pixel_at_w(video, t, x, y, 1920)
 }
 
-/// Igual que pixel_at pero para anchos arbitrarios.
+/// Same as pixel_at but for arbitrary widths.
 fn pixel_at_w(video: &Path, t: f64, x: u32, y: u32, w: usize) -> (u8, u8, u8) {
     let out = Command::new(ue_media::ffmpeg_bin())
         .args(["-v", "error", "-ss", &t.to_string(), "-i"])
@@ -744,12 +744,12 @@ fn pixel_at_w(video: &Path, t: f64, x: u32, y: u32, w: usize) -> (u8, u8, u8) {
     (out.stdout[idx], out.stdout[idx + 1], out.stdout[idx + 2])
 }
 
-/// Chroma key de punta a punta: fondo verde con caja roja → export con el
-/// efecto → el verde desaparece (negro v0) y el rojo sobrevive.
+/// End-to-end chroma key: green background with a red box → export with the
+/// effect → the green disappears (black v0) and the red survives.
 #[test]
 fn chroma_key_effect_applies_in_export() {
     let Some(dir) = media_dir() else { return };
-    // fuente: fondo verde puro con caja roja centrada
+    // source: pure green background with a centered red box
     let src = dir.join("greenscreen.mp4");
     let st = Command::new(ue_media::ffmpeg_bin())
         .args([
@@ -790,33 +790,33 @@ fn chroma_key_effect_applies_in_export() {
     });
     store.insert_clip(v1, clip, InsertMode::Strict).unwrap();
 
-    // la EDL lleva la cadena renderizada
+    // the EDL carries the rendered chain
     let edl = build_video_edl(&store.project, seq_id).unwrap();
     match &edl[0] {
         Segment::Source { vf: Some(vf), .. } => {
-            assert!(vf.contains("chromakey=color=0x00FF00"), "cadena: {vf}");
+            assert!(vf.contains("chromakey=color=0x00FF00"), "chain: {vf}");
             assert!(vf.contains("despill"));
         }
-        other => panic!("se esperaba Source con vf, fue {other:?}"),
+        other => panic!("expected Source with vf, was {other:?}"),
     }
 
     let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-chroma-out.mp4");
     export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
 
-    // El video fuente 640x360 se letterboxea a 1920x1080 (escala ×3):
-    // fondo verde en (100,540)→fuente(33,180); caja roja en (960,540)→fuente(320,180).
+    // The 640x360 source video is letterboxed to 1920x1080 (scale ×3):
+    // green background at (100,540)→source(33,180); red box at (960,540)→source(320,180).
     let (r, g, b) = pixel_at(&out, 1.0, 100, 540);
     assert!(
         r < 40 && g < 40 && b < 40,
-        "el fondo verde quedó keyeado (negro v0), fue rgb({r},{g},{b})"
+        "the green background got keyed out (black v0), was rgb({r},{g},{b})"
     );
     let (r, g, b) = pixel_at(&out, 1.0, 960, 540);
     assert!(
         r > 150 && g < 90 && b < 90,
-        "la caja roja sobrevive al keying, fue rgb({r},{g},{b})"
+        "the red box survives the keying, was rgb({r},{g},{b})"
     );
 
-    // y sin el efecto, el fondo sigue verde (control)
+    // and without the effect, the background stays green (control)
     let mut store2 = {
         let mut project = Project::new("control");
         let seq_id2 = project.active_sequence;
@@ -838,25 +838,25 @@ fn chroma_key_effect_applies_in_export() {
     let out2 = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-chroma-control.mp4");
     export_sequence(&store2.0.project, store2.1, dir, &out2, &ExportSettings::default()).unwrap();
     let (r, g, _b) = pixel_at(&out2, 1.0, 100, 540);
-    assert!(g > 150 && r < 90, "control sin efecto: sigue verde");
+    assert!(g > 150 && r < 90, "control without effect: still green");
     let _ = &mut store2;
 }
 
 // ---------------------------------------------------------------------------
-// Transiciones (crossfade)
+// Transitions (crossfade)
 // ---------------------------------------------------------------------------
 
 #[test]
 fn transition_extends_handles_and_survives_edl() {
     let (mut store, seq, v1, _v2, _a1, a, b) = project_two_video_tracks();
-    // A usa [1..3) del archivo (hay material después); B usa [4..6) (hay antes)
+    // A uses [1..3) of the file (there is material after); B uses [4..6) (there is before)
     store.insert_clip(v1, Clip::new_media(a, 1 * SEC, 3 * SEC, 0), InsertMode::Strict).unwrap();
     let clip_b = Clip::new_media(b, 4 * SEC, 6 * SEC, 2 * SEC);
     let b_id = clip_b.id;
     store.insert_clip(v1, clip_b, InsertMode::Strict).unwrap();
     store
         .dispatch(
-            "transición",
+            "transition",
             vec![ue_core::Action::SetClipTransition {
                 clip_id: b_id,
                 transition: Some(TransitionRef {
@@ -870,7 +870,7 @@ fn transition_extends_handles_and_survives_edl() {
 
     let edl = build_video_edl(&store.project, seq).unwrap();
     assert_eq!(edl.len(), 2);
-    // handles: A extendida +0.5s, B adelantada -0.5s, transición efectiva 1s
+    // handles: A extended +0.5s, B pulled forward -0.5s, effective transition 1s
     match (&edl[0], &edl[1]) {
         (
             Segment::Source { src_in: a_in, src_out: a_out, .. },
@@ -880,12 +880,12 @@ fn transition_extends_handles_and_survives_edl() {
             assert_eq!((*b_in, *b_out), (4 * SEC - 500_000, 6 * SEC));
             assert_eq!(*transition_in, Some((1 * SEC, "core.crossfade".to_string())));
         }
-        other => panic!("EDL inesperada: {other:?}"),
+        other => panic!("unexpected EDL: {other:?}"),
     }
-    // la duración de salida no cambia: 4 s
+    // the output duration does not change: 4 s
     assert_eq!(edl_duration(&edl), 4 * SEC);
 
-    // sin material suficiente (clip A pegado al final del archivo) → se reduce
+    // not enough material (clip A pinned to the end of the file) → it shrinks
     let (mut store2, seq2, v1b, _v, _a, a2, b2) = project_two_video_tracks();
     store2.insert_clip(v1b, Clip::new_media(a2, 8 * SEC, 10 * SEC, 0), InsertMode::Strict).unwrap();
     let cb = Clip::new_media(b2, 4 * SEC, 6 * SEC, 2 * SEC);
@@ -893,7 +893,7 @@ fn transition_extends_handles_and_survives_edl() {
     store2.insert_clip(v1b, cb, InsertMode::Strict).unwrap();
     store2
         .dispatch(
-            "transición",
+            "transition",
             vec![ue_core::Action::SetClipTransition {
                 clip_id: cb_id,
                 transition: Some(TransitionRef {
@@ -907,14 +907,14 @@ fn transition_extends_handles_and_survives_edl() {
     let edl2 = build_video_edl(&store2.project, seq2).unwrap();
     match &edl2[1] {
         Segment::Source { transition_in, .. } => {
-            assert_eq!(*transition_in, None, "sin handle a la izquierda → sin transición");
+            assert_eq!(*transition_in, None, "no handle on the left → no transition");
         }
         other => panic!("{other:?}"),
     }
 }
 
-/// Rojo→azul con crossfade de 1 s: la duración total se conserva y el punto
-/// medio de la transición es una mezcla de ambos.
+/// Red→blue with a 1 s crossfade: the total duration is preserved and the
+/// midpoint of the transition is a blend of both.
 #[test]
 fn crossfade_export_blends_and_keeps_duration() {
     let Some(dir) = media_dir() else { return };
@@ -944,14 +944,14 @@ fn crossfade_export_blends_and_keeps_duration() {
         .unwrap()
         .id;
     let mut store = ProjectStore::new(project);
-    // rojo [0.5..3.5) en t=0; azul [0.5..3.5) en t=3 → hay handles a ambos lados
+    // red [0.5..3.5) at t=0; blue [0.5..3.5) at t=3 → there are handles on both sides
     store.insert_clip(v1, Clip::new_media(rid, 500_000, 3_500_000, 0), InsertMode::Strict).unwrap();
     let cb = Clip::new_media(bid, 500_000, 3_500_000, 3 * SEC);
     let cb_id = cb.id;
     store.insert_clip(v1, cb, InsertMode::Strict).unwrap();
     store
         .dispatch(
-            "transición",
+            "transition",
             vec![ue_core::Action::SetClipTransition {
                 clip_id: cb_id,
                 transition: Some(TransitionRef {
@@ -968,28 +968,28 @@ fn crossfade_export_blends_and_keeps_duration() {
 
     let meta = ffprobe_json(&out);
     let dur: f64 = meta["format"]["duration"].as_str().unwrap().parse().unwrap();
-    assert!((5.9..=6.2).contains(&dur), "6 s exactos pese al crossfade, fue {dur}");
+    assert!((5.9..=6.2).contains(&dur), "exactly 6 s despite the crossfade, was {dur}");
 
-    // t=1.5: rojo puro; t=4.5: azul puro; t=3.0 (centro de la transición): mezcla
+    // t=1.5: pure red; t=4.5: pure blue; t=3.0 (center of the transition): blend
     let (r, _g, b) = pixel_at(&out, 1.5, 960, 540);
-    assert!(r > 180 && b < 60, "rojo puro, fue r={r} b={b}");
+    assert!(r > 180 && b < 60, "pure red, was r={r} b={b}");
     let (r, _g, b) = pixel_at(&out, 4.5, 960, 540);
-    assert!(b > 180 && r < 60, "azul puro, fue r={r} b={b}");
+    assert!(b > 180 && r < 60, "pure blue, was r={r} b={b}");
     let (r, _g, b) = pixel_at(&out, 3.0, 960, 540);
     assert!(
         (50..=200).contains(&(r as i32)) && (50..=200).contains(&(b as i32)),
-        "mezcla en el centro del fundido, fue r={r} b={b}"
+        "blend at the center of the fade, was r={r} b={b}"
     );
 }
 
 // ---------------------------------------------------------------------------
-// Títulos quemados en el export (drawtext)
+// Titles burned into the export (drawtext)
 // ---------------------------------------------------------------------------
 
 #[test]
 fn text_clips_burn_into_export() {
     let Some(dir) = media_dir() else { return };
-    // base: video negro de 3 s
+    // base: 3 s black video
     let src = dir.join("black.mp4");
     let st = Command::new(ue_media::ffmpeg_bin())
         .args(["-y", "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=640x360:d=3:r=30"])
@@ -1004,7 +1004,7 @@ fn text_clips_burn_into_export() {
     let asset = ue_media::import_file(&src).unwrap();
     let aid = asset.id;
     project.assets.push(asset);
-    // V2 encima para el título
+    // V2 above for the title
     let seq = project.sequence_mut(seq_id).unwrap();
     seq.tracks.push(Track::new(TrackKind::Video, "V2"));
     let v2 = seq.tracks.last().unwrap().id;
@@ -1016,8 +1016,8 @@ fn text_clips_burn_into_export() {
         .id;
     let mut store = ProjectStore::new(project);
     store.insert_clip(v1, Clip::new_media(aid, 0, 3 * SEC, 0), InsertMode::Strict).unwrap();
-    // título centrado, blanco, tamaño 120 (grande para el muestreo), 1..3 s
-    let mut title = Clip::new_text("HOLA MUNDO", 1 * SEC, 2 * SEC);
+    // centered title, white, size 120 (large for sampling), 1..3 s
+    let mut title = Clip::new_text("HELLO WORLD", 1 * SEC, 2 * SEC);
     if let ClipPayload::Text { style, .. } = &mut title.payload {
         style.size = 120.0;
     }
@@ -1026,7 +1026,7 @@ fn text_clips_burn_into_export() {
     let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-text-out.mp4");
     export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
 
-    // muestrear una banda central en t=2 (título activo) buscando píxeles claros
+    // sample a central band at t=2 (title active) looking for bright pixels
     let bright_at = |t: f64| -> usize {
         let mut bright = 0;
         for x in (600..1300).step_by(20) {
@@ -1037,16 +1037,16 @@ fn text_clips_burn_into_export() {
         }
         bright
     };
-    assert!(bright_at(2.0) >= 3, "el título es visible en t=2 ({} muestras claras)", bright_at(2.0));
-    assert_eq!(bright_at(0.5), 0, "antes del título todo es negro");
+    assert!(bright_at(2.0) >= 3, "the title is visible at t=2 ({} bright samples)", bright_at(2.0));
+    assert_eq!(bright_at(0.5), 0, "before the title everything is black");
 }
 
-/// Subtítulos automáticos: un TranscriptDoc con dos frases → clip Subtitles
-/// sobre video negro → cada frase aparece en su rango (banda inferior) y no fuera.
+/// Auto subtitles: a TranscriptDoc with two phrases → Subtitles clip
+/// over black video → each phrase appears in its range (bottom band) and not outside.
 #[test]
 fn auto_subtitles_burn_per_segment() {
     let Some(dir) = media_dir() else { return };
-    let src = dir.join("black_subs.mp4"); // archivo propio: evita carreras con otros tests
+    let src = dir.join("black_subs.mp4"); // own file: avoids races with other tests
     let st = Command::new(ue_media::ffmpeg_bin())
         .args(["-y", "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=640x360:d=3:r=30"])
         .args(["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"])
@@ -1060,7 +1060,7 @@ fn auto_subtitles_burn_per_segment() {
     let asset = ue_media::import_file(&src).unwrap();
     let aid = asset.id;
     project.assets.push(asset);
-    // transcripción sintética: "primera frase" [0.2..1.2s), "segunda" [1.8..2.6s)
+    // synthetic transcript: "first phrase" [0.2..1.2s), "second" [1.8..2.6s)
     let doc = TranscriptDoc {
         id: Id::new(),
         asset_id: aid,
@@ -1069,7 +1069,7 @@ fn auto_subtitles_burn_per_segment() {
         words: vec![],
         segments: vec![
             ue_core::model::Segment {
-                text: "primera frase".into(),
+                text: "first phrase".into(),
                 start_us: 200_000,
                 end_us: 1_200_000,
                 word_range: (0, 0),
@@ -1077,7 +1077,7 @@ fn auto_subtitles_burn_per_segment() {
                 volume_rms: 0.0,
             },
             ue_core::model::Segment {
-                text: "segunda".into(),
+                text: "second".into(),
                 start_us: 1_800_000,
                 end_us: 2_600_000,
                 word_range: (0, 0),
@@ -1125,7 +1125,7 @@ fn auto_subtitles_burn_per_segment() {
     let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-subs-out.mp4");
     export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
 
-    // banda de subtítulos: y = 540 + 380 = 920 (centro del texto)
+    // subtitle band: y = 540 + 380 = 920 (center of the text)
     let bright_at = |t: f64| -> usize {
         let mut n = 0;
         for x in (500..1400).step_by(25) {
@@ -1136,17 +1136,17 @@ fn auto_subtitles_burn_per_segment() {
         }
         n
     };
-    assert!(bright_at(0.7) >= 3, "primera frase visible en t=0.7 ({})", bright_at(0.7));
-    assert_eq!(bright_at(1.5), 0, "hueco entre frases sin texto");
-    assert!(bright_at(2.2) >= 2, "segunda frase visible en t=2.2 ({})", bright_at(2.2));
+    assert!(bright_at(0.7) >= 3, "first phrase visible at t=0.7 ({})", bright_at(0.7));
+    assert_eq!(bright_at(1.5), 0, "gap between phrases with no text");
+    assert!(bright_at(2.2) >= 2, "second phrase visible at t=2.2 ({})", bright_at(2.2));
 }
 
 // ---------------------------------------------------------------------------
 // Modo vertical (core.vertical_fill)
 // ---------------------------------------------------------------------------
 
-/// La secuencia vertical exporta a 1080x1920 y el fondo desenfocado llena la
-/// parte superior (no hay letterbox negro), mientras el centro es el video.
+/// The vertical sequence exports at 1080x1920 and the blurred background fills the
+/// top part (no black letterbox), while the center is the video.
 #[test]
 fn vertical_fill_export_has_blurred_background() {
     let Some(dir) = media_dir() else { return };
@@ -1155,7 +1155,7 @@ fn vertical_fill_export_has_blurred_background() {
     let asset = ue_media::import_file(&dir.join("counter.mp4")).unwrap();
     let aid = asset.id;
     project.assets.push(asset);
-    // secuencia vertical con el efecto en el clip (lo que produce el wizard)
+    // vertical sequence with the effect on the clip (what the wizard produces)
     let seq = project.sequence_mut(seq_id).unwrap();
     seq.resolution = (1080, 1920);
     let v1 = seq
@@ -1181,7 +1181,7 @@ fn vertical_fill_export_has_blurred_background() {
     let v = meta["streams"].as_array().unwrap().iter().find(|s| s["codec_type"] == "video").unwrap();
     assert_eq!((v["width"].as_i64(), v["height"].as_i64()), (Some(1080), Some(1920)));
 
-    // banda superior (y=200): fondo desenfocado ⇒ NO negro
+    // top band (y=200): blurred background ⇒ NOT black
     let mut top_bright = 0;
     for x in (100..1000).step_by(80) {
         let (r, g, b) = pixel_at_w(&out, 1.0, x, 200, 1080);
@@ -1189,19 +1189,19 @@ fn vertical_fill_export_has_blurred_background() {
             top_bright += 1;
         }
     }
-    assert!(top_bright >= 6, "el fondo desenfocado llena arriba ({top_bright}/12)");
-    // centro (y=960): el video real (testsrc tiene colores saturados)
+    assert!(top_bright >= 6, "the blurred background fills the top ({top_bright}/12)");
+    // center (y=960): the real video (testsrc has saturated colors)
     let (r, g, b) = pixel_at_w(&out, 1.0, 540, 960, 1080);
-    assert!(r as u32 + g as u32 + b as u32 > 120, "centro con contenido: rgb({r},{g},{b})");
+    assert!(r as u32 + g as u32 + b as u32 > 120, "center has content: rgb({r},{g},{b})");
 }
 
 // ---------------------------------------------------------------------------
-// Avatar reactivo (movie+overlay por segmento)
+// Reactive avatar (movie+overlay per segment)
 // ---------------------------------------------------------------------------
 
-/// Avatar con dos emociones (calm=azul, angry=rojo) sobre el video: la esquina
-/// inferior derecha muestra azul durante el segmento calm y rojo durante angry;
-/// el resto del frame sigue siendo el video base.
+/// Avatar with two emotions (calm=blue, angry=red) over the video: the bottom-right
+/// corner shows blue during the calm segment and red during angry;
+/// the rest of the frame is still the base video.
 #[test]
 fn avatar_overlay_switches_emotion_per_segment() {
     let Some(dir) = media_dir() else { return };
@@ -1221,7 +1221,7 @@ fn avatar_overlay_switches_emotion_per_segment() {
     let asset = ue_media::import_file(&dir.join("counter.mp4")).unwrap();
     let aid = asset.id;
     project.assets.push(asset);
-    // transcript con emociones ya clasificadas
+    // transcript with emotions already classified
     project.transcripts.push(TranscriptDoc {
         id: Id::new(),
         asset_id: aid,
@@ -1230,7 +1230,7 @@ fn avatar_overlay_switches_emotion_per_segment() {
         words: vec![],
         segments: vec![
             ue_core::model::Segment {
-                text: "tranquilo".into(),
+                text: "calm".into(),
                 start_us: 200_000,
                 end_us: 1_800_000,
                 word_range: (0, 0),
@@ -1238,7 +1238,7 @@ fn avatar_overlay_switches_emotion_per_segment() {
                 volume_rms: 1.0,
             },
             ue_core::model::Segment {
-                text: "enfadado".into(),
+                text: "angry".into(),
                 start_us: 2_200_000,
                 end_us: 3_800_000,
                 word_range: (0, 0),
@@ -1280,19 +1280,19 @@ fn avatar_overlay_switches_emotion_per_segment() {
     let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-avatar-out.mp4");
     export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
 
-    // avatar: aw=576, x∈[1320,1896], alto=432 → y∈[624,1056]; muestrear el centro
+    // avatar: aw=576, x∈[1320,1896], height=432 → y∈[624,1056]; sample the center
     let sample = |t: f64| pixel_at(&out, t, 1600, 850);
-    let (r, g, b) = sample(1.0); // calm → azul
-    assert!(b > 120 && r < 90, "calm=azul en t=1: rgb({r},{g},{b})");
-    let (r, g, b) = sample(3.0); // angry → rojo
-    assert!(r > 120 && b < 90, "angry=rojo en t=3: rgb({r},{g},{b})");
-    // fuera del avatar el video base sigue visible (testsrc: no negro)
+    let (r, g, b) = sample(1.0); // calm → blue
+    assert!(b > 120 && r < 90, "calm=blue at t=1: rgb({r},{g},{b})");
+    let (r, g, b) = sample(3.0); // angry → red
+    assert!(r > 120 && b < 90, "angry=red at t=3: rgb({r},{g},{b})");
+    // outside the avatar the base video is still visible (testsrc: not black)
     let (r, g, b) = pixel_at(&out, 1.0, 400, 300);
-    assert!(r as u32 + g as u32 + b as u32 > 100, "el video base sigue debajo");
+    assert!(r as u32 + g as u32 + b as u32 > 100, "the base video is still underneath");
 }
 
-/// Velocidad 2× real: el contador de testsrc avanza el doble por segundo de
-/// salida, la duración se reduce a la mitad y el audio lleva atempo (pitch OK).
+/// Real 2× speed: the testsrc counter advances twice as fast per second of
+/// output, the duration is halved and the audio carries atempo (pitch OK).
 #[test]
 fn speed_2x_export_halves_duration_and_doubles_counter() {
     let Some(dir) = media_dir() else { return };
@@ -1310,7 +1310,7 @@ fn speed_2x_export_halves_duration_and_doubles_counter() {
         .unwrap()
         .id;
     let mut store = ProjectStore::new(project);
-    // fuente [0..6s) a 2× → 3 s de salida
+    // source [0..6s) at 2× → 3 s of output
     let clip_id = store
         .insert_clip(v1, Clip::new_media(aid, 0, 6 * SEC, 0), InsertMode::Strict)
         .unwrap();
@@ -1322,17 +1322,17 @@ fn speed_2x_export_halves_duration_and_doubles_counter() {
 
     let meta = ffprobe_json(&out);
     let dur: f64 = meta["format"]["duration"].as_str().unwrap().parse().unwrap();
-    assert!((2.9..=3.2).contains(&dur), "≈3 s de salida, fue {dur}");
+    assert!((2.9..=3.2).contains(&dur), "≈3 s of output, was {dur}");
     assert!(
         meta["streams"].as_array().unwrap().iter().any(|s| s["codec_type"] == "audio"),
-        "el audio sobrevive con atempo"
+        "the audio survives with atempo"
     );
 
-    // el contador (dígito grande del testsrc) en t=1 de salida debe ser "2"
-    // (fuente 2s), y en t=2.5 debe ser "5". Verificación visual: extraer frames.
+    // the counter (big digit of the testsrc) at t=1 of output must be "2"
+    // (source 2s), and at t=2.5 must be "5". Visual check: extract frames.
     let frames_dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-speed-frames");
     std::fs::create_dir_all(&frames_dir).unwrap();
-    for (name, t) in [("salida2x_1s", 1.0f64), ("salida2x_2.5s", 2.5)] {
+    for (name, t) in [("output2x_1s", 1.0f64), ("output2x_2.5s", 2.5)] {
         let st = Command::new(ue_media::ffmpeg_bin())
             .args(["-y", "-v", "error", "-ss", &t.to_string(), "-i"])
             .arg(&out)
@@ -1342,10 +1342,10 @@ fn speed_2x_export_halves_duration_and_doubles_counter() {
             .unwrap();
         assert!(st.success());
     }
-    eprintln!("frames de velocidad en {}", frames_dir.display());
+    eprintln!("speed frames at {}", frames_dir.display());
 }
 
-/// Modo palabra a palabra: cada palabra aparece sola en su instante exacto.
+/// Word-by-word mode: each word appears alone at its exact moment.
 #[test]
 fn word_mode_subtitles_burn_per_word() {
     let Some(dir) = media_dir() else { return };
@@ -1370,9 +1370,9 @@ fn word_mode_subtitles_burn_per_word() {
         language: "es".into(),
         model: "t".into(),
         words: vec![
-            Word { text: "UNO".into(), start_us: 300_000, end_us: 800_000, confidence: 1.0, rejected: false },
-            Word { text: "DOS".into(), start_us: 1_500_000, end_us: 2_000_000, confidence: 1.0, rejected: false },
-            Word { text: "IGNORADA".into(), start_us: 2_300_000, end_us: 2_600_000, confidence: 1.0, rejected: true },
+            Word { text: "ONE".into(), start_us: 300_000, end_us: 800_000, confidence: 1.0, rejected: false },
+            Word { text: "TWO".into(), start_us: 1_500_000, end_us: 2_000_000, confidence: 1.0, rejected: false },
+            Word { text: "IGNORED".into(), start_us: 2_300_000, end_us: 2_600_000, confidence: 1.0, rejected: true },
         ],
         segments: vec![],
         global_avg_volume: 0.0,
@@ -1415,13 +1415,13 @@ fn word_mode_subtitles_burn_per_word() {
         }
         n
     };
-    assert!(bright_at(0.5) >= 2, "UNO visible en t=0.5 ({})", bright_at(0.5));
-    assert_eq!(bright_at(1.1), 0, "hueco entre palabras limpio");
-    assert!(bright_at(1.7) >= 2, "DOS visible en t=1.7 ({})", bright_at(1.7));
-    assert_eq!(bright_at(2.4), 0, "las palabras rechazadas no se queman");
+    assert!(bright_at(0.5) >= 2, "ONE visible at t=0.5 ({})", bright_at(0.5));
+    assert_eq!(bright_at(1.1), 0, "clean gap between words");
+    assert!(bright_at(1.7) >= 2, "TWO visible at t=1.7 ({})", bright_at(1.7));
+    assert_eq!(bright_at(2.4), 0, "rejected words are not burned in");
 }
 
-/// Karaoke: la frase entera visible y las palabras se encienden al sonar.
+/// Karaoke: the whole phrase visible and the words light up as they are spoken.
 #[test]
 fn karaoke_mode_highlights_words_progressively() {
     let Some(dir) = media_dir() else { return };
@@ -1448,11 +1448,11 @@ fn karaoke_mode_highlights_words_progressively() {
         language: "es".into(),
         model: "t".into(),
         words: vec![
-            Word { text: "UNO".into(), start_us: 300_000, end_us: 800_000, confidence: 1.0, rejected: false },
-            Word { text: "DOS".into(), start_us: 1_500_000, end_us: 2_000_000, confidence: 1.0, rejected: false },
+            Word { text: "ONE".into(), start_us: 300_000, end_us: 800_000, confidence: 1.0, rejected: false },
+            Word { text: "TWO".into(), start_us: 1_500_000, end_us: 2_000_000, confidence: 1.0, rejected: false },
         ],
         segments: vec![ue_core::model::Segment {
-            text: "UNO DOS".into(),
+            text: "ONE TWO".into(),
             start_us: 200_000,
             end_us: 2_600_000,
             word_range: (0, 2),
@@ -1489,7 +1489,7 @@ fn karaoke_mode_highlights_words_progressively() {
     let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-karaoke-out.mp4");
     export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
 
-    // ámbar de resaltado (#FFB224) en la banda de subtítulos
+    // highlight amber (#FFB224) in the subtitle band
     let accent_at = |t: f64| -> usize {
         let mut n = 0;
         for y in [880u32, 910, 940, 970] {
@@ -1502,29 +1502,29 @@ fn karaoke_mode_highlights_words_progressively() {
         }
         n
     };
-    let early = accent_at(0.5); // UNO sonando, DOS aún tenue
-    let late = accent_at(1.7); // ambas encendidas
-    assert!(early >= 1, "UNO resaltada en t=0.5 (n={early})");
-    assert!(late > early, "el resaltado avanza: t=1.7 (n={late}) > t=0.5 (n={early})");
-    // antes del segmento no hay nada encendido
-    assert_eq!(accent_at(0.05), 0, "sin resaltado antes del segmento");
+    let early = accent_at(0.5); // ONE playing, TWO still dim
+    let late = accent_at(1.7); // both lit
+    assert!(early >= 1, "ONE highlighted at t=0.5 (n={early})");
+    assert!(late > early, "the highlight advances: t=1.7 (n={late}) > t=0.5 (n={early})");
+    // before the segment nothing is lit
+    assert_eq!(accent_at(0.05), 0, "no highlight before the segment");
 }
 
-/// Enumeración de fuentes del sistema y resolución de familia → fontfile.
+/// System font enumeration and family resolution → fontfile.
 #[test]
 fn system_fonts_enumerate_and_resolve() {
     let fonts = ue_export::graph::list_system_fonts();
-    eprintln!("fuentes encontradas: {}", fonts.len());
+    eprintln!("fonts found: {}", fonts.len());
     if fonts.is_empty() {
-        eprintln!("AVISO: sin fuentes del sistema (¿CI sin fuentes?); test laxo");
+        eprintln!("NOTE: no system fonts (CI without fonts?); lax test");
         return;
     }
-    assert!(fonts.len() > 5, "un sistema de escritorio tiene fuentes");
-    // resolver la primera familia listada debe dar una ruta existente
+    assert!(fonts.len() > 5, "a desktop system has fonts");
+    // resolving the first listed family must yield an existing path
     let (family, path) = &fonts[0];
     let resolved = ue_export::graph::resolve_font_family(family);
-    assert!(resolved.is_some(), "familia {family} resoluble");
-    assert!(std::path::Path::new(path).exists(), "la ruta existe: {path}");
-    // una familia inexistente cae a None (y drawtext usará la default)
-    assert!(ue_export::graph::resolve_font_family("NoExisteEstaFuente9999").is_none());
+    assert!(resolved.is_some(), "family {family} resolvable");
+    assert!(std::path::Path::new(path).exists(), "the path exists: {path}");
+    // a nonexistent family falls to None (and drawtext will use the default)
+    assert!(ue_export::graph::resolve_font_family("NoSuchFontFamily9999").is_none());
 }

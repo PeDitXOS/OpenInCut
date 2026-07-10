@@ -4,9 +4,9 @@ import { usToDuration } from "../lib/time";
 import { useStore } from "../state/store";
 
 const KIND_LABEL: Record<MediaAsset["kind"], string> = {
-  video: "VÍDEO",
+  video: "VIDEO",
   audio: "AUDIO",
-  image: "IMAGEN",
+  image: "IMAGE",
 };
 
 function AssetThumb({ asset }: { asset: MediaAsset }) {
@@ -39,33 +39,34 @@ export function MediaPool() {
   const importMedia = useStore((s) => s.importMedia);
   const addClipFromAsset = useStore((s) => s.addClipFromAsset);
   const transcribeAsset = useStore((s) => s.transcribeAsset);
+  const transcribingIds = useStore((s) => s.transcribingIds);
   const relinkAsset = useStore((s) => s.relinkAsset);
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between px-3 pb-2 pt-3">
-        <h2 className="panel-eyebrow">Medios</h2>
+        <h2 className="panel-eyebrow">Media</h2>
         <button
           className="focus-ring rounded-md border border-line px-2 py-1 text-[11px] text-ink-dim hover:bg-bg3 hover:text-ink"
           onClick={() => void importMedia()}
-          title="Importar archivos de video, audio o imagen"
+          title="Import video, audio, or image files"
         >
-          + Importar
+          + Import
         </button>
       </div>
       <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 pb-2">
         {assets.length === 0 && (
           <div className="mx-1 mt-2 rounded-lg border border-dashed border-line px-3 py-6 text-center text-[11px] leading-relaxed text-ink-faint">
-            Sin medios todavía.
+            No media yet.
             <br />
-            Usa «+ Importar» para añadir video, audio o imágenes.
+            Use "+ Import" to add video, audio, or images.
           </div>
         )}
         {assets.map((a) => (
           <div
             key={a.id}
             className="group flex cursor-grab items-center gap-2.5 rounded-lg p-1.5 hover:bg-bg2"
-            title={`${a.path}\nDoble click: añadir al timeline en el playhead`}
+            title={`${a.path}\nDouble-click: add to the timeline at the playhead`}
             onDoubleClick={() => void addClipFromAsset(a.id)}
           >
             <AssetThumb asset={a} />
@@ -92,9 +93,9 @@ export function MediaPool() {
                     e.stopPropagation();
                     void relinkAsset(a.id);
                   }}
-                  title="El archivo no está en su ruta: selecciona su nueva ubicación"
+                  title="The file is not at its path: select its new location"
                 >
-                  Relocalizar…
+                  Relink…
                 </button>
               )}
             </div>
@@ -102,27 +103,34 @@ export function MediaPool() {
               (a.transcript ? (
                 <span
                   className="shrink-0 rounded bg-clip-audio px-1.5 py-0.5 font-[var(--font-mono)] text-[9px] text-clip-audio-hi"
-                  title="Transcripción word-level lista"
+                  title="Word-level transcript ready"
                 >
                   T✓
                 </span>
+              ) : transcribingIds.includes(a.id) ? (
+                <span
+                  className="shrink-0 rounded border border-line px-1.5 py-0.5 text-[10px] text-ink-faint"
+                  title="Transcribing in the background…"
+                >
+                  ⏳
+                </span>
               ) : (
                 <button
-                  className="focus-ring shrink-0 rounded border border-line px-1.5 py-0.5 text-[10px] text-ink-faint opacity-0 hover:text-ink group-hover:opacity-100"
-                  title="Transcribir con Whisper (palabra por palabra)"
+                  className="focus-ring shrink-0 rounded border border-line px-1.5 py-0.5 text-[10px] text-ink-dim hover:border-accent/60 hover:text-accent"
+                  title="Transcribe with Whisper (word by word): enables text-based editing and subtitles"
                   onClick={(e) => {
                     e.stopPropagation();
                     void transcribeAsset(a.id);
                   }}
                 >
-                  T
+                  🎙 Transcribe
                 </button>
               ))}
           </div>
         ))}
       </div>
       <div className="border-t border-line-soft px-3 py-2 text-[11px] text-ink-faint">
-        Doble click en un medio lo añade al timeline
+        Double-click a media item to add it to the timeline
       </div>
     </div>
   );

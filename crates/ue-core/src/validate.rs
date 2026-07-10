@@ -1,18 +1,18 @@
-//! Validación de invariantes del proyecto (sección 4.2 del PLAN).
+//! Validation of the project invariants (PLAN section 4.2).
 
 use std::collections::HashSet;
 
 use crate::model::*;
 
-/// Devuelve la lista de violaciones (vacía = proyecto válido).
+/// Returns the list of violations (empty = valid project).
 pub fn validate(project: &Project) -> Vec<String> {
     let mut issues = vec![];
 
-    // Ids únicos globales.
+    // Globally unique ids.
     let mut seen: HashSet<String> = HashSet::new();
     let mut check_id = |id: Id, what: &str, issues: &mut Vec<String>| {
         if !seen.insert(id.to_string()) {
-            issues.push(format!("id duplicado en {what}: {id}"));
+            issues.push(format!("duplicate id in {what}: {id}"));
         }
     };
     check_id(project.id, "project", &mut issues);
@@ -33,29 +33,29 @@ pub fn validate(project: &Project) -> Vec<String> {
     }
 
     if project.sequence(project.active_sequence).is_none() {
-        issues.push("active_sequence no existe".into());
+        issues.push("active_sequence does not exist".into());
     }
 
     for seq in &project.sequences {
         if seq.fps.0 == 0 || seq.fps.1 == 0 {
-            issues.push(format!("secuencia {}: fps inválido", seq.name));
+            issues.push(format!("sequence {}: invalid fps", seq.name));
         }
         for track in &seq.tracks {
-            // Orden y no-solape.
+            // Order and non-overlap.
             for w in track.clips.windows(2) {
                 if w[0].start > w[1].start {
-                    issues.push(format!("pista {}: clips desordenados", track.name));
+                    issues.push(format!("track {}: clips out of order", track.name));
                 }
                 if w[0].end() > w[1].start {
                     issues.push(format!(
-                        "pista {}: solape entre {} y {}",
+                        "track {}: overlap between {} and {}",
                         track.name, w[0].id, w[1].id
                     ));
                 }
             }
             for clip in &track.clips {
                 if clip.duration <= 0 {
-                    issues.push(format!("clip {}: duración <= 0", clip.id));
+                    issues.push(format!("clip {}: duration <= 0", clip.id));
                 }
                 if clip.speed <= 0.0 {
                     issues.push(format!("clip {}: speed <= 0", clip.id));
@@ -68,27 +68,27 @@ pub fn validate(project: &Project) -> Vec<String> {
                         issues.push(format!("clip {}: src_in < 0", clip.id));
                     }
                     match project.asset(*asset_id) {
-                        None => issues.push(format!("clip {}: asset {asset_id} no existe", clip.id)),
+                        None => issues.push(format!("clip {}: asset {asset_id} does not exist", clip.id)),
                         Some(a) => {
                             if *src_out > a.probe.duration_us && a.probe.duration_us > 0 {
                                 issues.push(format!(
-                                    "clip {}: src_out {} > duración del asset {}",
+                                    "clip {}: src_out {} > asset duration {}",
                                     clip.id, src_out, a.probe.duration_us
                                 ));
                             }
                         }
                     }
                 }
-                // Curvas: keys estrictamente crecientes.
+                // Curves: strictly increasing keys.
                 let mut check_param = |p: &crate::keyframe::Param, what: &str| {
                     if let crate::keyframe::Param::Curve(c) = p {
                         if c.keys.is_empty() {
-                            issues.push(format!("clip {}: curva vacía en {what}", clip.id));
+                            issues.push(format!("clip {}: empty curve in {what}", clip.id));
                         }
                         for w in c.keys.windows(2) {
                             if w[0].t >= w[1].t {
                                 issues.push(format!(
-                                    "clip {}: keys no crecientes en {what}",
+                                    "clip {}: non-increasing keys in {what}",
                                     clip.id
                                 ));
                             }
@@ -105,7 +105,7 @@ pub fn validate(project: &Project) -> Vec<String> {
                 check_param(&clip.audio.pan, "pan");
                 for e in &clip.effects {
                     for (k, p) in &e.params {
-                        check_param(p, &format!("efecto {}.{}", e.effect_id, k));
+                        check_param(p, &format!("effect {}.{}", e.effect_id, k));
                     }
                 }
             }

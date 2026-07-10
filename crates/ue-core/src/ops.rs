@@ -1,13 +1,13 @@
-//! Operaciones de alto nivel (split, delete con ripple, overwrite, move…).
-//! Cada op PLANIFICA una lista de acciones primitivas simulándolas sobre un
-//! clon del proyecto (Planner); el store luego las ejecuta como una transacción.
+//! High-level operations (split, delete with ripple, overwrite, move…).
+//! Each op PLANS a list of primitive actions by simulating them on a
+//! clone of the project (Planner); the store then executes them as a transaction.
 
 use crate::action::{apply, Action};
 use crate::error::{UeError, UeResult};
 use crate::model::*;
 use crate::time::{frame_duration_us, quantize_to_frame, TimeUs};
 
-/// Simula acciones sobre un clon para planificar transacciones consistentes.
+/// Simulates actions on a clone to plan consistent transactions.
 pub struct Planner {
     pub proj: Project,
     pub actions: Vec<Action>,
@@ -18,7 +18,7 @@ impl Planner {
         Planner { proj: project.clone(), actions: vec![] }
     }
 
-    /// Aplica al clon y registra. Si falla, la transacción entera se aborta.
+    /// Applies to the clone and records it. If it fails, the whole transaction aborts.
     pub fn do_(&mut self, action: Action) -> UeResult<()> {
         apply(&mut self.proj, action.clone())?;
         self.actions.push(action);
@@ -30,7 +30,7 @@ impl Planner {
     }
 }
 
-/// Ids del grupo enlazado de un clip (incluido él mismo).
+/// Ids of a clip's linked group (including itself).
 pub fn linked_ids(project: &Project, clip_id: Id) -> Vec<Id> {
     let Some(clip) = project.clip(clip_id) else { return vec![clip_id] };
     let Some(group) = clip.group else { return vec![clip_id] };
@@ -57,10 +57,10 @@ fn ensure_unlocked(track: &Track) -> UeResult<()> {
     Ok(())
 }
 
-/// Divide un clip en el tiempo `t` del timeline (se cuantiza a frame).
-/// Los clips ENLAZADOS que crucen `t` se dividen también; las mitades
-/// derechas comparten un grupo nuevo. Devuelve (acciones, izq, der) del
-/// clip pedido.
+/// Splits a clip at timeline time `t` (quantized to frame).
+/// LINKED clips that cross `t` are split too; the right halves
+/// share a new group. Returns (actions, left, right) of the
+/// requested clip.
 pub fn split_clip(project: &Project, clip_id: Id, t: TimeUs) -> UeResult<(Vec<Action>, Id, Id)> {
     let (si, ti, ci) = project
         .locate_clip(clip_id)
@@ -72,7 +72,7 @@ pub fn split_clip(project: &Project, clip_id: Id, t: TimeUs) -> UeResult<(Vec<Ac
     let t = quantize_to_frame(t, seq.fps);
     if t <= clip.start || t >= clip.end() {
         return Err(UeError::Invalid(format!(
-            "el punto de corte {t} está fuera del clip ({}..{})",
+            "the cut point {t} is outside the clip ({}..{})",
             clip.start,
             clip.end()
         )));
@@ -87,7 +87,7 @@ pub fn split_clip(project: &Project, clip_id: Id, t: TimeUs) -> UeResult<(Vec<Ac
         let gclip = plan.proj.sequences[gsi].tracks[gti].clips[gci].clone();
         let gtrack_id = plan.proj.sequences[gsi].tracks[gti].id;
         if !(gclip.start < t && t < gclip.end()) {
-            continue; // este enlazado no cruza el corte
+            continue; // this linked clip doesn't cross the cut
         }
         let (left, mut right) = split_clip_data(&gclip, t - gclip.start);
         if let Some(ng) = new_right_group {
@@ -103,11 +103,11 @@ pub fn split_clip(project: &Project, clip_id: Id, t: TimeUs) -> UeResult<(Vec<Ac
             primary = Some(ids);
         }
     }
-    let (l, r) = primary.ok_or_else(|| UeError::Invalid("nada que dividir".into()))?;
+    let (l, r) = primary.ok_or_else(|| UeError::Invalid("nothing to split".into()))?;
     Ok((plan.finish(), l, r))
 }
 
-/// Construye las dos mitades de un clip partido en `offset` (µs relativos al clip).
+/// Builds the two halves of a clip split at `offset` (µs relative to the clip).
 fn split_clip_data(clip: &Clip, offset: TimeUs) -> (Clip, Clip) {
     let mut left = clip.clone();
     let mut right = clip.clone();
@@ -118,7 +118,7 @@ fn split_clip_data(clip: &Clip, offset: TimeUs) -> (Clip, Clip) {
     right.start = clip.start + offset;
     right.duration = clip.duration - offset;
 
-    // Rango fuente para payload Media (mapeado por speed).
+    // Source range for a Media payload (mapped by speed).
     if let (ClipPayload::Media { src_in, src_out, .. }, ClipPayload::Media { src_in: r_in, .. }) =
         (&mut left.payload, &mut right.payload)
     {
@@ -128,7 +128,7 @@ fn split_clip_data(clip: &Clip, offset: TimeUs) -> (Clip, Clip) {
         *r_in = boundary;
     }
 
-    // Curvas de keyframes: repartir preservando el valor en la frontera.
+    // Keyframe curves: split them preserving the value at the boundary.
     let (tl, tr) = split_transform(&clip.transform, offset);
     left.transform = tl;
     right.transform = tr;
@@ -143,7 +143,7 @@ fn split_clip_data(clip: &Clip, offset: TimeUs) -> (Clip, Clip) {
         }
     }
 
-    // La transición de entrada queda en la izquierda; la derecha nace limpia.
+    // The in-transition stays on the left; the right one starts clean.
     right.transition_in = None;
 
     (left, right)
@@ -181,7 +181,7 @@ fn split_audio(a: &AudioProps, offset: TimeUs, total: TimeUs) -> (AudioProps, Au
     r.gain_db = gr;
     l.pan = pl;
     r.pan = pr;
-    // Fades: el fade-in pertenece a la izquierda, el fade-out a la derecha.
+    // Fades: the fade-in belongs to the left, the fade-out to the right.
     l.fade_in_us = a.fade_in_us.min(offset);
     l.fade_out_us = 0;
     r.fade_in_us = 0;
@@ -189,13 +189,13 @@ fn split_audio(a: &AudioProps, offset: TimeUs, total: TimeUs) -> (AudioProps, Au
     (l, r)
 }
 
-/// Borra clips. `ripple=true` cierra los huecos desplazando lo posterior
-/// (v1: los clips con ripple deben estar en una sola pista).
+/// Deletes clips. `ripple=true` closes the gaps by shifting what comes after
+/// (v1: clips with ripple must be on a single track).
 pub fn delete_clips(project: &Project, ids: &[Id], ripple: bool) -> UeResult<Vec<Action>> {
     if ids.is_empty() {
         return Ok(vec![]);
     }
-    // expandir con los clips enlazados (video+audio van juntos)
+    // expand with the linked clips (video+audio go together)
     let mut ids: Vec<Id> = ids.to_vec();
     for id in ids.clone() {
         for linked in linked_ids(project, id) {
@@ -205,7 +205,7 @@ pub fn delete_clips(project: &Project, ids: &[Id], ripple: bool) -> UeResult<Vec
         }
     }
     let ids = &ids;
-    // Agrupar por pista y validar locks.
+    // Group by track and validate locks.
     let mut by_track: std::collections::BTreeMap<Id, Vec<Id>> = Default::default();
     for id in ids {
         let (si, ti, _) = project
@@ -215,12 +215,12 @@ pub fn delete_clips(project: &Project, ids: &[Id], ripple: bool) -> UeResult<Vec
         ensure_unlocked(track)?;
         by_track.entry(track.id).or_default().push(*id);
     }
-    // ripple multi-pista: cada pista cierra sus propios huecos (los pares
-    // enlazados tienen huecos idénticos, así que se mantienen alineados)
+    // multi-track ripple: each track closes its own gaps (linked pairs have
+    // identical gaps, so they stay aligned)
 
     let mut plan = Planner::new(project);
     for (track_id, clip_ids) in by_track {
-        // Intervalos eliminados, ordenados.
+        // Removed intervals, sorted.
         let track = project.track(track_id).unwrap();
         let mut removed: Vec<(TimeUs, TimeUs)> = clip_ids
             .iter()
@@ -236,8 +236,8 @@ pub fn delete_clips(project: &Project, ids: &[Id], ripple: bool) -> UeResult<Vec
         }
 
         if ripple {
-            // Desplazar a la izquierda cada clip restante por la suma de lo
-            // eliminado antes de su start (de izquierda a derecha: sin colisiones).
+            // Shift each remaining clip left by the sum of what was removed
+            // before its start (left to right: no collisions).
             let survivors: Vec<(Id, TimeUs, TimeUs)> = plan
                 .proj
                 .track(track_id)
@@ -269,13 +269,13 @@ pub fn delete_clips(project: &Project, ids: &[Id], ripple: bool) -> UeResult<Vec
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InsertMode {
-    /// Falla si hay colisión.
+    /// Fails if there is a collision.
     Strict,
-    /// Recorta/borra lo que haya debajo (comportamiento NLE clásico).
+    /// Trims/deletes whatever is underneath (classic NLE behavior).
     Overwrite,
 }
 
-/// Inserta un clip en una pista. En modo Overwrite recorta lo que pise.
+/// Inserts a clip into a track. In Overwrite mode it trims whatever it overlaps.
 pub fn insert_clip(
     project: &Project,
     track_id: Id,
@@ -284,7 +284,7 @@ pub fn insert_clip(
 ) -> UeResult<Vec<Action>> {
     let track = project
         .track(track_id)
-        .ok_or_else(|| UeError::NotFound(format!("pista {track_id}")))?;
+        .ok_or_else(|| UeError::NotFound(format!("track {track_id}")))?;
     ensure_unlocked(track)?;
 
     let mut plan = Planner::new(project);
@@ -295,7 +295,7 @@ pub fn insert_clip(
     Ok(plan.finish())
 }
 
-/// Mueve un clip (posiblemente a otra pista). Overwrite recorta el destino.
+/// Moves a clip (possibly to another track). Overwrite trims the destination.
 pub fn move_clip(
     project: &Project,
     clip_id: Id,
@@ -311,7 +311,7 @@ pub fn move_clip(
     ensure_unlocked(from_track)?;
     let target = project
         .track(to_track)
-        .ok_or_else(|| UeError::NotFound(format!("pista {to_track}")))?;
+        .ok_or_else(|| UeError::NotFound(format!("track {to_track}")))?;
     ensure_unlocked(target)?;
 
     let to_start = quantize_to_frame(to_start.max(0), seq.fps);
@@ -324,7 +324,7 @@ pub fn move_clip(
         carve_range(&mut plan, to_track, to_start, to_start + duration, Some(clip_id))?;
     }
     plan.do_(Action::MoveClipToTrack { clip_id, to_track, to_start })?;
-    // los enlazados se desplazan el mismo delta en SUS pistas
+    // the linked clips shift by the same delta on THEIR tracks
     if delta != 0 {
         for gid in linked_ids(project, clip_id) {
             if gid == clip_id {
@@ -350,8 +350,8 @@ pub fn move_clip(
     Ok(plan.finish())
 }
 
-/// Recorta un borde de un clip (trim). `left=true` mueve el borde izquierdo.
-/// `new_edge` es el nuevo tiempo del borde en el timeline (se cuantiza).
+/// Trims one edge of a clip. `left=true` moves the left edge.
+/// `new_edge` is the new timeline time of the edge (quantized).
 pub fn trim_clip(project: &Project, clip_id: Id, left: bool, new_edge: TimeUs) -> UeResult<Vec<Action>> {
     let (si, ti, ci) = project
         .locate_clip(clip_id)
@@ -364,7 +364,7 @@ pub fn trim_clip(project: &Project, clip_id: Id, left: bool, new_edge: TimeUs) -
     let new_edge = quantize_to_frame(new_edge, seq.fps);
 
     let mut start = clip.start;
-    let duration; // se fija en ambas ramas
+    let duration; // set in both branches
     let (mut src_in, mut src_out) = match &clip.payload {
         ClipPayload::Media { src_in, src_out, .. } => (Some(*src_in), Some(*src_out)),
         _ => (None, None),
@@ -372,7 +372,7 @@ pub fn trim_clip(project: &Project, clip_id: Id, left: bool, new_edge: TimeUs) -
 
     if left {
         let max_edge = clip.end() - min_dur;
-        // límite por material fuente disponible (no antes del inicio del archivo)
+        // limit by available source material (not before the start of the file)
         let min_edge = match src_in {
             Some(si_v) => clip.start - (si_v as f64 / clip.speed).round() as TimeUs,
             None => TimeUs::MIN / 4,
@@ -386,7 +386,7 @@ pub fn trim_clip(project: &Project, clip_id: Id, left: bool, new_edge: TimeUs) -
         }
     } else {
         let min_edge = clip.start + min_dur;
-        // límite por material fuente (duración del asset)
+        // limit by source material (asset duration)
         let max_by_src = match (src_in, src_out) {
             (Some(si_v), Some(_)) => {
                 let asset_dur = asset_duration(project, clip);
@@ -417,8 +417,8 @@ fn asset_duration(project: &Project, clip: &Clip) -> Option<TimeUs> {
     }
 }
 
-/// Libera el rango [from, to) de una pista recortando/eliminando/partiendo los
-/// clips que lo pisan (excluyendo opcionalmente un clip).
+/// Frees the range [from, to) of a track by trimming/deleting/splitting the
+/// clips that overlap it (optionally excluding one clip).
 fn carve_range(
     plan: &mut Planner,
     track_id: Id,
@@ -429,7 +429,7 @@ fn carve_range(
     let victims: Vec<Clip> = plan
         .proj
         .track(track_id)
-        .ok_or_else(|| UeError::NotFound(format!("pista {track_id}")))?
+        .ok_or_else(|| UeError::NotFound(format!("track {track_id}")))?
         .clips
         .iter()
         .filter(|c| Some(c.id) != exclude && c.start < to && from < c.end())
@@ -440,9 +440,9 @@ fn carve_range(
         let covered_left = c.start >= from;
         let covered_right = c.end() <= to;
         match (covered_left, covered_right) {
-            // totalmente cubierto → fuera
+            // fully covered → gone
             (true, true) => plan.do_(Action::RemoveClip { clip_id: c.id })?,
-            // pisado por la izquierda → recortar su inicio hasta `to`
+            // overlapped on the left → trim its start up to `to`
             (true, false) => {
                 let delta = to - c.start;
                 let (si, so) = media_src(&c);
@@ -454,7 +454,7 @@ fn carve_range(
                     src_out: so,
                 })?;
             }
-            // pisado por la derecha → recortar su final hasta `from`
+            // overlapped on the right → trim its end back to `from`
             (false, true) => {
                 let new_dur = from - c.start;
                 let (si, so) = media_src(&c);
@@ -468,10 +468,10 @@ fn carve_range(
                     }),
                 })?;
             }
-            // el clip envuelve el rango entero → partir en dos y recortar el medio
+            // the clip wraps the whole range → split in two and trim the middle
             (false, false) => {
                 let (left, right) = split_clip_data(&c, from - c.start);
-                // right empieza en `from`; recortar su inicio hasta `to`
+                // right starts at `from`; trim its start up to `to`
                 let delta = to - from;
                 let mut right2 = right.clone();
                 right2.start = to;
@@ -497,11 +497,11 @@ fn media_src(c: &Clip) -> (Option<TimeUs>, Option<TimeUs>) {
     }
 }
 
-/// Cambia la velocidad de un clip media (rate stretch). La duración nueva se
-/// cuantiza a frame; error si chocaría con el siguiente clip.
+/// Changes the speed of a media clip (rate stretch). The new duration is
+/// quantized to frame; error if it would collide with the next clip.
 pub fn set_clip_speed(project: &Project, clip_id: Id, speed: f64) -> UeResult<Vec<Action>> {
     if !(0.05..=20.0).contains(&speed) {
-        return Err(UeError::Invalid("velocidad fuera de rango (0.05–20)".into()));
+        return Err(UeError::Invalid("speed out of range (0.05–20)".into()));
     }
     let (si, ti, ci) = project
         .locate_clip(clip_id)
@@ -510,7 +510,7 @@ pub fn set_clip_speed(project: &Project, clip_id: Id, speed: f64) -> UeResult<Ve
     ensure_unlocked(&seq.tracks[ti])?;
     let clip = &seq.tracks[ti].clips[ci];
     let ClipPayload::Media { src_in, src_out, .. } = &clip.payload else {
-        return Err(UeError::Invalid("solo los clips de media tienen velocidad".into()));
+        return Err(UeError::Invalid("only media clips have speed".into()));
     };
     let src_len = src_out - src_in;
     let duration = quantize_to_frame(((src_len as f64) / speed).round() as TimeUs, seq.fps)
@@ -520,9 +520,9 @@ pub fn set_clip_speed(project: &Project, clip_id: Id, speed: f64) -> UeResult<Ve
     Ok(plan.finish())
 }
 
-/// Acelera los rangos dados (p. ej. silencios): corta en fronteras, aplica
-/// `factor` a los clips interiores (que encogen) y cierra los huecos con
-/// ripple. Multi-pista, una transacción.
+/// Speeds up the given ranges (e.g. silences): cuts at the boundaries, applies
+/// `factor` to the interior clips (which shrink), and closes the gaps with
+/// ripple. Multi-track, one transaction.
 pub fn speedup_ranges(
     project: &Project,
     sequence_id: Id,
@@ -530,17 +530,17 @@ pub fn speedup_ranges(
     factor: f64,
 ) -> UeResult<Vec<Action>> {
     if factor <= 1.0 {
-        return Err(UeError::Invalid("el factor de aceleración debe ser > 1".into()));
+        return Err(UeError::Invalid("the speedup factor must be > 1".into()));
     }
     let seq = project
         .sequence(sequence_id)
-        .ok_or_else(|| UeError::NotFound(format!("secuencia {sequence_id}")))?;
+        .ok_or_else(|| UeError::NotFound(format!("sequence {sequence_id}")))?;
     let fps = seq.fps;
     let track_ids: Vec<Id> = seq.tracks.iter().filter(|t| !t.locked).map(|t| t.id).collect();
 
-    // normalizar y ordenar de DERECHA a IZQUIERDA: al encoger un rango se
-    // desplazan los posteriores, así que procesando de atrás hacia delante
-    // los rangos anteriores no se invalidan.
+    // normalize and sort RIGHT to LEFT: shrinking a range shifts the ones
+    // after it, so by processing back to front the earlier ranges are not
+    // invalidated.
     let mut rs: Vec<(TimeUs, TimeUs)> = ranges
         .iter()
         .map(|(a, b)| (quantize_to_frame((*a).max(0), fps), quantize_to_frame(*b, fps)))
@@ -554,7 +554,7 @@ pub fn speedup_ranges(
         split_all_at(&mut plan, &track_ids, from)?;
         split_all_at(&mut plan, &track_ids, to)?;
         let len = to - from;
-        // encoger los clips interiores
+        // shrink the interior clips
         let mut shrunk_by: TimeUs = 0;
         for tid in &track_ids {
             let inside: Vec<Clip> = plan
@@ -573,7 +573,7 @@ pub fn speedup_ranges(
                     let new_dur =
                         quantize_to_frame(((src_len as f64) / new_speed).round() as TimeUs, fps)
                             .max(frame_duration_us(fps));
-                    // reposicionar proporcionalmente dentro del rango encogido
+                    // reposition proportionally within the shrunken range
                     let rel = c.start - from;
                     let new_start = from + quantize_to_frame(
                         ((rel as f64) / factor).round() as TimeUs,
@@ -584,8 +584,8 @@ pub fn speedup_ranges(
                         speed: new_speed,
                         duration: new_dur,
                     })?;
-                    // mover a la izquierda no colisiona: procesamos rangos de
-                    // derecha a izquierda y dentro del rango en orden natural
+                    // moving left doesn't collide: we process ranges right to
+                    // left and, within a range, in natural order
                     plan.do_(Action::SetClipBounds {
                         clip_id: c.id,
                         start: new_start,
@@ -600,7 +600,7 @@ pub fn speedup_ranges(
                 }
             }
         }
-        // cerrar el hueco: todo lo que empiece en >= to se desplaza a la izquierda
+        // close the gap: everything starting at >= to shifts left
         let shift = shrunk_by;
         if shift > 0 {
             for tid in &track_ids {
@@ -628,7 +628,7 @@ pub fn speedup_ranges(
     Ok(plan.finish())
 }
 
-/// Divide en `t` cualquier clip que lo cruce, en todas las pistas dadas.
+/// Splits at `t` any clip that crosses it, across all the given tracks.
 fn split_all_at(plan: &mut Planner, track_ids: &[Id], t: TimeUs) -> UeResult<()> {
     for tid in track_ids {
         let victim = plan
@@ -652,10 +652,10 @@ fn split_all_at(plan: &mut Planner, track_ids: &[Id], t: TimeUs) -> UeResult<()>
     Ok(())
 }
 
-/// Mueve el rango [from, to) de la secuencia a `dest` (fuera del rango),
-/// en todas las pistas no bloqueadas. Corta en las fronteras, cierra el hueco
-/// de origen, abre hueco en destino y recoloca. Base de "mover frases" en la
-/// edición por texto. Una transacción.
+/// Moves the range [from, to) of the sequence to `dest` (outside the range),
+/// across all unlocked tracks. Cuts at the boundaries, closes the source gap,
+/// opens a gap at the destination, and places it back. The basis of "move
+/// phrases" in text editing. One transaction.
 pub fn move_range(
     project: &Project,
     sequence_id: Id,
@@ -665,26 +665,26 @@ pub fn move_range(
 ) -> UeResult<Vec<Action>> {
     let seq = project
         .sequence(sequence_id)
-        .ok_or_else(|| UeError::NotFound(format!("secuencia {sequence_id}")))?;
+        .ok_or_else(|| UeError::NotFound(format!("sequence {sequence_id}")))?;
     let from = quantize_to_frame(from.max(0), seq.fps);
     let to = quantize_to_frame(to, seq.fps);
     let dest = quantize_to_frame(dest.max(0), seq.fps);
     if to <= from {
-        return Err(UeError::Invalid("rango vacío".into()));
+        return Err(UeError::Invalid("empty range".into()));
     }
     if dest > from && dest < to {
-        return Err(UeError::Invalid("el destino no puede caer dentro del rango".into()));
+        return Err(UeError::Invalid("the destination cannot fall inside the range".into()));
     }
     let len = to - from;
     let track_ids: Vec<Id> = seq.tracks.iter().filter(|t| !t.locked).map(|t| t.id).collect();
 
     let mut plan = Planner::new(project);
-    // 1. fronteras exactas
+    // 1. exact boundaries
     split_all_at(&mut plan, &track_ids, from)?;
     split_all_at(&mut plan, &track_ids, to)?;
     split_all_at(&mut plan, &track_ids, dest)?;
 
-    // 2. extraer los clips del rango (clones) y quitarlos
+    // 2. extract the clips in the range (clones) and remove them
     let mut moved: Vec<(Id, Clip)> = vec![]; // (track, clip)
     for tid in &track_ids {
         let inside: Vec<Clip> = plan
@@ -702,7 +702,7 @@ pub fn move_range(
         }
     }
 
-    // 3. cerrar el hueco de origen (izquierda, ascendente)
+    // 3. close the source gap (left, ascending)
     for tid in &track_ids {
         let after: Vec<(Id, TimeUs, TimeUs)> = plan
             .proj
@@ -724,10 +724,10 @@ pub fn move_range(
         }
     }
 
-    // 4. destino ajustado tras cerrar el hueco
+    // 4. destination adjusted after closing the gap
     let dest_adj = if dest >= to { dest - len } else { dest };
 
-    // 5. abrir hueco en destino (derecha, DESCENDENTE para no colisionar)
+    // 5. open a gap at the destination (right, DESCENDING to avoid collisions)
     for tid in &track_ids {
         let mut after: Vec<(Id, TimeUs, TimeUs)> = plan
             .proj
@@ -750,7 +750,7 @@ pub fn move_range(
         }
     }
 
-    // 6. recolocar los clips extraídos
+    // 6. place the extracted clips back
     for (tid, mut clip) in moved {
         clip.start = dest_adj + (clip.start - from);
         plan.do_(Action::InsertClip { track_id: tid, clip })?;
@@ -758,8 +758,35 @@ pub fn move_range(
     Ok(plan.finish())
 }
 
-/// Elimina rangos de tiempo de TODA la secuencia (todas las pistas no bloqueadas),
-/// con ripple opcional. Base de "eliminar silencios" y edición por texto.
+/// Removes time ranges from the WHOLE sequence (all unlocked tracks),
+/// with optional ripple. The basis of "remove silences" and text editing.
+/// Split every unlocked track at both edges of each range, removing nothing.
+/// Silence workflow: the timeline ends up segmented into silence/speech clips
+/// and the user decides what to delete, speed up or keep.
+pub fn split_ranges(
+    project: &Project,
+    sequence_id: Id,
+    ranges: &[(TimeUs, TimeUs)],
+) -> UeResult<Vec<Action>> {
+    let seq = project
+        .sequence(sequence_id)
+        .ok_or_else(|| UeError::NotFound(format!("sequence {sequence_id}")))?;
+    let fps = seq.fps;
+    let track_ids: Vec<Id> = seq.tracks.iter().filter(|t| !t.locked).map(|t| t.id).collect();
+    let mut rs: Vec<(TimeUs, TimeUs)> = ranges
+        .iter()
+        .map(|(a, b)| (quantize_to_frame((*a).max(0), fps), quantize_to_frame(*b, fps)))
+        .filter(|(a, b)| b > a)
+        .collect();
+    rs.sort();
+    let mut plan = Planner::new(project);
+    for (from, to) in rs {
+        split_all_at(&mut plan, &track_ids, from)?;
+        split_all_at(&mut plan, &track_ids, to)?;
+    }
+    Ok(plan.actions)
+}
+
 pub fn cut_ranges(
     project: &Project,
     sequence_id: Id,
@@ -768,9 +795,9 @@ pub fn cut_ranges(
 ) -> UeResult<Vec<Action>> {
     let seq = project
         .sequence(sequence_id)
-        .ok_or_else(|| UeError::NotFound(format!("secuencia {sequence_id}")))?;
+        .ok_or_else(|| UeError::NotFound(format!("sequence {sequence_id}")))?;
 
-    // Normalizar: ordenar y fusionar solapes.
+    // Normalize: sort and merge overlaps.
     let mut rs: Vec<(TimeUs, TimeUs)> = ranges
         .iter()
         .copied()

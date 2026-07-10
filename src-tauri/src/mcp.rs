@@ -1,11 +1,11 @@
-//! Servidor MCP embebido (PLAN §7.A, v0).
+//! Embedded MCP server (PLAN §7.A, v0).
 //!
-//! Implementación directa del protocolo MCP (JSON-RPC 2.0 sobre HTTP
-//! streamable, respuesta application/json) en 127.0.0.1:4599/mcp, sin SDK:
-//! initialize, tools/list y tools/call. Solo loopback. El dispatcher
-//! (`handle_rpc`) es una función pura sobre AppState → testeable sin HTTP.
+//! Direct implementation of the MCP protocol (JSON-RPC 2.0 over streamable
+//! HTTP, application/json response) on 127.0.0.1:4599/mcp, no SDK:
+//! initialize, tools/list and tools/call. Loopback only. The dispatcher
+//! (`handle_rpc`) is a pure function over AppState → testable without HTTP.
 //!
-//! Conexión desde Claude Code:
+//! Connecting from Claude Code:
 //!   claude mcp add --transport http ubereditor http://127.0.0.1:4599/mcp
 
 use std::sync::atomic::Ordering;
@@ -19,46 +19,46 @@ use crate::AppState;
 pub const MCP_PORT: u16 = 4599;
 
 // ---------------------------------------------------------------------------
-// Herramientas
+// Tools
 // ---------------------------------------------------------------------------
 
 fn tool_defs() -> Value {
     json!([
         {
             "name": "get_project_summary",
-            "description": "Resumen del proyecto abierto: nombre, duración, pistas, clips, medios y estado de guardado.",
+            "description": "Summary of the open project: name, duration, tracks, clips, media and save status.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
         },
         {
             "name": "get_timeline",
-            "description": "Timeline completo de la secuencia activa: pistas con sus clips (ids, tiempos en µs, payloads, efectos, transiciones).",
+            "description": "Complete timeline of the active sequence: tracks with their clips (ids, times in µs, payloads, effects, transitions).",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
         },
         {
             "name": "get_media_pool",
-            "description": "Medios importados: id, ruta, tipo, duración y metadatos técnicos.",
+            "description": "Imported media: id, path, kind, duration and technical metadata.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
         },
         {
             "name": "get_effects_catalog",
-            "description": "Catálogo de efectos disponibles (packs core + usuario) con sus parámetros.",
+            "description": "Catalog of available effects (core + user packs) with their parameters.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
         },
         {
             "name": "split_clip",
-            "description": "Divide un clip en el tiempo dado del timeline (µs). Devuelve los ids resultantes.",
+            "description": "Splits a clip at the given timeline time (µs). Returns the resulting ids.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "clip_id": { "type": "string" },
-                    "t_us": { "type": "integer", "description": "tiempo del timeline en microsegundos" }
+                    "t_us": { "type": "integer", "description": "timeline time in microseconds" }
                 },
                 "required": ["clip_id", "t_us"]
             }
         },
         {
             "name": "delete_clips",
-            "description": "Elimina clips por id. Con ripple=true cierra los huecos.",
+            "description": "Deletes clips by id. With ripple=true it closes the gaps.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -70,7 +70,7 @@ fn tool_defs() -> Value {
         },
         {
             "name": "add_clip",
-            "description": "Añade un clip de un medio del pool al timeline (en at_us o al final de la pista compatible).",
+            "description": "Adds a clip of a media from the pool to the timeline (at at_us or at the end of the compatible track).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -82,19 +82,19 @@ fn tool_defs() -> Value {
         },
         {
             "name": "set_clip_transition",
-            "description": "Pone (o quita, con duration_us=0) un fundido cruzado de entrada en un clip.",
+            "description": "Sets (or removes, with duration_us=0) a cross fade in on a clip.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "clip_id": { "type": "string" },
-                    "duration_us": { "type": "integer", "description": "0 = quitar transición" }
+                    "duration_us": { "type": "integer", "description": "0 = remove transition" }
                 },
                 "required": ["clip_id", "duration_us"]
             }
         },
         {
             "name": "get_transcript",
-            "description": "Transcripción word-level de un asset (palabras con timestamps en µs y frases). Vacío si aún no se ha transcrito.",
+            "description": "Word-level transcript of an asset (words with timestamps in µs and phrases). Empty if not transcribed yet.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "asset_id": { "type": "string" } },
@@ -103,22 +103,22 @@ fn tool_defs() -> Value {
         },
         {
             "name": "remove_silences",
-            "description": "Detecta silencios de un clip y los corta (mode=delete) o acelera 4x (mode=speedup); todas las pistas, 1 undo. Parámetros opcionales de detección.",
+            "description": "Detects a clip's silences and cuts them (mode=delete) or speeds them up 4x (mode=speedup); all tracks, 1 undo. Optional detection parameters.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "clip_id": { "type": "string" },
-                    "mode": { "type": "string", "enum": ["delete", "speedup"] },
-                    "threshold_db": { "type": "number", "description": "umbral dBFS (def -38)" },
-                    "min_silence_ms": { "type": "integer", "description": "silencio mínimo en ms (def 400)" },
-                    "pad_ms": { "type": "integer", "description": "margen alrededor del habla en ms (def 150)" }
+                    "mode": { "type": "string", "enum": ["delete", "speedup", "split"] },
+                    "threshold_db": { "type": "number", "description": "dBFS threshold (def -38)" },
+                    "min_silence_ms": { "type": "integer", "description": "minimum silence in ms (def 400)" },
+                    "pad_ms": { "type": "integer", "description": "margin around speech in ms (def 150)" }
                 },
                 "required": ["clip_id"]
             }
         },
         {
             "name": "move_range",
-            "description": "Mueve el rango [from_us, to_us) del timeline a dest_us (reordena material en todas las pistas; 1 undo). Útil para reordenar frases.",
+            "description": "Moves the timeline range [from_us, to_us) to dest_us (reorders material on all tracks; 1 undo). Useful for reordering phrases.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -131,17 +131,17 @@ fn tool_defs() -> Value {
         },
         {
             "name": "generate_vertical",
-            "description": "Genera una secuencia vertical 1080x1920 (fondo desenfocado + video centrado) a partir de la secuencia activa y la activa. Deshacible.",
+            "description": "Generates a vertical 1080x1920 sequence (blurred background + centered video) from the active sequence and activates it. Undoable.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
         },
         {
             "name": "undo",
-            "description": "Deshace la última edición.",
+            "description": "Undoes the last edit.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
         },
         {
             "name": "redo",
-            "description": "Rehace la última edición deshecha.",
+            "description": "Redoes the last undone edit.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
         }
     ])
@@ -159,9 +159,9 @@ fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
     let parse_id = |key: &str| -> Result<ue_core::model::Id, String> {
         args.get(key)
             .and_then(|v| v.as_str())
-            .ok_or_else(|| format!("falta {key}"))?
+            .ok_or_else(|| format!("missing {key}"))?
             .parse()
-            .map_err(|e| format!("{key} inválido: {e}"))
+            .map_err(|e| format!("invalid {key}: {e}"))
     };
 
     match name {
@@ -206,7 +206,7 @@ fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 Err(e) => return tool_error(&e),
             };
             let Some(t_us) = args.get("t_us").and_then(|v| v.as_i64()) else {
-                return tool_error("falta t_us");
+                return tool_error("missing t_us");
             };
             let mut store = state.store.lock().unwrap();
             match store.split_clip(clip_id, t_us) {
@@ -216,7 +216,7 @@ fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
         }
         "delete_clips" => {
             let Some(ids) = args.get("ids").and_then(|v| v.as_array()) else {
-                return tool_error("falta ids");
+                return tool_error("missing ids");
             };
             let parsed: Result<Vec<ue_core::model::Id>, _> = ids
                 .iter()
@@ -232,7 +232,7 @@ fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                         Err(e) => tool_error(&e.to_string()),
                     }
                 }
-                Err(e) => tool_error(&format!("id inválido: {e}")),
+                Err(e) => tool_error(&format!("invalid id: {e}")),
             }
         }
         "add_clip" => {
@@ -259,7 +259,7 @@ fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             });
             let mut store = state.store.lock().unwrap();
             match store.dispatch(
-                "[MCP] Editar transición",
+                "[MCP] Edit transition",
                 vec![ue_core::Action::SetClipTransition { clip_id, transition }],
             ) {
                 Ok(()) => text_result(json!({ "ok": true })),
@@ -274,7 +274,7 @@ fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             let store = state.store.lock().unwrap();
             match store.project.transcripts.iter().find(|t| t.asset_id == asset_id) {
                 Some(doc) => text_result(serde_json::to_value(doc).unwrap_or(Value::Null)),
-                None => tool_error("el asset no tiene transcripción todavía (usa transcribe en la UI)"),
+                None => tool_error("the asset has no transcript yet (use transcribe in the UI)"),
             }
         }
         "remove_silences" => {
@@ -303,7 +303,7 @@ fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
             let get = |k: &str| args.get(k).and_then(|v| v.as_i64());
             let (Some(f), Some(t), Some(d)) = (get("from_us"), get("to_us"), get("dest_us"))
             else {
-                return tool_error("faltan from_us/to_us/dest_us");
+                return tool_error("missing from_us/to_us/dest_us");
             };
             let mut store = state.store.lock().unwrap();
             let seq_id = store.project.active_sequence;
@@ -330,12 +330,12 @@ fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 Err(e) => tool_error(&e.to_string()),
             }
         }
-        _ => tool_error(&format!("herramienta desconocida: {name}")),
+        _ => tool_error(&format!("unknown tool: {name}")),
     }
 }
 
 fn generate_vertical_inner(state: &AppState) -> Result<String, String> {
-    // mismo flujo que el comando de la UI
+    // same flow as the UI command
     crate::generate_vertical_impl(state)
 }
 
@@ -346,12 +346,12 @@ fn remove_silences_inner(
     params: &ue_ai::silence::SilenceParams,
 ) -> Result<(usize, i64), String> {
     let mut store = state.store.lock().unwrap();
-    let clip = store.project.clip(clip_id).ok_or("clip no encontrado")?.clone();
+    let clip = store.project.clip(clip_id).ok_or("clip not found")?.clone();
     let ue_core::model::ClipPayload::Media { asset_id, src_in, src_out } = clip.payload else {
-        return Err("el clip no es de media".into());
+        return Err("the clip is not media".into());
     };
-    let asset = store.project.asset(asset_id).ok_or("asset no encontrado")?;
-    let conform = asset.audio_conform.clone().ok_or("audio sin conformar todavía")?;
+    let asset = store.project.asset(asset_id).ok_or("asset not found")?;
+    let conform = asset.audio_conform.clone().ok_or("audio not conformed yet")?;
     let wav = ue_audio::wav::WavMap::open(std::path::Path::new(&conform))
         .map_err(|e| e.to_string())?;
     let ranges =
@@ -361,35 +361,35 @@ fn remove_silences_inner(
     }
     let removed_us: i64 = ranges.iter().map(|(s, e)| e - s).sum();
     let seq_id = store.project.active_sequence;
-    if mode == "speedup" {
-        store.speedup_ranges(seq_id, &ranges, 4.0).map_err(|e| e.to_string())?;
-    } else {
-        store.cut_ranges(seq_id, &ranges, true).map_err(|e| e.to_string())?;
+    match mode {
+        "speedup" => store.speedup_ranges(seq_id, &ranges, 4.0).map_err(|e| e.to_string())?,
+        "split" => store.split_ranges(seq_id, &ranges).map_err(|e| e.to_string())?,
+        _ => store.cut_ranges(seq_id, &ranges, true).map_err(|e| e.to_string())?,
     }
     Ok((ranges.len(), removed_us))
 }
 
-/// Igual que el comando add_clip de la UI (duplicado consciente y pequeño).
+/// Same as the UI's add_clip command (a small, deliberate duplication).
 fn add_clip_inner(state: &AppState, asset_id: ue_core::model::Id, at_us: i64) -> Result<String, String> {
     use ue_core::model::{Clip, MediaKind, TrackKind};
     let mut store = state.store.lock().unwrap();
     let asset = store
         .project
         .asset(asset_id)
-        .ok_or_else(|| format!("asset {asset_id} no existe"))?
+        .ok_or_else(|| format!("asset {asset_id} does not exist"))?
         .clone();
     let duration = ue_media::default_clip_duration(&asset);
     if duration <= 0 {
-        return Err("el archivo no tiene duración utilizable".into());
+        return Err("the file has no usable duration".into());
     }
     let want = if asset.kind == MediaKind::Audio { TrackKind::Audio } else { TrackKind::Video };
     let seq_id = store.project.active_sequence;
-    let seq = store.project.sequence(seq_id).ok_or("sin secuencia activa")?;
+    let seq = store.project.sequence(seq_id).ok_or("no active sequence")?;
     let track = seq
         .tracks
         .iter()
         .find(|t| t.kind == want && !t.locked)
-        .ok_or("no hay pista compatible")?;
+        .ok_or("no compatible track")?;
     let track_id = track.id;
     let at = at_us.max(0);
     let start = if track.collides(at, duration, None) {
@@ -407,11 +407,11 @@ fn add_clip_inner(state: &AppState, asset_id: ue_core::model::Id, at_us: i64) ->
 // JSON-RPC
 // ---------------------------------------------------------------------------
 
-/// Procesa un mensaje JSON-RPC. `None` = notificación sin respuesta.
+/// Processes a JSON-RPC message. `None` = notification with no response.
 pub fn handle_rpc(state: &AppState, req: &Value) -> Option<Value> {
     let method = req.get("method")?.as_str()?;
     let id = req.get("id").cloned();
-    // notificaciones (sin id) no llevan respuesta
+    // notifications (no id) carry no response
     if id.is_none() || id == Some(Value::Null) {
         return None;
     }
@@ -431,7 +431,7 @@ pub fn handle_rpc(state: &AppState, req: &Value) -> Option<Value> {
                     "title": "UberEditor",
                     "version": env!("CARGO_PKG_VERSION"),
                 },
-                "instructions": "Editor de video UberEditor. Lee el estado con get_project_summary/get_timeline; edita con split_clip/delete_clips/add_clip. Toda edición es deshacible (undo)."
+                "instructions": "UberEditor video editor. Read the state with get_project_summary/get_timeline; edit with split_clip/delete_clips/add_clip. Every edit is undoable (undo)."
             })
         }
         "ping" => json!({}),
@@ -446,14 +446,14 @@ pub fn handle_rpc(state: &AppState, req: &Value) -> Option<Value> {
             return Some(json!({
                 "jsonrpc": "2.0",
                 "id": id,
-                "error": { "code": -32601, "message": format!("método no soportado: {method}") }
+                "error": { "code": -32601, "message": format!("unsupported method: {method}") }
             }));
         }
     };
     Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
 }
 
-/// Arranca el servidor en un hilo. Devuelve el puerto si pudo escuchar.
+/// Starts the server on a thread. Returns the port if it could listen.
 pub fn start(app: tauri::AppHandle) -> Option<u16> {
     let server = tiny_http::Server::http(("127.0.0.1", MCP_PORT)).ok()?;
     std::thread::Builder::new()
@@ -465,7 +465,7 @@ pub fn start(app: tauri::AppHandle) -> Option<u16> {
                 if state.mcp_shutdown.load(Ordering::SeqCst) {
                     break;
                 }
-                // autenticación: Authorization: Bearer <token>
+                // authentication: Authorization: Bearer <token>
                 let expected = state.mcp_token.lock().unwrap().clone();
                 let authorized = request.headers().iter().any(|h| {
                     h.field.as_str().as_str().eq_ignore_ascii_case("authorization")
@@ -474,7 +474,7 @@ pub fn start(app: tauri::AppHandle) -> Option<u16> {
                 if !authorized {
                     let _ = request.respond(
                         tiny_http::Response::from_string(
-                            r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"token inválido: usa Authorization: Bearer <token> (visible en el pill MCP de la app)"}}"#,
+                            r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"invalid token: use Authorization: Bearer <token> (shown in the app's MCP pill)"}}"#,
                         )
                         .with_status_code(401),
                     );
@@ -486,7 +486,7 @@ pub fn start(app: tauri::AppHandle) -> Option<u16> {
                     Ok(msg) => handle_rpc(&state, &msg),
                     Err(_) => Some(json!({
                         "jsonrpc": "2.0", "id": Value::Null,
-                        "error": { "code": -32700, "message": "JSON inválido" }
+                        "error": { "code": -32700, "message": "invalid JSON" }
                     })),
                 };
                 let (status, text) = match response {

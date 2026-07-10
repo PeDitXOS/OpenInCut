@@ -59,7 +59,7 @@ function Slider({
   );
 }
 
-/** Botón de keyframe: ◆ si hay key en el playhead, ◇ si la propiedad anima. */
+/** Keyframe button: ◆ if there's a key at the playhead, ◇ if the property animates. */
 function KeyBtn({
   param,
   at,
@@ -78,8 +78,8 @@ function KeyBtn({
       }`}
       title={
         keyed
-          ? "Quitar el keyframe del playhead"
-          : "Añadir keyframe en el playhead (anima esta propiedad)"
+          ? "Remove the keyframe at the playhead"
+          : "Add keyframe at the playhead (animates this property)"
       }
       onClick={() =>
         onChange(keyed ? removeKeyAt(param, at) : withKeyAt(param, at, paramValue(param, at)))
@@ -90,14 +90,14 @@ function KeyBtn({
   );
 }
 
-/** Interpolación del key i (para el selector). */
+/** Interpolation of key i (for the selector). */
 function keyInterp(k: { interp: { kind: string } }): string {
   return k.interp.kind;
 }
 
 /**
- * Mini editor de curvas: arrastra keys (tiempo/valor), doble click añade o
- * borra, click selecciona (interpolación editable). Commit al soltar.
+ * Mini curve editor: drag keys (time/value), double click adds or
+ * removes, click selects (editable interpolation). Commit on release.
  */
 function CurveEditor({
   param,
@@ -144,7 +144,7 @@ function CurveEditor({
     const ctx = canvas.getContext("2d")!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, H);
-    // línea de cero (si el rango la cruza)
+    // zero line (if the range crosses it)
     if (min < 0 && max > 0) {
       ctx.strokeStyle = "rgba(233,228,219,0.12)";
       ctx.beginPath();
@@ -152,7 +152,7 @@ function CurveEditor({
       ctx.lineTo(w, toY(0) + 0.5);
       ctx.stroke();
     }
-    // curva (muestreada con paramValue: misma interpolación que el motor)
+    // curve (sampled with paramValue: same interpolation as the engine)
     const evalAt = (t: number) => paramValue(keys.length ? { keys } : 0, t);
     ctx.strokeStyle = "#ffb224";
     ctx.lineWidth = 1.5;
@@ -197,7 +197,7 @@ function CurveEditor({
     <div className="mt-1 rounded-md border border-line bg-bg2/50">
       <canvas
         ref={canvasRef}
-        aria-label="Editor de curvas"
+        aria-label="Curve editor"
         className="block h-16 w-full cursor-crosshair touch-none"
         onPointerDown={(e) => {
           const rect = e.currentTarget.getBoundingClientRect();
@@ -246,11 +246,11 @@ function CurveEditor({
                 const kind = e.target.value as "hold" | "linear" | "smooth";
                 commit(keys.map((k, i) => (i === selected ? { ...k, interp: { kind } } : k)));
               }}
-              title="Interpolación del tramo que empieza en este key"
+              title="Interpolation of the segment starting at this key"
             >
-              <option value="linear">Lineal</option>
-              <option value="hold">Escalón</option>
-              <option value="smooth">Suave</option>
+              <option value="linear">Linear</option>
+              <option value="hold">Hold</option>
+              <option value="smooth">Smooth</option>
             </select>
             <button
               className="focus-ring rounded px-1 text-ink-faint hover:text-danger"
@@ -258,13 +258,13 @@ function CurveEditor({
                 commit(keys.filter((_, k) => k !== selected));
                 setSelected(null);
               }}
-              title="Eliminar este keyframe"
+              title="Delete this keyframe"
             >
               ✕ key
             </button>
           </>
         ) : (
-          <span>Doble click: añadir/borrar · arrastra los rombos</span>
+          <span>Double click: add/remove · drag the diamonds</span>
         )}
       </div>
     </div>
@@ -282,6 +282,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 function ClipInspector({ clip }: { clip: Clip }) {
   const [silenceDb, setSilenceDb] = useState(-38);
+  const [speedDraft, setSpeedDraft] = useState<number | null>(null);
   const [silenceMs, setSilenceMs] = useState(400);
   const [padMs, setPadMs] = useState(150);
   const project = useStore((s) => s.project);
@@ -300,19 +301,22 @@ function ClipInspector({ clip }: { clip: Clip }) {
       : undefined;
 
   const playheadUs = useStore((s) => s.playheadUs);
+  const transcribeAsset = useStore((s) => s.transcribeAsset);
+  const transcribingIds = useStore((s) => s.transcribingIds);
+  const transcribing = asset ? transcribingIds.includes(asset.id) : false;
   const relUs = Math.max(0, Math.min(Math.round(playheadUs - clip.start), clip.duration));
   const opacity = paramValue(clip.transform.opacity, relUs);
   const scale = paramValue(clip.transform.scale[0], relUs);
   const rotation = paramValue(clip.transform.rotation, relUs);
   const gain = paramValue(clip.audio.gain_db, relUs);
-  /** Escribe un valor: keyframe en el playhead si la propiedad anima. */
+  /** Writes a value: keyframe at the playhead if the property animates. */
   const drive = (p: Param, v: number): Param => (isCurve(p) ? withKeyAt(p, relUs, v) : v);
 
   return (
     <>
       <div className="border-b border-line-soft px-3 py-3">
         <div className="truncate text-[13px] font-medium text-ink">
-          {asset ? assetName(asset) : clip.payload.type === "text" ? "Texto" : "Clip"}
+          {asset ? assetName(asset) : clip.payload.type === "text" ? "Text" : "Clip"}
         </div>
         <div className="mt-1 font-[var(--font-mono)] text-[10px] text-ink-faint">
           {usToTimecode(clip.start, fps)} → {usToTimecode(clip.start + clip.duration, fps)} ·{" "}
@@ -320,12 +324,12 @@ function ClipInspector({ clip }: { clip: Clip }) {
         </div>
       </div>
 
-      <Section title="Transformación">
-        <Row label="Posición X">
+      <Section title="Transform">
+        <Row label="Position X">
           <Slider
             value={paramValue(clip.transform.position[0], relUs)}
-            min={-960}
-            max={960}
+            min={-1920}
+            max={1920}
             step={2}
             unit=" px"
             onChange={(v) =>
@@ -351,8 +355,8 @@ function ClipInspector({ clip }: { clip: Clip }) {
             param={clip.transform.position[0]}
             durationUs={clip.duration}
             playheadUs={relUs}
-            min={-960}
-            max={960}
+            min={-1920}
+            max={1920}
             onChange={(p) =>
               void setClipTransform(clip.id, {
                 ...clip.transform,
@@ -361,11 +365,11 @@ function ClipInspector({ clip }: { clip: Clip }) {
             }
           />
         )}
-        <Row label="Posición Y">
+        <Row label="Position Y">
           <Slider
             value={paramValue(clip.transform.position[1], relUs)}
-            min={-540}
-            max={540}
+            min={-1080}
+            max={1080}
             step={2}
             unit=" px"
             onChange={(v) =>
@@ -391,8 +395,8 @@ function ClipInspector({ clip }: { clip: Clip }) {
             param={clip.transform.position[1]}
             durationUs={clip.duration}
             playheadUs={relUs}
-            min={-540}
-            max={540}
+            min={-1080}
+            max={1080}
             onChange={(p) =>
               void setClipTransform(clip.id, {
                 ...clip.transform,
@@ -401,7 +405,7 @@ function ClipInspector({ clip }: { clip: Clip }) {
             }
           />
         )}
-        <Row label="Opacidad">
+        <Row label="Opacity">
           <Slider
             value={opacity}
             min={0}
@@ -430,7 +434,7 @@ function ClipInspector({ clip }: { clip: Clip }) {
             onChange={(p) => void setClipTransform(clip.id, { ...clip.transform, opacity: p })}
           />
         )}
-        <Row label="Escala">
+        <Row label="Scale">
           <Slider
             value={scale}
             min={0.1}
@@ -457,7 +461,7 @@ function ClipInspector({ clip }: { clip: Clip }) {
             onChange={(p) => void setClipTransform(clip.id, { ...clip.transform, scale: [p, p] })}
           />
         )}
-        <Row label="Rotación">
+        <Row label="Rotation">
           <Slider
             value={rotation}
             min={-180}
@@ -490,7 +494,7 @@ function ClipInspector({ clip }: { clip: Clip }) {
       </Section>
 
       <Section title="Audio">
-        <Row label="Ganancia">
+        <Row label="Gain">
           <Slider
             value={gain}
             min={-60}
@@ -524,7 +528,7 @@ function ClipInspector({ clip }: { clip: Clip }) {
             max={1}
             step={0.05}
             unit=""
-            format={(v) => (v === 0 ? "C" : v < 0 ? `I ${Math.round(-v * 100)}%` : `D ${Math.round(v * 100)}%`)}
+            format={(v) => (v === 0 ? "C" : v < 0 ? `L ${Math.round(-v * 100)}%` : `R ${Math.round(v * 100)}%`)}
             disabled={isCurve(clip.audio.pan)}
             onChange={(v) => void setClipAudio(clip.id, { ...clip.audio, pan: v })}
           />
@@ -556,57 +560,68 @@ function ClipInspector({ clip }: { clip: Clip }) {
       </Section>
 
       {clip.group && (
-        <Section title="Enlace">
+        <Section title="Link">
           <div className="flex items-center justify-between gap-2">
             <span className="text-[11px] text-ink-dim">
-              🔗 Video y audio enlazados: mover, dividir, recortar, velocidad y
-              borrar afectan a ambos.
+              🔗 Video and audio linked: move, split, trim, speed and
+              delete affect both.
             </span>
             <button
               className="focus-ring shrink-0 rounded-md border border-line px-2 py-1.5 text-[12px] text-ink-dim hover:text-ink"
               onClick={() => void unlinkClip(clip.id)}
-              title="Rompe el enlace para editar video y audio por separado"
+              title="Break the link to edit video and audio separately"
             >
-              Desenlazar
+              Unlink
             </button>
           </div>
         </Section>
       )}
 
       {clip.payload.type === "media" && (
-        <Section title="Velocidad">
-          <div className="flex flex-wrap gap-1">
-            {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 4].map((v) => (
-              <button
-                key={v}
-                className={`focus-ring rounded-md border px-2 py-1 text-[11px] ${
-                  Math.abs(clip.speed - v) < 1e-9
-                    ? "border-accent bg-accent/15 text-accent"
-                    : "border-line text-ink-dim hover:text-ink"
-                }`}
-                onClick={() => void setClipSpeed(clip.id, v)}
-                title={`Reproducir a ${v}× (el export conserva el tono, como YouTube)`}
-              >
-                {v}×
-              </button>
-            ))}
+        <Section title="Speed">
+          <div className="flex items-center gap-2">
+            <input
+              type="range"
+              className="h-1 min-w-0 flex-1 cursor-pointer appearance-none rounded-full bg-bg3 accent-(--color-accent)"
+              min={0.25}
+              max={4}
+              step={0.05}
+              value={speedDraft ?? clip.speed}
+              onChange={(e) => setSpeedDraft(Number(e.target.value))}
+              onPointerUp={() => {
+                if (speedDraft != null && Math.abs(speedDraft - clip.speed) > 1e-9)
+                  void setClipSpeed(clip.id, speedDraft);
+                setSpeedDraft(null);
+              }}
+              title="Playback speed (export keeps the voice pitch, like YouTube)"
+            />
+            <span className="w-12 shrink-0 text-right font-[var(--font-mono)] text-[11px] text-ink">
+              {(speedDraft ?? clip.speed).toFixed(2)}×
+            </span>
+            <button
+              className="focus-ring rounded-md border border-line px-1.5 py-0.5 text-[10.5px] text-ink-dim hover:text-ink"
+              onClick={() => void setClipSpeed(clip.id, 1)}
+              title="Back to normal speed"
+            >
+              1×
+            </button>
           </div>
           <p className="mt-1.5 text-[10px] leading-snug text-ink-faint">
-            El clip {clip.speed > 1 ? "se acorta" : clip.speed < 1 ? "se alarga" : "no cambia"};
-            en el export el tono de la voz se conserva (atempo).
+            The clip {clip.speed > 1 ? "gets shorter" : clip.speed < 1 ? "gets longer" : "doesn't change"};
+            on export the voice pitch is preserved (atempo).
           </p>
         </Section>
       )}
 
       {clip.payload.type === "media" && asset && (
-        <Section title="Fuente">
+        <Section title="Source">
           <div className="space-y-1 text-[11px]">
             <div className="truncate text-ink" title={asset.path}>
               {asset.path}
             </div>
             <div className="font-[var(--font-mono)] text-[10px] text-ink-faint">
-              {usToDuration(clip.payload.src_in)} → {usToDuration(clip.payload.src_out)} del
-              archivo · velocidad {clip.speed}×
+              {usToDuration(clip.payload.src_in)} → {usToDuration(clip.payload.src_out)} of the
+              file · speed {clip.speed}×
             </div>
           </div>
         </Section>
@@ -617,8 +632,8 @@ function ClipInspector({ clip }: { clip: Clip }) {
       {clip.payload.type === "subtitles" && <SubtitlesPanel clip={clip} />}
 
       {clip.payload.type === "media" && asset && asset.probe.audio_channels > 0 && (
-        <Section title="Silencios">
-          <Row label="Umbral">
+        <Section title="Silences">
+          <Row label="Threshold">
             <Slider
               value={silenceDb}
               min={-70}
@@ -628,7 +643,7 @@ function ClipInspector({ clip }: { clip: Clip }) {
               onChange={setSilenceDb}
             />
           </Row>
-          <Row label="Mín. silencio">
+          <Row label="Min. silence">
             <Slider
               value={silenceMs}
               min={100}
@@ -638,7 +653,7 @@ function ClipInspector({ clip }: { clip: Clip }) {
               onChange={setSilenceMs}
             />
           </Row>
-          <Row label="Margen">
+          <Row label="Padding">
             <Slider value={padMs} min={0} max={500} step={10} unit=" ms" onChange={setPadMs} />
           </Row>
           <div className="mt-1 flex gap-1.5">
@@ -651,9 +666,9 @@ function ClipInspector({ clip }: { clip: Clip }) {
                   padMs,
                 })
               }
-              title="Detecta silencios y los corta cerrando los huecos (1 deshacer)"
+              title="Detects silences and cuts them, closing the gaps (1 undo)"
             >
-              🔇 Eliminar
+              🔇 Delete
             </button>
             <button
               className="focus-ring flex-1 rounded-md border border-line bg-bg2 px-2 py-2 text-[12px] text-ink hover:bg-bg3"
@@ -664,26 +679,49 @@ function ClipInspector({ clip }: { clip: Clip }) {
                   padMs,
                 })
               }
-              title="Detecta silencios y los acelera 4× en lugar de cortarlos (1 deshacer)"
+              title="Detects silences and speeds them up 4× instead of cutting them (1 undo)"
             >
-              ⏩ Acelerar 4×
+              ⏩ Speed up 4×
+            </button>
+            <button
+              className="focus-ring flex-1 rounded-md border border-line bg-bg2 px-2 py-2 text-[12px] text-ink hover:bg-bg3"
+              onClick={() =>
+                void removeSilences(clip.id, "split", {
+                  thresholdDb: silenceDb,
+                  minSilenceMs: silenceMs,
+                  padMs,
+                })
+              }
+              title="Only cuts at silence boundaries (silence/speech segments); you decide what to delete (1 undo)"
+            >
+              ✂ Split
             </button>
           </div>
+          {!asset.transcript && (
+            <button
+              className="focus-ring mt-1.5 w-full rounded-md border border-accent/60 bg-bg2 px-2.5 py-2 text-[12px] font-medium text-accent hover:bg-bg3 disabled:opacity-50"
+              disabled={transcribing}
+              onClick={() => void transcribeAsset(asset.id)}
+              title="Word-by-word transcription with Whisper (downloads the model the first time). Enables text-based editing, subtitles and the avatar."
+            >
+              {transcribing ? "⏳ Transcribing…" : "🎙 Transcribe (Whisper)"}
+            </button>
+          )}
           {asset.transcript && (
             <>
               <button
                 className="focus-ring mt-1.5 w-full rounded-md border border-line bg-bg2 px-2.5 py-2 text-[12px] text-ink hover:bg-bg3"
                 onClick={() => void addSubtitlesClip(clip.id)}
-                title="Crea un clip de subtítulos automáticos (por frases) sobre este clip"
+                title="Creates an auto-subtitles clip (by phrases) over this clip"
               >
-                💬 Subtítulos automáticos
+                💬 Auto subtitles
               </button>
               <button
                 className="focus-ring mt-1.5 w-full rounded-md border border-line bg-bg2 px-2.5 py-2 text-[12px] text-ink hover:bg-bg3"
                 onClick={() => void addAvatarClip(clip.id)}
-                title="Avatar reactivo por emociones (elige el config.json de tus avatares, compatible con el toolkit)"
+                title="Emotion-reactive avatar (pick the config.json of your avatars, compatible with the toolkit)"
               >
-                🧑‍🎤 Avatar reactivo…
+                🧑‍🎤 Reactive avatar…
               </button>
             </>
           )}
@@ -705,22 +743,22 @@ function TextPanel({ clip }: { clip: Clip }) {
   const { content, style } = clip.payload;
 
   return (
-    <Section title="Texto">
+    <Section title="Text">
       <textarea
         className="focus-ring w-full resize-y rounded-md border border-line bg-bg2 px-2.5 py-2 text-[12px] text-ink"
         rows={2}
         value={content}
         onChange={(e) => void setClipText(clip.id, e.target.value, style)}
-        placeholder="Escribe el título…"
+        placeholder="Type the title…"
       />
-      <Row label="Fuente">
+      <Row label="Font">
         <select
           className="focus-ring min-w-0 flex-1 cursor-pointer rounded-md border border-line bg-bg2 px-2 py-1 text-[12px] text-ink"
           value={style.font}
           onChange={(e) => void setClipText(clip.id, content, { ...style, font: e.target.value })}
           style={{ fontFamily: style.font }}
         >
-          <option value="sans-serif">Por defecto</option>
+          <option value="sans-serif">Default</option>
           {fonts.map(([family]) => (
             <option key={family} value={family} style={{ fontFamily: family }}>
               {family}
@@ -728,7 +766,7 @@ function TextPanel({ clip }: { clip: Clip }) {
           ))}
         </select>
       </Row>
-      <Row label="Alineación">
+      <Row label="Alignment">
         <select
           className="focus-ring min-w-0 flex-1 cursor-pointer rounded-md border border-line bg-bg2 px-2 py-1 text-[12px] text-ink"
           value={style.align}
@@ -739,12 +777,12 @@ function TextPanel({ clip }: { clip: Clip }) {
             })
           }
         >
-          <option value="left">Izquierda</option>
-          <option value="center">Centro</option>
-          <option value="right">Derecha</option>
+          <option value="left">Left</option>
+          <option value="center">Center</option>
+          <option value="right">Right</option>
         </select>
       </Row>
-      <Row label="Posición X">
+      <Row label="Position X">
         <Slider
           value={style.x_offset}
           min={-800}
@@ -754,7 +792,7 @@ function TextPanel({ clip }: { clip: Clip }) {
           onChange={(v) => void setClipText(clip.id, content, { ...style, x_offset: v })}
         />
       </Row>
-      <Row label="Tamaño">
+      <Row label="Size">
         <Slider
           value={style.size}
           min={16}
@@ -773,7 +811,7 @@ function TextPanel({ clip }: { clip: Clip }) {
         />
         <span className="font-[var(--font-mono)] text-[10px] text-ink-faint">{style.color}</span>
       </Row>
-      <Row label="Altura">
+      <Row label="Height">
         <Slider
           value={style.y_offset}
           min={-500}
@@ -786,7 +824,7 @@ function TextPanel({ clip }: { clip: Clip }) {
         />
       </Row>
       <p className="mt-1 text-[10px] leading-snug text-ink-faint">
-        Tamaño y posiciones referidos a 1080p; se escalan al exportar.
+        Size and positions are relative to 1080p; they scale on export.
       </p>
       <div className="mt-2 flex gap-1.5">
         <select
@@ -796,9 +834,9 @@ function TextPanel({ clip }: { clip: Clip }) {
             const tpl = textTemplates[e.target.value];
             if (tpl) void setClipText(clip.id, content, tpl);
           }}
-          title="Aplicar una plantilla guardada"
+          title="Apply a saved template"
         >
-          <option value="">Plantillas…</option>
+          <option value="">Templates…</option>
           {Object.keys(textTemplates).map((name) => (
             <option key={name} value={name}>
               {name}
@@ -808,12 +846,12 @@ function TextPanel({ clip }: { clip: Clip }) {
         <button
           className="focus-ring shrink-0 rounded-md border border-line px-2 py-1 text-[11px] text-ink-dim hover:text-ink"
           onClick={() => {
-            const name = window.prompt("Nombre de la plantilla:");
+            const name = window.prompt("Template name:");
             if (name?.trim()) void saveTextTemplate(name.trim(), style);
           }}
-          title="Guarda el estilo actual como plantilla"
+          title="Save the current style as a template"
         >
-          Guardar
+          Save
         </button>
       </div>
     </Section>
@@ -826,8 +864,8 @@ function SubtitlesPanel({ clip }: { clip: Clip }) {
   const { style, mode } = clip.payload;
 
   return (
-    <Section title="Subtítulos">
-      <Row label="Modo">
+    <Section title="Subtitles">
+      <Row label="Mode">
         <select
           className="focus-ring min-w-0 flex-1 cursor-pointer rounded-md border border-line bg-bg2 px-2 py-1 text-[12px] text-ink"
           value={mode}
@@ -838,14 +876,14 @@ function SubtitlesPanel({ clip }: { clip: Clip }) {
               e.target.value as "phrase" | "word" | "karaoke",
             )
           }
-          title="Frase completa, palabra a palabra (estilo shorts) o karaoke"
+          title="Full phrase, word by word (shorts style) or karaoke"
         >
-          <option value="phrase">Por frases</option>
-          <option value="word">Palabra a palabra</option>
-          <option value="karaoke">Karaoke (palabra resaltada)</option>
+          <option value="phrase">By phrases</option>
+          <option value="word">Word by word</option>
+          <option value="karaoke">Karaoke (highlighted word)</option>
         </select>
       </Row>
-      <Row label="Tamaño">
+      <Row label="Size">
         <Slider
           value={style.size}
           min={16}
@@ -864,7 +902,7 @@ function SubtitlesPanel({ clip }: { clip: Clip }) {
         />
         <span className="font-[var(--font-mono)] text-[10px] text-ink-faint">{style.color}</span>
       </Row>
-      <Row label="Altura">
+      <Row label="Height">
         <Slider
           value={style.y_offset}
           min={-500}
@@ -879,16 +917,16 @@ function SubtitlesPanel({ clip }: { clip: Clip }) {
 }
 
 const TRANSITION_KINDS: [string, string][] = [
-  ["core.crossfade", "Fundido cruzado"],
-  ["core.wipeleft", "Barrido ←"],
-  ["core.wiperight", "Barrido →"],
-  ["core.slideleft", "Deslizar ←"],
-  ["core.slideright", "Deslizar →"],
-  ["core.slideup", "Deslizar ↑"],
-  ["core.circleopen", "Círculo abrir"],
-  ["core.circleclose", "Círculo cerrar"],
-  ["core.dissolve", "Disolver"],
-  ["core.pixelize", "Pixelar"],
+  ["core.crossfade", "Cross fade"],
+  ["core.wipeleft", "Wipe ←"],
+  ["core.wiperight", "Wipe →"],
+  ["core.slideleft", "Slide ←"],
+  ["core.slideright", "Slide →"],
+  ["core.slideup", "Slide ↑"],
+  ["core.circleopen", "Circle open"],
+  ["core.circleclose", "Circle close"],
+  ["core.dissolve", "Dissolve"],
+  ["core.pixelize", "Pixelize"],
   ["core.radial", "Radial"],
 ];
 
@@ -897,8 +935,8 @@ function TransitionPanel({ clip }: { clip: Clip }) {
   const durS = (clip.transition_in?.duration ?? 500_000) / 1e6;
 
   return (
-    <Section title="Transición de entrada">
-      <Row label="Tipo">
+    <Section title="Transition in">
+      <Row label="Type">
         <select
           className="focus-ring min-w-0 flex-1 cursor-pointer rounded-md border border-line bg-bg2 px-2 py-1 text-[12px] text-ink"
           value={clip.transition_in?.effect_id ?? ""}
@@ -915,7 +953,7 @@ function TransitionPanel({ clip }: { clip: Clip }) {
             )
           }
         >
-          <option value="">Corte (ninguna)</option>
+          <option value="">Cut (none)</option>
           {TRANSITION_KINDS.map(([id, label]) => (
             <option key={id} value={id}>
               {label}
@@ -924,7 +962,7 @@ function TransitionPanel({ clip }: { clip: Clip }) {
         </select>
       </Row>
       {clip.transition_in && (
-        <Row label="Duración">
+        <Row label="Duration">
           <Slider
             value={durS}
             min={0.1}
@@ -941,8 +979,8 @@ function TransitionPanel({ clip }: { clip: Clip }) {
         </Row>
       )}
       <p className="mt-1 text-[10px] leading-snug text-ink-faint">
-        Necesita material extra a ambos lados del corte; si no lo hay, se
-        reduce. Funciona también entre clips con velocidad distinta.
+        Needs extra material on both sides of the cut; if there isn't any, it
+        shrinks. Also works between clips with different speeds.
       </p>
     </Section>
   );
@@ -953,11 +991,15 @@ function EffectRow({
   def,
   onChange,
   onRemove,
+  durationUs,
+  relUs,
 }: {
   inst: EffectInstance;
   def: EffectDef | undefined;
   onChange: (next: EffectInstance) => void;
   onRemove: () => void;
+  durationUs: number;
+  relUs: number;
 }) {
   return (
     <div className="rounded-lg border border-line bg-bg2 p-2">
@@ -967,7 +1009,7 @@ function EffectRow({
           className="accent-(--color-accent)"
           checked={inst.enabled}
           onChange={(e) => onChange({ ...inst, enabled: e.target.checked })}
-          title="Activar/desactivar efecto"
+          title="Enable/disable effect"
         />
         <span className="flex-1 truncate text-[12px] font-medium text-ink">
           {def?.name ?? inst.effect_id}
@@ -975,7 +1017,7 @@ function EffectRow({
         <button
           className="focus-ring rounded px-1.5 text-[12px] text-ink-faint hover:text-danger"
           onClick={onRemove}
-          title="Quitar efecto"
+          title="Remove effect"
         >
           ✕
         </button>
@@ -984,21 +1026,44 @@ function EffectRow({
         <div className="mt-1.5 space-y-0.5">
           {def.params.map((p) =>
             p.type === "float" ? (
-              <Row key={p.key} label={p.label ?? p.key}>
-                <Slider
-                  value={
-                    inst.params[p.key] !== undefined
-                      ? paramValue(inst.params[p.key])
-                      : (p.default as number)
-                  }
-                  min={p.min ?? 0}
-                  max={p.max ?? 1}
-                  step={((p.max ?? 1) - (p.min ?? 0)) / 100}
-                  onChange={(v) =>
-                    onChange({ ...inst, params: { ...inst.params, [p.key]: v } })
-                  }
-                />
-              </Row>
+              <div key={p.key}>
+                <Row label={p.label ?? p.key}>
+                  <Slider
+                    value={
+                      inst.params[p.key] !== undefined
+                        ? paramValue(inst.params[p.key], relUs)
+                        : (p.default as number)
+                    }
+                    min={p.min ?? 0}
+                    max={p.max ?? 1}
+                    step={((p.max ?? 1) - (p.min ?? 0)) / 100}
+                    onChange={(v) => {
+                      const cur = inst.params[p.key] ?? (p.default as number);
+                      const next = isCurve(cur) ? withKeyAt(cur, relUs, v) : v;
+                      onChange({ ...inst, params: { ...inst.params, [p.key]: next } });
+                    }}
+                  />
+                  <KeyBtn
+                    param={inst.params[p.key] ?? (p.default as number)}
+                    at={relUs}
+                    onChange={(np) =>
+                      onChange({ ...inst, params: { ...inst.params, [p.key]: np } })
+                    }
+                  />
+                </Row>
+                {inst.params[p.key] !== undefined && isCurve(inst.params[p.key]) && (
+                  <CurveEditor
+                    param={inst.params[p.key]}
+                    durationUs={durationUs}
+                    playheadUs={relUs}
+                    min={p.min ?? 0}
+                    max={p.max ?? 1}
+                    onChange={(np) =>
+                      onChange({ ...inst, params: { ...inst.params, [p.key]: np } })
+                    }
+                  />
+                )}
+              </div>
             ) : (
               <Row key={p.key} label={p.label ?? p.key}>
                 <input
@@ -1024,7 +1089,7 @@ function EffectRow({
   );
 }
 
-/** Panel de un clip generador: tipo + params autogenerados del manifest. */
+/** Panel for a generator clip: type + params auto-generated from the manifest. */
 function GeneratorPanel({ clip }: { clip: Clip }) {
   const catalog = useStore((s) => s.generatorsCatalog);
   const setClipGenerator = useStore((s) => s.setClipGenerator);
@@ -1033,13 +1098,13 @@ function GeneratorPanel({ clip }: { clip: Clip }) {
   const def = catalog.find((d) => d.id === generator_id);
 
   return (
-    <Section title="Generador">
-      <Row label="Tipo">
+    <Section title="Generator">
+      <Row label="Type">
         <select
           className="focus-ring min-w-0 flex-1 cursor-pointer rounded-md border border-line bg-bg2 px-2 py-1 text-[12px] text-ink"
           value={generator_id}
           onChange={(e) => void setClipGenerator(clip.id, e.target.value, {}, {})}
-          title="Tipo de generador (al cambiar se reinician los parámetros)"
+          title="Generator type (changing it resets the parameters)"
         >
           {catalog.map((d) => (
             <option key={d.id} value={d.id}>
@@ -1095,6 +1160,8 @@ function GeneratorPanel({ clip }: { clip: Clip }) {
 
 function EffectsPanel({ clip }: { clip: Clip }) {
   const catalog = useStore((s) => s.effectsCatalog);
+  const fxPlayhead = useStore((s) => s.playheadUs);
+  const fxRelUs = Math.max(0, Math.min(Math.round(fxPlayhead - clip.start), clip.duration));
   const setClipEffects = useStore((s) => s.setClipEffects);
   const reloadEffectPacks = useStore((s) => s.reloadEffectPacks);
 
@@ -1114,11 +1181,11 @@ function EffectsPanel({ clip }: { clip: Clip }) {
   return (
     <section className="border-b border-line-soft px-3 py-3">
       <div className="mb-2 flex items-center justify-between">
-        <h3 className="panel-eyebrow">Efectos</h3>
+        <h3 className="panel-eyebrow">Effects</h3>
         <button
           className="focus-ring rounded px-1.5 text-[11px] text-ink-faint hover:text-ink"
           onClick={() => void reloadEffectPacks()}
-          title="Recargar packs de efectos desde disco"
+          title="Reload effect packs from disk"
         >
           ↻ packs
         </button>
@@ -1131,15 +1198,17 @@ function EffectsPanel({ clip }: { clip: Clip }) {
             def={catalog.find((d) => d.id === e.effect_id)}
             onChange={(next) => update(i, next)}
             onRemove={() => remove(i)}
+            durationUs={clip.duration}
+            relUs={fxRelUs}
           />
         ))}
         <select
           className="focus-ring w-full cursor-pointer rounded-md border border-line bg-bg2 px-2 py-1.5 text-[12px] text-ink-dim"
           value=""
           onChange={(e) => e.target.value && add(e.target.value)}
-          title="Añadir un efecto al clip"
+          title="Add an effect to the clip"
         >
-          <option value="">+ Añadir efecto…</option>
+          <option value="">+ Add effect…</option>
           {catalog.map((d) => (
             <option key={d.id} value={d.id}>
               {d.name}
@@ -1176,13 +1245,13 @@ export function Inspector() {
                 {seq.resolution[0]}×{seq.resolution[1]} · {Math.round(seq.fps[0] / seq.fps[1])} fps
               </div>
               <div>
-                {seq.tracks.length} pistas · {(seq.sample_rate / 1000).toFixed(0)} kHz
+                {seq.tracks.length} tracks · {(seq.sample_rate / 1000).toFixed(0)} kHz
               </div>
             </div>
           </div>
           <div className="mt-3 rounded-lg border border-line bg-bg2 p-3">
-            <h3 className="panel-eyebrow mb-2">IA · Whisper</h3>
-            <Row label="Modelo">
+            <h3 className="panel-eyebrow mb-2">AI · Whisper</h3>
+            <Row label="Model">
               <select
                 className="focus-ring min-w-0 flex-1 cursor-pointer rounded-md border border-line bg-bg1 px-2 py-1 text-[12px] text-ink"
                 value={project.settings.whisper_model}
@@ -1197,7 +1266,7 @@ export function Inspector() {
                 ))}
               </select>
             </Row>
-            <Row label="Idioma">
+            <Row label="Language">
               <select
                 className="focus-ring min-w-0 flex-1 cursor-pointer rounded-md border border-line bg-bg1 px-2 py-1 text-[12px] text-ink"
                 value={project.settings.whisper_language}
@@ -1206,12 +1275,12 @@ export function Inspector() {
                 }
               >
                 {[
-                  ["auto", "Detectar"],
-                  ["es", "Español"],
-                  ["en", "Inglés"],
-                  ["pt", "Portugués"],
-                  ["fr", "Francés"],
-                  ["de", "Alemán"],
+                  ["auto", "Detect"],
+                  ["es", "Spanish"],
+                  ["en", "English"],
+                  ["pt", "Portuguese"],
+                  ["fr", "French"],
+                  ["de", "German"],
                 ].map(([v, l]) => (
                   <option key={v} value={v}>
                     {l}
@@ -1221,7 +1290,7 @@ export function Inspector() {
             </Row>
           </div>
           <p className="mt-3 text-[11px] leading-relaxed text-ink-faint">
-            Selecciona un clip en la línea de tiempo para editar sus propiedades.
+            Select a clip in the timeline to edit its properties.
           </p>
         </div>
       )}

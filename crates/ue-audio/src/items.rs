@@ -1,5 +1,5 @@
-//! Construcción de los MixItem a partir del proyecto: qué clips suenan, con
-//! qué ganancia y desde qué WAV conformado. (Espejo de la lógica de export.)
+//! Building the MixItems from the project: which clips play, with
+//! what gain and from which conformed WAV. (Mirror of the export logic.)
 
 use std::path::{Path, PathBuf};
 
@@ -10,26 +10,26 @@ use crate::mixer::{db_to_linear, MixItem};
 use crate::us_to_frames;
 use crate::wav::WavMap;
 
-/// Especificación previa a abrir archivos (pura, testeable sin IO).
+/// Spec computed before opening files (pure, testable without IO).
 #[derive(Debug, PartialEq)]
 pub struct ItemSpec {
     pub asset_id: Id,
     pub timeline_start_us: i64,
     pub src_in_us: i64,
-    /// Duración en TIEMPO DE TIMELINE (la fuente ya dividida por speed).
+    /// Duration in TIMELINE TIME (source already divided by speed).
     pub len_us: i64,
     pub speed: f64,
-    /// Parte estática de la ganancia (const del clip + volumen de pista).
+    /// Static part of the gain (clip const + track volume).
     pub gain_db: f64,
-    /// Curva de ganancia en dB (si el gain del clip es animado).
+    /// Gain curve in dB (if the clip's gain is animated).
     pub gain_curve: Option<KeyframeCurve>,
-    /// Balance -1..1 (estático; se evalúa en t=0).
+    /// Pan -1..1 (static; evaluated at t=0).
     pub pan: f64,
     pub fade_in_us: i64,
     pub fade_out_us: i64,
 }
 
-/// Colecta los clips audibles (pistas de audio y video; respeta mute/solo).
+/// Collects the audible clips (audio and video tracks; respects mute/solo).
 pub fn collect_specs(project: &Project, sequence_id: Id) -> Vec<ItemSpec> {
     let Some(seq) = project.sequence(sequence_id) else { return vec![] };
     let any_solo = seq.tracks.iter().any(|t| t.solo);
@@ -71,8 +71,8 @@ pub fn collect_specs(project: &Project, sequence_id: Id) -> Vec<ItemSpec> {
     specs
 }
 
-/// Abre los WAV conformados y produce los MixItem listos para el mezclador.
-/// Los assets sin conformado disponible se omiten (y se reportan).
+/// Opens the conformed WAVs and produces the MixItems ready for the mixer.
+/// Assets without an available conform are skipped (and reported).
 pub fn load_items(
     project: &Project,
     specs: &[ItemSpec],
