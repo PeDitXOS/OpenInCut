@@ -463,12 +463,6 @@ export class MockEngine implements EngineClient {
   async pickJsonOpenPath(): Promise<string | null> {
     return null;
   }
-  async addAvatarClip(): Promise<StateSnapshot> {
-    throw new Error("The avatar requires the desktop app (npx tauri dev)");
-  }
-  async pickAvatarConfig(): Promise<string | null> {
-    return null;
-  }
 
   async generateVertical(): Promise<StateSnapshot> {
     return this.transaction("Generate vertical", () => {

@@ -425,7 +425,6 @@ impl Clip {
             }
             ClipPayload::Subtitles { .. } => "Subtitles".into(),
             ClipPayload::Generator { generator_id, .. } => generator_id.clone(),
-            ClipPayload::Avatar { .. } => "Avatar".into(),
         }
     }
 }
@@ -521,17 +520,6 @@ pub enum ClipPayload {
         params: std::collections::BTreeMap<String, Param>,
         #[serde(default)]
         color_params: std::collections::BTreeMap<String, String>,
-    },
-    /// Reactive avatar (PLAN §7.E.1): looping clips per emotion, driven by
-    /// the transcript of the driver asset. Config compatible with the
-    /// avatar_config/config.json of the Youtubers-toolkit.
-    Avatar {
-        driver_asset: Id,
-        /// emotion → path of the avatar video (the first one is the default)
-        avatars: std::collections::BTreeMap<String, String>,
-        shake_factor: f64,
-        /// avatar scale relative to the sequence width (0..1)
-        scale: f64,
     },
 }
 

@@ -353,18 +353,6 @@ export class TauriEngine implements EngineClient {
     });
     return typeof picked === "string" ? picked : null;
   }
-  addAvatarClip(clipId: Id, configPath: string): Promise<StateSnapshot> {
-    return invoke("add_avatar_clip", { clipId, configPath });
-  }
-  async pickAvatarConfig(): Promise<string | null> {
-    const picked = await open({
-      title: "Avatar config (toolkit config.json)",
-      multiple: false,
-      filters: [{ name: "JSON", extensions: ["json"] }],
-    });
-    return typeof picked === "string" ? picked : null;
-  }
-
   generateVertical(): Promise<StateSnapshot> {
     return invoke("generate_vertical");
   }

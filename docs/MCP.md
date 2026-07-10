@@ -298,7 +298,6 @@ The coverage test allows exactly these gaps, so the list stays honest:
 | `get_audio_peaks`, `ensure_thumbs`, `get_thumb_strip`, `playback_frame` | visual caches and binary streams for the timeline widget |
 | `pick_avatar_media` | opens a native file dialog; an agent passes paths directly |
 | `cancel_export` | the agent controls export timing through the job (it just doesn't launch one it doesn't want) |
-| `add_avatar_clip` | legacy toolkit path, superseded by `save_avatar_config` → `generate_avatar_video` → `add_clip` |
 | `check_recovery`, `recover_project`, `discard_recovery` | the UI's crash-recovery prompt; they need the app's data dir |
 | `set_clip_transform/audio/effects/speed/transition`, `set_clip_text`, `set_subtitles_props`, `set_clip_generator` | folded into `set_clip_properties` / `set_clip_content` (one call, one undo) |
 | `rename_track`, `set_track_volume` | folded into `set_track_prop` |

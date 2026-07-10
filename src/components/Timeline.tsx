@@ -230,7 +230,7 @@ function drawClip(
   selected: boolean,
   ghost: boolean,
 ) {
-  const isText = ["text", "subtitles", "avatar", "generator"].includes(clip.payload.type);
+  const isText = ["text", "subtitles", "generator"].includes(clip.payload.type);
   const genColor =
     clip.payload.type === "generator"
       ? (clip.payload.color_params["color"] ?? clip.payload.color_params["color_a"] ?? "#ff3355")

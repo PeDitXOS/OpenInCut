@@ -109,7 +109,6 @@ export interface UiState {
   transcribeAsset: (assetId: Id) => Promise<void>;
   addSubtitlesClip: (clipId: Id) => Promise<void>;
   generateVertical: () => Promise<void>;
-  addAvatarClip: (clipId: Id) => Promise<void>;
   showAvatarDialog: boolean;
   avatarDriverAsset: Id | null;
   openAvatarDialog: (driverAsset?: Id) => void;
@@ -520,15 +519,6 @@ export const useStore = create<UiState>((set, get) => {
 
     generateVertical: () => run("Generate vertical", () => engine.generateVertical()),
 
-    addAvatarClip: async (clipId) => {
-      const path = await engine.pickAvatarConfig();
-      if (!path) {
-        if (engine.kind === "mock")
-          set({ lastActionLabel: "⚠ The avatar requires the desktop app (npx tauri dev)" });
-        return;
-      }
-      await run("Add avatar", () => engine.addAvatarClip(clipId, path));
-    },
     setActiveSequence: (sequenceId) =>
       run("Change sequence", () => engine.setActiveSequence(sequenceId)),
 

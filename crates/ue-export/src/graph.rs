@@ -804,116 +804,6 @@ fn xfade_kind(effect_id: &str) -> &'static str {
         .unwrap_or("fade")
 }
 
-/// Escaping the movie filter's filename (inside filter_complex).
-fn escape_movie_path(p: &str) -> String {
-    p.replace('\\', "/").replace(':', "\\\\:").replace('\'', "\\\\'")
-}
-
-/// Spans (emotion, from, to) of an Avatar clip: the transcript segments
-/// mapped to the timeline, with gaps filled with the default emotion
-/// (behavior of the toolkit's avatar_video_generation.py).
-fn avatar_spans(
-    project: &Project,
-    seq: &ue_core::model::Sequence,
-    clip: &ue_core::model::Clip,
-    driver_asset: Id,
-    default_emotion: &str,
-) -> Vec<(String, TimeUs, TimeUs, f64)> {
-    let doc = project.transcripts.iter().find(|t| t.asset_id == driver_asset);
-    let (cs, ce) = (clip.start, clip.end());
-    let mut spans: Vec<(String, TimeUs, TimeUs, f64)> = vec![];
-    let mut cursor = cs;
-    if let Some(doc) = doc {
-        let avg = if doc.global_avg_volume > 1e-9 { doc.global_avg_volume } else { 1.0 };
-        for seg in &doc.segments {
-            let Some(tl_start) = asset_time_to_timeline(seq, driver_asset, seg.start_us) else {
-                continue;
-            };
-            let tl_end = tl_start + (seg.end_us - seg.start_us);
-            let from = tl_start.max(cs);
-            let to = tl_end.min(ce);
-            if to <= from {
-                continue;
-            }
-            if from > cursor {
-                spans.push((default_emotion.to_string(), cursor, from, 1.0));
-            }
-            let emotion = seg.emotion.clone().unwrap_or_else(|| default_emotion.to_string());
-            spans.push((emotion, from, to, (seg.volume_rms / avg).clamp(0.0, 3.0)));
-            cursor = to;
-        }
-    }
-    if cursor < ce {
-        spans.push((default_emotion.to_string(), cursor, ce, 1.0));
-    }
-    spans
-}
-
-/// movie+overlay chains for Avatar clips. Returns (chains, final label).
-fn build_avatar_overlays(
-    project: &Project,
-    seq: &ue_core::model::Sequence,
-    base_dir: &Path,
-    in_label: &str,
-    out_w: u32,
-) -> (Vec<String>, String) {
-    use ue_core::model::{ClipPayload, TrackKind};
-    let mut fc: Vec<String> = vec![];
-    let mut current = in_label.to_string();
-    let mut n = 0usize;
-    for track in seq.tracks.iter().filter(|t| t.kind == TrackKind::Video && !t.muted) {
-        for clip in &track.clips {
-            let ClipPayload::Avatar { driver_asset, avatars, shake_factor, scale } =
-                &clip.payload
-            else {
-                continue;
-            };
-            let Some(default_emotion) = avatars.keys().next().cloned() else { continue };
-            // avatar width in px (even)
-            let aw = (((out_w as f64) * scale.clamp(0.05, 1.0)) as u32) & !1;
-            let margin = 24;
-            let base_x = out_w as i64 - aw as i64 - margin;
-            for (emotion, from, to, vol_ratio) in
-                avatar_spans(project, seq, clip, *driver_asset, &default_emotion)
-            {
-                let path_str = avatars
-                    .get(&emotion)
-                    .or_else(|| avatars.get(&default_emotion))
-                    .cloned()
-                    .unwrap_or_default();
-                if path_str.is_empty() {
-                    continue;
-                }
-                let abs = {
-                    let p = Path::new(&path_str);
-                    if p.is_absolute() { p.to_path_buf() } else { base_dir.join(p) }
-                };
-                if !abs.exists() {
-                    continue; // missing avatar: skip that span without breaking
-                }
-                let amp = (shake_factor * vol_ratio * 8.0).round();
-                let av = format!("av{n}");
-                let nx = format!("avo{n}");
-                fc.push(format!(
-                    "movie=filename='{}':loop=999,setpts=PTS-STARTPTS+{}/TB,scale={aw}:-2[{av}]",
-                    escape_movie_path(&abs.to_string_lossy()),
-                    secs(from),
-                ));
-                fc.push(format!(
-                    "[{current}][{av}]overlay=x='{base_x}+{amp}*sin(t*37)':\
-                     y='H-h-{margin}+{amp}*cos(t*51)':enable='between(t,{},{})':\
-                     eof_action=pass[{nx}]",
-                    secs(from),
-                    secs(to),
-                ));
-                current = nx;
-                n += 1;
-            }
-        }
-    }
-    (fc, current)
-}
-
 pub fn build_ffmpeg_args(
     project: &Project,
     sequence_id: Id,
@@ -1175,12 +1065,6 @@ pub fn build_ffmpeg_args(
         fc.push(format!("[{current}]format=yuv420p[flat]"));
         current = "flat".to_string();
     }
-
-    // reactive avatars (movie+overlay per segment)
-    let (avatar_chains, after_avatars) =
-        build_avatar_overlays(project, seq, base_dir, &current, out_w);
-    fc.extend(avatar_chains);
-    current = after_avatars;
 
     // burn titles and subtitles onto the combined video
     let text_chain = build_text_overlays(project, seq, out_h, out_w);

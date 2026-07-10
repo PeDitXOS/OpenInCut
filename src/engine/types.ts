@@ -207,13 +207,6 @@ export type ClipPayload =
       generator_id: string;
       params: Record<string, Param>;
       color_params: Record<string, string>;
-    }
-  | {
-      type: "avatar";
-      driver_asset: Id;
-      avatars: Record<string, string>;
-      shake_factor: number;
-      scale: number;
     };
 
 export interface Transform2D {
@@ -631,8 +624,6 @@ export function clipDisplayName(clip: Clip, project: Project): string {
       return "Subtitles";
     case "generator":
       return clip.payload.generator_id === "core.gradient" ? "Gradient" : "Rectangle";
-    case "avatar":
-      return "Avatar";
   }
 }
 

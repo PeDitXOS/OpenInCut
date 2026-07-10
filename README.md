@@ -155,7 +155,7 @@ You change the type and parameters in `Inspector → Generator`. Since they're n
 
 ### Reactive avatar
 
-**🧑‍🎤** button on a transcribed clip → pick the avatar `config.json` (Youtubers-toolkit-compatible format: one looping video per emotion). The avatar appears in the corner, **changes emotion based on what you say** (offline energy/rhythm classifier, or OpenAI-compatible if you set `OPENAI_API_KEY`) and in the export it shakes to the beat of the volume. Visible when paused, playing, and in the export.
+**🧑‍🎤** button → the avatar dialog: add expressions (an image or video per emotion), pick the voice to drive it, set the model/API key, and hit **Generate**. It classifies each phrase into an expression (offline energy/rhythm classifier, or OpenAI-compatible if you set a key/`OPENAI_API_KEY`) and renders a transparent avatar video that shakes to the volume. The result **lands in the media pool as a normal clip** — place, scale, crop or key it like any other footage. Avatar setups are saved in the project and can be imported/exported (Youtubers-toolkit `config.json` compatible).
 
 ---
 
@@ -231,7 +231,7 @@ npm run screenshot            # visual tests: 13 steps with functional assertion
 | `ue-media` | ffprobe, hashing, preview frames (MJPEG), proxies, thumbnails, audio conforming |
 | `ue-audio` | mmap'd WAV, pure mixer (testable), cpal output (master clock), peaks |
 | `ue-render` | Effect and generator packs (manifest → ffmpeg chain), transform and animation expressions |
-| `ue-export` | EDL, ffmpeg graph (multi-layer, transitions, text/karaoke, avatar), progress and cancellation |
+| `ue-export` | EDL, ffmpeg graph (multi-layer, transitions, text/karaoke), single-frame preview compositor, avatar-video generation, progress and cancellation |
 | `ue-ai` | Silence detection (hysteresis + padding), emotion classification |
 | `ue-whisper` | whisper-rs (Metal/CUDA), per-word timestamps, model downloads |
 | `src-tauri` | IPC commands, FrameService, MCP server, autosave |

@@ -1883,9 +1883,6 @@ fn set_clip_content(state: &AppState, args: &Args) -> Result<Value, String> {
         ClipPayload::Media { .. } => {
             return Err("a media clip has no editable content; use set_clip_properties".into())
         }
-        ClipPayload::Avatar { .. } => {
-            return Err("an avatar clip has no editable content; regenerate it instead".into())
-        }
     };
     drop(store);
 

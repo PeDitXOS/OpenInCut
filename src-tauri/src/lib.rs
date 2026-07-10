@@ -180,15 +180,13 @@ const PLAYBACK_MAX_W: u32 = 960;
 pub fn playback_session_key(
     r: &ue_media::frame::ResolvedFrame,
     canvas: Option<(u32, u32)>,
-    avatar_canonical: Option<&str>,
 ) -> String {
     format!(
-        "{}|{}|{:?}|{}|{}",
+        "{}|{}|{:?}|{}",
         r.asset_path,
         r.speed,
         canvas,
         serde_json::to_string(&(&r.effects, &r.transform)).unwrap_or_default(),
-        avatar_canonical.unwrap_or(""),
     )
 }
 
@@ -253,17 +251,7 @@ fn frame_service_loop(app: tauri::AppHandle, latest: Arc<Mutex<Vec<u8>>>, runnin
                 .sequence(store.project.active_sequence)
                 .map(|s| s.resolution)
         };
-        // canonical vf (tvar="t") only to COMPARE: it does not change with the playhead
-        let (av_canonical, av_open) = {
-            let store = state.store.lock().unwrap();
-            let seq_id = store.project.active_sequence;
-            (
-                avatar_vf_stream_suffix(&store.project, seq_id, 0, 1.0, PLAYBACK_MAX_W),
-                // tl0 = timeline position at this tick (t=0 of the new session)
-                avatar_vf_stream_suffix(&store.project, seq_id, t, r.speed, PLAYBACK_MAX_W),
-            )
-        };
-        let key = playback_session_key(&r, canvas, av_canonical.as_deref());
+        let key = playback_session_key(&r, canvas);
 
         // is the current session usable? (same file, same effect chain,
         // position reachable going forward)
@@ -302,10 +290,7 @@ fn frame_service_loop(app: tauri::AppHandle, latest: Arc<Mutex<Vec<u8>>>, runnin
             } else {
                 format!("(t+{rel0:.6})")
             };
-            let mut open_vf = ue_render::clip_vf_at(&reg, &r.effects, &r.transform, canvas, &tvar);
-            if let Some(av) = &av_open {
-                open_vf = Some(format!("{}{}", open_vf.as_deref().unwrap_or("null"), av));
-            }
+            let open_vf = ue_render::clip_vf_at(&reg, &r.effects, &r.transform, canvas, &tvar);
             session =
                 MjpegSession::open(&path, src_t, PLAYBACK_MAX_W, PLAYBACK_FPS, open_vf.as_deref())
                     .ok();
@@ -1150,175 +1135,6 @@ fn add_clip(state: State<AppState>, asset_id: String, at_us: TimeUs) -> Res<Stat
     Ok(snapshot(&store))
 }
 
-/// Overlay of the active avatar at `t` for the paused frame: -vf suffix with
-/// movie+overlay (static, no shake: it's a still frame).
-fn avatar_vf_suffix(
-    project: &Project,
-    seq_id: Id,
-    t_us: TimeUs,
-    out_w: u32,
-) -> Option<String> {
-    use ue_core::model::{ClipPayload, TrackKind};
-    let seq = project.sequence(seq_id)?;
-    for track in seq.tracks.iter().rev().filter(|t| t.kind == TrackKind::Video && !t.muted) {
-        for clip in &track.clips {
-            let ClipPayload::Avatar { driver_asset, avatars, scale, .. } = &clip.payload else {
-                continue;
-            };
-            if !(clip.start <= t_us && t_us < clip.end()) {
-                continue;
-            }
-            let default = avatars.keys().next()?.clone();
-            // emotion of the active segment (or default)
-            let emotion = project
-                .transcripts
-                .iter()
-                .find(|d| d.asset_id == *driver_asset)
-                .and_then(|doc| {
-                    doc.segments.iter().find_map(|seg| {
-                        let tl = crate::asset_tl(project, seq, *driver_asset, seg.start_us)?;
-                        let end = tl + (seg.end_us - seg.start_us);
-                        (tl <= t_us && t_us < end).then(|| seg.emotion.clone()).flatten()
-                    })
-                })
-                .unwrap_or(default.clone());
-            let path = avatars.get(&emotion).or_else(|| avatars.get(&default))?;
-            if !Path::new(path).exists() {
-                return None;
-            }
-            let aw = (((out_w as f64) * scale.clamp(0.05, 1.0)) as u32) & !1;
-            let escaped = path.replace('\\', "/").replace(':', "\\\\:").replace('\'', "\\\\'");
-            // scale the main BEFORE the overlay so aw is proportional
-            return Some(format!(
-                ",scale='min({out_w},iw)':-2[main];movie=filename='{escaped}',\
-                 scale={aw}:-2[av];[main][av]overlay=W-w-16:H-h-16"
-            ));
-        }
-    }
-    None
-}
-
-/// Avatar overlays for the playback STREAM. Unlike the export (one overlay
-/// per segment), it groups by EMOTION — a single `movie` instance per avatar
-/// video — and turns each one on with `enable` windows expressed in the
-/// session's t domain: t runs in SOURCE seconds from the -ss point, so
-/// timeline = tl0 + t/speed ⇒ a timeline window [from,to] is
-/// [(from-tl0)·speed, (to-tl0)·speed] in t. With `tl0_us=0, speed=1` it
-/// produces the CANONICAL form (stable across ticks) that the FrameService
-/// uses to decide whether to reopen the session.
-pub fn avatar_vf_stream_suffix(
-    project: &Project,
-    seq_id: Id,
-    tl0_us: TimeUs,
-    speed: f64,
-    out_w: u32,
-) -> Option<String> {
-    use std::collections::BTreeMap;
-    use ue_core::model::{ClipPayload, TrackKind};
-    let seq = project.sequence(seq_id)?;
-    for track in seq.tracks.iter().rev().filter(|t| t.kind == TrackKind::Video && !t.muted) {
-        for clip in &track.clips {
-            let ClipPayload::Avatar { driver_asset, avatars, scale, .. } = &clip.payload else {
-                continue;
-            };
-            let default = avatars.keys().next()?.clone();
-            // spans (emotion, from_tl, to_tl) filling gaps with the default
-            let ce = clip.end();
-            let mut spans: Vec<(String, TimeUs, TimeUs)> = vec![];
-            let mut cursor = clip.start;
-            if let Some(doc) = project.transcripts.iter().find(|d| d.asset_id == *driver_asset)
-            {
-                for seg in &doc.segments {
-                    let Some(tl) = asset_tl(project, seq, *driver_asset, seg.start_us) else {
-                        continue;
-                    };
-                    let from = tl.max(clip.start);
-                    let to = (tl + (seg.end_us - seg.start_us)).min(ce);
-                    if to <= from {
-                        continue;
-                    }
-                    if from > cursor {
-                        spans.push((default.clone(), cursor, from));
-                    }
-                    spans.push((seg.emotion.clone().unwrap_or_else(|| default.clone()), from, to));
-                    cursor = to.max(cursor);
-                }
-            }
-            if cursor < ce {
-                spans.push((default.clone(), cursor, ce));
-            }
-            // group windows by avatar video (emotions with no video → default)
-            let mut windows: BTreeMap<String, Vec<(TimeUs, TimeUs)>> = BTreeMap::new();
-            for (emotion, from, to) in spans {
-                let key = if avatars.contains_key(&emotion) { emotion } else { default.clone() };
-                windows.entry(key).or_default().push((from, to));
-            }
-            let aw = (((out_w as f64) * scale.clamp(0.05, 1.0)) as u32) & !1;
-            let mut out = format!(",scale='min({out_w},iw)':-2[avm0]");
-            let mut stage = 0usize;
-            let n_total = windows.len();
-            for (i, (emotion, wins)) in windows.iter().enumerate() {
-                let Some(path) = avatars.get(emotion) else { continue };
-                if !Path::new(path).exists() {
-                    return None;
-                }
-                let escaped =
-                    path.replace('\\', "/").replace(':', "\\\\:").replace('\'', "\\\\'");
-                let enable = wins
-                    .iter()
-                    .map(|(f, t)| {
-                        format!(
-                            "between(t,{:.4},{:.4})",
-                            ((f - tl0_us) as f64 / 1e6 * speed).max(0.0),
-                            ((t - tl0_us) as f64 / 1e6 * speed).max(0.0),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("+");
-                // loop=0 = infinite; monotonic setpts so overlay doesn't stall
-                out.push_str(&format!(
-                    ";movie=filename='{escaped}':loop=0,setpts=N/(FRAME_RATE*TB),\
-                     scale={aw}:-2[ave{stage}]"
-                ));
-                let dst = if i + 1 == n_total {
-                    String::new()
-                } else {
-                    format!("[avm{}]", stage + 1)
-                };
-                out.push_str(&format!(
-                    ";[avm{stage}][ave{stage}]overlay=W-w-16:H-h-16:enable='{enable}'{dst}"
-                ));
-                stage += 1;
-            }
-            if stage == 0 {
-                return None;
-            }
-            return Some(out);
-        }
-    }
-    None
-}
-
-/// Asset time → timeline (helper shared with avatar_vf_suffix).
-pub(crate) fn asset_tl(
-    _project: &Project,
-    seq: &ue_core::model::Sequence,
-    asset_id: Id,
-    t_asset: TimeUs,
-) -> Option<TimeUs> {
-    use ue_core::model::ClipPayload;
-    for track in &seq.tracks {
-        for clip in &track.clips {
-            if let ClipPayload::Media { asset_id: aid, src_in, src_out } = &clip.payload {
-                if *aid == asset_id && t_asset >= *src_in && t_asset < *src_out {
-                    return Some(clip.start + (t_asset - src_in));
-                }
-            }
-        }
-    }
-    None
-}
-
 /// Real JPEG frame at the given time (raw bytes; empty = no signal).
 /// Shared by the render_frame command and the MCP debug tool.
 pub fn render_frame_impl(state: &AppState, t_us: TimeUs, max_width: u32) -> Res<Vec<u8>> {
@@ -1367,10 +1183,6 @@ pub fn render_frame_impl(state: &AppState, t_us: TimeUs, max_width: u32) -> Res<
                  pad={cw}:{ch}:(ow-iw)/2:(oh-ih)/2:color=black"
             ));
         }
-    }
-    // avatar over the paused frame (movie+overlay graph in the same -vf)
-    if let Some(suffix) = avatar_vf_suffix(&project, seq_id, t_us, max_width) {
-        vf = Some(format!("{}{}", vf.unwrap_or_else(|| "null".into()), suffix));
     }
     // text last, on top (same order as the export)
     if let Some(text) = text {
@@ -1689,10 +1501,6 @@ fn add_subtitles_clip(state: State<AppState>, clip_id: String) -> Res<StateSnaps
     Ok(snapshot(&state.store.lock().unwrap()))
 }
 
-/// Creates an Avatar clip over a transcribed media clip, from a config.json
-/// compatible with the Youtubers-toolkit avatar_config. Classifies emotions
-/// (OpenAI-compatible API if OPENAI_API_KEY is set, otherwise offline
-/// heuristic) and measures volumes per segment.
 /// All avatar setups stored in the project.
 #[tauri::command]
 fn list_avatar_configs(state: State<AppState>) -> Vec<ue_core::model::AvatarConfig> {
@@ -2052,88 +1860,6 @@ fn generate_avatar_video(
         }
     });
     Ok(())
-}
-
-#[tauri::command]
-fn add_avatar_clip(state: State<AppState>, clip_id: String, config_path: String) -> Res<StateSnapshot> {
-    use ue_core::model::ClipPayload;
-    let id = parse_id(&clip_id)?;
-
-    // 1. parse the toolkit config
-    let raw = std::fs::read_to_string(&config_path).map_err(|e| e.to_string())?;
-    let cfg: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-    let base = Path::new(&config_path).parent().unwrap_or(Path::new("."));
-    let mut avatars = std::collections::BTreeMap::new();
-    for (emotion, p) in cfg
-        .get("avatars")
-        .and_then(|v| v.as_object())
-        .ok_or("config without 'avatars' map")?
-    {
-        let path = p.as_str().ok_or("invalid avatar path")?;
-        let abs = {
-            let pp = Path::new(path);
-            if pp.is_absolute() { pp.to_path_buf() } else { base.join(pp.file_name().unwrap_or_default()) }
-        };
-        // the toolkit config uses paths like "avatar_config/x.mp4": try as-is and by basename
-        let candidate = if abs.exists() { abs } else { base.join(path) };
-        if candidate.exists() {
-            avatars.insert(emotion.clone(), candidate.to_string_lossy().into_owned());
-        }
-    }
-    if avatars.is_empty() {
-        return Err("no avatar file from the config exists on disk".into());
-    }
-    let shake_factor = cfg.get("shake_factor").and_then(|v| v.as_f64()).unwrap_or(1.0);
-
-    let mut store = state.store.lock().unwrap();
-    let media = store.project.clip(id).ok_or("clip not found")?.clone();
-    let ClipPayload::Media { asset_id, .. } = media.payload else {
-        return Err("the clip is not media".into());
-    };
-    let conform = store
-        .project
-        .asset(asset_id)
-        .and_then(|a| a.audio_conform.clone())
-        .ok_or("the audio is still being prepared (conform)")?;
-
-    // 2. analysis: volumes + emotions over the existing transcript
-    {
-        let doc = store
-            .project
-            .transcripts
-            .iter_mut()
-            .find(|t| t.asset_id == asset_id)
-            .ok_or("the media has no transcript; transcribe it first (T button)")?;
-        let wav = ue_audio::wav::WavMap::open(Path::new(&conform)).map_err(|e| e.to_string())?;
-        ue_ai::emotion::measure_volumes(doc, &wav);
-        let api = ue_ai::emotion::ApiConfig::from_env();
-        ue_ai::emotion::classify_segments(doc, &avatars, api.as_ref());
-        store.version += 1;
-    }
-
-    // 3. Avatar clip in a free video track (created if needed)
-    let track_id = ensure_free_video_track(&mut store, media.start, media.duration)?;
-    let clip = Clip {
-        id: Id::new(),
-        payload: ClipPayload::Avatar {
-            driver_asset: asset_id,
-            avatars,
-            shake_factor,
-            scale: 0.3,
-        },
-        start: media.start,
-        duration: media.duration,
-        speed: 1.0,
-        effects: vec![],
-        transform: Default::default(),
-        audio: Default::default(),
-        transition_in: None,
-        label_color: None,
-        name: None,
-        group: None,
-    };
-    store.insert_clip(track_id, clip, InsertMode::Strict).map_err(|e| e.to_string())?;
-    Ok(snapshot(&store))
 }
 
 /// Everything Whisper needs, read under one lock: (conform wav, models dir,
@@ -3016,7 +2742,6 @@ pub fn run() {
             set_sequence_props,
             set_word_text,
             replace_words,
-            add_avatar_clip,
             list_avatar_configs,
             generate_avatar_video,
             save_avatar_config,
