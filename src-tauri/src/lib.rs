@@ -85,9 +85,31 @@ pub struct FrameService {
 const PLAYBACK_FPS: u32 = 24;
 const PLAYBACK_MAX_W: u32 = 960;
 
+/// Stable identity of a playback stream: same clip content + composition ⇒
+/// same key across ticks (unlike the vf string, whose graph labels are
+/// unique per build). Pure and unit-tested.
+pub fn playback_session_key(
+    r: &ue_media::frame::ResolvedFrame,
+    canvas: Option<(u32, u32)>,
+    avatar_canonical: Option<&str>,
+) -> String {
+    format!(
+        "{}|{}|{:?}|{}|{}",
+        r.asset_path,
+        r.speed,
+        canvas,
+        serde_json::to_string(&(&r.effects, &r.transform)).unwrap_or_default(),
+        avatar_canonical.unwrap_or(""),
+    )
+}
+
 fn frame_service_loop(app: tauri::AppHandle, latest: Arc<Mutex<Vec<u8>>>, running: Arc<AtomicBool>) {
     let mut session: Option<MjpegSession> = None;
-    let mut session_vf: Option<String> = None;
+    // Session identity = the DATA that defines the stream, never the vf
+    // string: transform_vf embeds unique graph labels (p0fg, p1fg, …) so the
+    // string differs on every build — comparing it reopened the session on
+    // every tick (field bug: black playback whenever a transform was active).
+    let mut session_key: Option<String> = None;
     while running.load(Ordering::SeqCst) {
         let state = app.state::<AppState>();
         let (t, playing) = {
@@ -134,29 +156,36 @@ fn frame_service_loop(app: tauri::AppHandle, latest: Arc<Mutex<Vec<u8>>>, runnin
                 avatar_vf_stream_suffix(&store.project, seq_id, t, r.speed, PLAYBACK_MAX_W),
             )
         };
-        let mut vf = ue_render::clip_vf(&reg, &r.effects, &r.transform, canvas);
-        if let Some(av) = &av_canonical {
-            vf = Some(format!("{}{}", vf.as_deref().unwrap_or("null"), av));
-        }
+        let key = playback_session_key(&r, canvas, av_canonical.as_deref());
 
         // is the current session usable? (same file, same effect chain,
         // position reachable going forward)
         let reusable = session.as_ref().is_some_and(|s| {
             s.asset_path == path
-                && session_vf == vf
+                && session_key.as_deref() == Some(key.as_str())
                 // going backward (shuttle J): tolerate up to 400 ms without reopening
                 // so we don't spawn one ffmpeg per tick; the frame freezes that margin
                 && src_t >= s.next_src_us() - 400_000
                 && src_t <= s.next_src_us() + 1_500_000
         });
         if !reusable {
+            let reason = match session.as_ref() {
+                None => "no session".to_string(),
+                Some(s) if s.asset_path != path => "clip changed".to_string(),
+                Some(_) if session_key.as_deref() != Some(key.as_str()) => {
+                    "effects/transform changed".to_string()
+                }
+                Some(s) => format!(
+                    "seek (stream at {:.3}s)",
+                    s.next_src_us() as f64 / 1e6
+                ),
+            };
             dlog(
                 "frame",
                 &format!(
-                    "open session {} @ {:.3}s (vf: {})",
+                    "open session {} @ {:.3}s ({reason})",
                     path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default(),
                     src_t as f64 / 1e6,
-                    vf.as_deref().map(|v| v.len().to_string()).unwrap_or_else(|| "none".into())
                 ),
             );
             // the stream runs with -ss: t=0 at the open point, at SOURCE
@@ -175,7 +204,7 @@ fn frame_service_loop(app: tauri::AppHandle, latest: Arc<Mutex<Vec<u8>>>, runnin
             session =
                 MjpegSession::open(&path, src_t, PLAYBACK_MAX_W, PLAYBACK_FPS, open_vf.as_deref())
                     .ok();
-            session_vf = vf;
+            session_key = Some(key);
         }
         if let Some(s) = session.as_mut() {
             let mut newest: Option<Vec<u8>> = None;
@@ -560,7 +589,7 @@ fn set_clip_audio(
     let id = parse_id(&clip_id)?;
     let wants_denoise = audio.denoise;
     store
-        .dispatch(
+        .dispatch_coalesced(
             "Edit audio",
             vec![ue_core::Action::SetClipAudio { clip_id: id, audio }],
         )
@@ -617,7 +646,7 @@ fn set_clip_transform(
     let mut store = state.store.lock().unwrap();
     let id = parse_id(&clip_id)?;
     store
-        .dispatch(
+        .dispatch_coalesced(
             "Edit transform",
             vec![ue_core::Action::SetClipTransform { clip_id: id, transform }],
         )
@@ -1184,7 +1213,7 @@ fn set_clip_effects(
     let mut store = state.store.lock().unwrap();
     let id = parse_id(&clip_id)?;
     store
-        .dispatch(
+        .dispatch_coalesced(
             "Edit effects",
             vec![ue_core::Action::SetClipEffects { clip_id: id, effects }],
         )
@@ -1309,7 +1338,7 @@ fn set_sequence_props(
     let mut store = state.store.lock().unwrap();
     let id = parse_id(&sequence_id)?;
     store
-        .dispatch(
+        .dispatch_coalesced(
             "Sequence settings",
             vec![ue_core::Action::SetSequenceProps {
                 sequence_id: id,
@@ -1761,7 +1790,7 @@ fn set_clip_generator(
     let mut store = state.store.lock().unwrap();
     let id = parse_id(&clip_id)?;
     store
-        .dispatch(
+        .dispatch_coalesced(
             "Edit generator",
             vec![ue_core::Action::SetClipGenerator {
                 clip_id: id,
@@ -1884,7 +1913,7 @@ fn set_track_volume(state: State<AppState>, track_id: String, db: f32) -> Res<St
     let mut store = state.store.lock().unwrap();
     let id = parse_id(&track_id)?;
     store
-        .dispatch(
+        .dispatch_coalesced(
             "Track volume",
             vec![ue_core::Action::SetTrackProp {
                 track_id: id,

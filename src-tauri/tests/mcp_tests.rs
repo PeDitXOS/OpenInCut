@@ -566,3 +566,85 @@ fn avatar_stream_graph_runs_in_ffmpeg() {
     let px = &probe.stdout;
     assert!(px.len() >= 3 && px[0] > 180 && px[1] < 80, "red avatar in the corner: {px:?}");
 }
+
+/// Regression for the black-playback field bug: the vf string embeds unique
+/// graph labels so it differs on EVERY build — the playback session key must
+/// therefore derive from the DATA, staying stable across ticks.
+#[test]
+fn playback_session_key_is_stable_across_ticks() {
+    use ue_core::model::Transform2D;
+    let mut t = Transform2D::default();
+    t.position.0 = 110.0.into();
+
+    // document the trap: same inputs, different vf string (unique labels)
+    let reg = ue_render::core_registry();
+    let vf1 = ue_render::clip_vf(&reg, &[], &t, Some((1920, 1080)));
+    let vf2 = ue_render::clip_vf(&reg, &[], &t, Some((1920, 1080)));
+    assert_ne!(vf1, vf2, "vf strings are label-unique by design");
+
+    let resolved = |pos_x: f64, rel: i64| ue_media::frame::ResolvedFrame {
+        asset_path: "/cache/proxy.mp4".into(),
+        src_t_us: 18_000_000 + rel,
+        clip_rel_us: rel,
+        speed: 1.0,
+        effects: vec![],
+        transform: {
+            let mut t = Transform2D::default();
+            t.position.0 = pos_x.into();
+            t
+        },
+    };
+    // two consecutive ticks of the same playback → SAME key (session reused)
+    let k1 = ue_tauri_lib::playback_session_key(&resolved(110.0, 0), Some((1920, 1080)), None);
+    let k2 =
+        ue_tauri_lib::playback_session_key(&resolved(110.0, 40_000), Some((1920, 1080)), None);
+    assert_eq!(k1, k2, "the key must not change while playing");
+    // a real composition change → different key (session reopens)
+    let k3 = ue_tauri_lib::playback_session_key(&resolved(200.0, 80_000), Some((1920, 1080)), None);
+    assert_ne!(k1, k3, "changing the transform must invalidate the session");
+}
+
+/// End-to-end playback path with an active transform: ONE MjpegSession with
+/// the position/canvas vf must stream frames continuously (the field bug
+/// was a reopen-per-tick storm that never let the stream produce anything).
+#[test]
+fn playback_stream_with_transform_yields_continuous_frames() {
+    use std::process::Command;
+    let ffmpeg = ue_media::ffmpeg_bin();
+    if Command::new(&ffmpeg).arg("-version").output().map(|o| !o.status.success()).unwrap_or(true)
+    {
+        eprintln!("NOTE: no ffmpeg; test skipped");
+        return;
+    }
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-stream-transform");
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("clip.mp4");
+    if !src.exists() {
+        let st = Command::new(&ffmpeg)
+            .args(["-y", "-v", "error", "-f", "lavfi", "-i",
+                   "testsrc=duration=4:size=960x540:rate=30"])
+            .args(["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"])
+            .arg(&src)
+            .status()
+            .unwrap();
+        assert!(st.success());
+    }
+    // the exact chain the FrameService opens: fit-to-canvas + position offset
+    let mut t = ue_core::model::Transform2D::default();
+    t.position.0 = 110.0.into();
+    let vf = ue_render::clip_vf(&ue_render::core_registry(), &[], &t, Some((1920, 1080)))
+        .expect("transform chain");
+    let mut session =
+        ue_media::stream::MjpegSession::open(&src, 500_000, 960, 24, Some(&vf)).unwrap();
+    let mut frames = 0;
+    for _ in 0..24 {
+        match session.next_frame() {
+            Ok(Some(jpeg)) => {
+                assert!(jpeg.len() > 1000, "real JPEG frames");
+                frames += 1;
+            }
+            other => panic!("stream died at frame {frames}: {other:?}"),
+        }
+    }
+    assert_eq!(frames, 24, "one second of continuous frames from ONE session");
+}

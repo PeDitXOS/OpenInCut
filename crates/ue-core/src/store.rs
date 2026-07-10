@@ -16,16 +16,34 @@ pub struct ProjectStore {
     /// Increments with each effective mutation (to keep mirrors in sync).
     pub version: u64,
     pub dirty: bool,
+    /// Last logged edit label (debug log noise control for gestures).
+    last_edit_label: Option<String>,
 }
 
 impl ProjectStore {
     pub fn new(project: Project) -> Self {
-        ProjectStore { project, history: History::new(1000), version: 0, dirty: false }
+        ProjectStore {
+            project,
+            history: History::new(1000),
+            version: 0,
+            dirty: false,
+            last_edit_label: None,
+        }
     }
 
     /// Applies a transaction. Atomic: if an action fails, the previous ones are
     /// reverted and the project is left intact.
     pub fn dispatch(&mut self, label: &str, actions: Vec<Action>) -> UeResult<()> {
+        self.dispatch_inner(label, actions, false)
+    }
+
+    /// Like `dispatch`, but merges into the previous history entry when it
+    /// has the same label (continuous gestures: sliders, curve drags).
+    pub fn dispatch_coalesced(&mut self, label: &str, actions: Vec<Action>) -> UeResult<()> {
+        self.dispatch_inner(label, actions, true)
+    }
+
+    fn dispatch_inner(&mut self, label: &str, actions: Vec<Action>, coalesce: bool) -> UeResult<()> {
         if actions.is_empty() {
             return Ok(());
         }
@@ -42,16 +60,31 @@ impl ProjectStore {
                 }
             }
         }
-        crate::dlog(
-            "edit",
-            &format!("'{}' ({} action{})", label, actions.len(), if actions.len() == 1 { "" } else { "s" }),
-        );
+        // gestures (coalesced dispatches) log once per label change, not per tick
+        if !coalesce || self.last_edit_label.as_deref() != Some(label) {
+            crate::dlog(
+                "edit",
+                &format!(
+                    "'{}' ({} action{}{})",
+                    label,
+                    actions.len(),
+                    if actions.len() == 1 { "" } else { "s" },
+                    if coalesce { ", gesture" } else { "" }
+                ),
+            );
+        }
+        self.last_edit_label = Some(label.to_string());
         debug_assert_eq!(
             validate(&self.project),
             Vec::<String>::new(),
             "invariants broken after '{label}'"
         );
-        self.history.push(HistoryEntry { label: label.to_string(), actions, inverses });
+        let entry = HistoryEntry { label: label.to_string(), actions, inverses, stamp: None };
+        if coalesce {
+            self.history.push_coalesced(entry);
+        } else {
+            self.history.push(entry);
+        }
         self.version += 1;
         self.dirty = true;
         Ok(())

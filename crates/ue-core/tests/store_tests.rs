@@ -622,3 +622,40 @@ fn set_clip_speed_clamps_to_next_clip() {
     assert!((clip.speed - 0.5).abs() < 1e-9);
     assert_eq!(clip.duration, 4 * SEC, "clamped to the gap");
 }
+
+/// A slider drag emits many same-label dispatches; they must coalesce into
+/// ONE history entry whose undo restores the pre-gesture state (field
+/// report: 'Edit transform' x10 per drag).
+#[test]
+fn coalesced_dispatches_undo_as_one_gesture() {
+    let (mut store, _seq, vtrack, _at, va, _aa) = fixture();
+    let c = store
+        .insert_clip(vtrack, Clip::new_media(va, 0, 4 * SEC, 0), InsertMode::Strict)
+        .unwrap();
+    // simulate a drag: 0 → 10 → 20 → … → 100 px
+    for x in (10..=100).step_by(10) {
+        let mut t = store.project.clip(c).unwrap().transform.clone();
+        t.position.0 = (x as f64).into();
+        store
+            .dispatch_coalesced(
+                "Edit transform",
+                vec![ue_core::Action::SetClipTransform { clip_id: c, transform: t }],
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        store.project.clip(c).unwrap().transform.position.0.eval(0),
+        100.0,
+        "latest value applied"
+    );
+    // ONE undo returns to the pre-drag state (0), not to 90
+    store.undo().unwrap();
+    assert_eq!(
+        store.project.clip(c).unwrap().transform.position.0.eval(0),
+        0.0,
+        "the whole gesture undoes as one step"
+    );
+    // and redo replays the final value
+    store.redo().unwrap();
+    assert_eq!(store.project.clip(c).unwrap().transform.position.0.eval(0), 100.0);
+}
