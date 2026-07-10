@@ -292,7 +292,7 @@ function ClipInspector({ clip }: { clip: Clip }) {
   const setClipSpeed = useStore((s) => s.setClipSpeed);
   const unlinkClip = useStore((s) => s.unlinkClip);
   const addSubtitlesClip = useStore((s) => s.addSubtitlesClip);
-  const addAvatarClip = useStore((s) => s.addAvatarClip);
+  const openAvatarDialog = useStore((s) => s.openAvatarDialog);
   const fps = activeSequence(project).fps;
 
   const asset =
@@ -734,7 +734,7 @@ function ClipInspector({ clip }: { clip: Clip }) {
               </button>
               <button
                 className="focus-ring mt-1.5 w-full rounded-md border border-line bg-bg2 px-2.5 py-2 text-[12px] text-ink hover:bg-bg3"
-                onClick={() => void addAvatarClip(clip.id)}
+                onClick={() => asset && openAvatarDialog(asset.id)}
                 title="Emotion-reactive avatar (pick the config.json of your avatars, compatible with the toolkit)"
               >
                 🧑‍🎤 Reactive avatar…

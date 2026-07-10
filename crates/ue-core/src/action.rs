@@ -54,6 +54,9 @@ pub enum Action {
     SetSequenceProps { sequence_id: Id, resolution: (u32, u32), fps: (u32, u32) },
     /// Correct a transcribed word's display text (None = back to the original).
     SetWordText { transcript_id: Id, index: usize, display: Option<String> },
+    /// Add or replace an avatar setup (by id).
+    UpsertAvatarConfig { config: crate::model::AvatarConfig },
+    RemoveAvatarConfig { config_id: Id },
     RemoveSequence { sequence_id: Id },
     SetActiveSequence { sequence_id: Id },
 }
@@ -441,6 +444,30 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
             let display = display.filter(|d| !d.trim().is_empty() && *d != word.text);
             let old = std::mem::replace(&mut word.display, display);
             Ok(Action::SetWordText { transcript_id, index, display: old })
+        }
+
+        Action::UpsertAvatarConfig { config } => {
+            let id = config.id;
+            match project.avatars.iter_mut().find(|c| c.id == id) {
+                Some(slot) => {
+                    let old = std::mem::replace(slot, config);
+                    Ok(Action::UpsertAvatarConfig { config: old })
+                }
+                None => {
+                    project.avatars.push(config);
+                    Ok(Action::RemoveAvatarConfig { config_id: id })
+                }
+            }
+        }
+
+        Action::RemoveAvatarConfig { config_id } => {
+            let idx = project
+                .avatars
+                .iter()
+                .position(|c| c.id == config_id)
+                .ok_or_else(|| UeError::NotFound(format!("avatar config {config_id}")))?;
+            let config = project.avatars.remove(idx);
+            Ok(Action::UpsertAvatarConfig { config })
         }
 
         Action::SetSequenceProps { sequence_id, resolution, fps } => {

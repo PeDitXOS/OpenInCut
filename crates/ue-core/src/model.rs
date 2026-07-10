@@ -29,8 +29,78 @@ pub struct Project {
     pub assets: Vec<MediaAsset>,
     #[serde(default)]
     pub transcripts: Vec<TranscriptDoc>,
+    /// Reusable avatar setups (persisted with the project, exportable/importable).
+    #[serde(default)]
+    pub avatars: Vec<AvatarConfig>,
     pub sequences: Vec<Sequence>,
     pub active_sequence: Id,
+}
+
+/// One avatar expression: a still image or a video loop, plus the text the
+/// classifier matches against ("angry", "furious, upset" …).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AvatarExpression {
+    /// Key used by the emotion classifier and stored in the transcript.
+    pub name: String,
+    /// Absolute or project-relative path to an image or video.
+    pub path: String,
+    /// Free-text description given to the LLM classifier (empty = use `name`).
+    #[serde(default)]
+    pub description: String,
+}
+
+/// A complete avatar setup: expressions + look + which model classifies.
+/// Persisted in the project and exportable as a standalone JSON that stays
+/// compatible with the Youtubers-toolkit `avatar_config/config.json`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AvatarConfig {
+    pub id: Id,
+    pub name: String,
+    /// First entry is the default expression.
+    pub expressions: Vec<AvatarExpression>,
+    #[serde(default = "default_shake")]
+    pub shake_factor: f64,
+    #[serde(default = "default_avatar_scale")]
+    pub scale: f64,
+    /// LLM used to classify emotions ("" = offline heuristic).
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub api_base: String,
+    /// Stored with the project; leave empty to read OPENAI_API_KEY instead.
+    #[serde(default)]
+    pub api_key: String,
+}
+
+fn default_shake() -> f64 {
+    1.0
+}
+fn default_avatar_scale() -> f64 {
+    0.25
+}
+
+impl AvatarConfig {
+    pub fn new(name: &str) -> Self {
+        AvatarConfig {
+            id: new_id(),
+            name: name.into(),
+            expressions: vec![],
+            shake_factor: default_shake(),
+            scale: default_avatar_scale(),
+            model: String::new(),
+            api_base: String::new(),
+            api_key: String::new(),
+        }
+    }
+
+    /// name → path map, the shape the render paths consume.
+    pub fn avatars_map(&self) -> std::collections::BTreeMap<String, String> {
+        self.expressions.iter().map(|e| (e.name.clone(), e.path.clone())).collect()
+    }
+
+    pub fn default_expression(&self) -> Option<&AvatarExpression> {
+        self.expressions.first()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -77,6 +147,7 @@ impl Project {
             settings: ProjectSettings::default(),
             assets: vec![],
             transcripts: vec![],
+            avatars: vec![],
             sequences: vec![seq],
             active_sequence: seq_id,
         }

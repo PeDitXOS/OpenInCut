@@ -5,6 +5,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import type { EngineClient, ExportUiSettings } from "./client";
 import type {
   AudioProps,
+  AvatarConfig,
   EffectDef,
   EffectInstance,
   Id,
@@ -309,6 +310,49 @@ export class TauriEngine implements EngineClient {
     });
   }
 
+  listAvatarConfigs(): Promise<AvatarConfig[]> {
+    return invoke("list_avatar_configs");
+  }
+  saveAvatarConfig(config: AvatarConfig): Promise<StateSnapshot> {
+    return invoke("save_avatar_config", { config });
+  }
+  removeAvatarConfig(configId: Id): Promise<StateSnapshot> {
+    return invoke("remove_avatar_config", { configId });
+  }
+  pickAvatarMedia(): Promise<string[]> {
+    return invoke("pick_avatar_media");
+  }
+  exportAvatarConfig(configId: Id, path: string): Promise<string> {
+    return invoke("export_avatar_config", { configId, path });
+  }
+  importAvatarConfig(path: string): Promise<StateSnapshot> {
+    return invoke("import_avatar_config", { path });
+  }
+  generateAvatarVideo(configId: Id, driverAsset: Id): Promise<void> {
+    return invoke("generate_avatar_video", { configId, driverAsset });
+  }
+  async onAvatarProgress(
+    cb: (p: { stage: string; progress: number; message: string }) => void,
+  ): Promise<() => void> {
+    return listen<{ stage: string; progress: number; message: string }>("avatar-progress", (e) =>
+      cb(e.payload),
+    );
+  }
+  async pickJsonSavePath(defaultName: string): Promise<string | null> {
+    return save({
+      title: "Export avatar setup",
+      defaultPath: defaultName,
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+  }
+  async pickJsonOpenPath(): Promise<string | null> {
+    const picked = await open({
+      title: "Import avatar setup",
+      multiple: false,
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    return typeof picked === "string" ? picked : null;
+  }
   addAvatarClip(clipId: Id, configPath: string): Promise<StateSnapshot> {
     return invoke("add_avatar_clip", { clipId, configPath });
   }

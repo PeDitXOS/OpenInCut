@@ -9,6 +9,7 @@ import { quantizeToFrame } from "../lib/time";
 import type { EngineClient } from "./client";
 import type {
   AudioProps,
+  AvatarConfig,
   Clip,
   EffectDef,
   EffectInstance,
@@ -423,6 +424,44 @@ export class MockEngine implements EngineClient {
     });
   }
 
+  async listAvatarConfigs(): Promise<AvatarConfig[]> {
+    return this.project.avatars ?? [];
+  }
+  async saveAvatarConfig(config: AvatarConfig): Promise<StateSnapshot> {
+    return this.transaction("Save avatar", () => {
+      this.project.avatars = this.project.avatars ?? [];
+      const id = config.id || `av_${Math.random().toString(36).slice(2, 8)}`;
+      const idx = this.project.avatars.findIndex((c) => c.id === config.id);
+      if (idx >= 0) this.project.avatars[idx] = { ...config, id };
+      else this.project.avatars.push({ ...config, id });
+    });
+  }
+  async removeAvatarConfig(configId: Id): Promise<StateSnapshot> {
+    return this.transaction("Delete avatar", () => {
+      this.project.avatars = (this.project.avatars ?? []).filter((c) => c.id !== configId);
+    });
+  }
+  async pickAvatarMedia(): Promise<string[]> {
+    return [];
+  }
+  async exportAvatarConfig(): Promise<string> {
+    throw new Error("Exporting the avatar setup requires the desktop app");
+  }
+  async importAvatarConfig(): Promise<StateSnapshot> {
+    throw new Error("Importing the avatar setup requires the desktop app");
+  }
+  async generateAvatarVideo(): Promise<void> {
+    throw new Error("Generating the avatar requires the desktop app (npx tauri dev)");
+  }
+  async onAvatarProgress(): Promise<() => void> {
+    return () => {};
+  }
+  async pickJsonSavePath(): Promise<string | null> {
+    return null;
+  }
+  async pickJsonOpenPath(): Promise<string | null> {
+    return null;
+  }
   async addAvatarClip(): Promise<StateSnapshot> {
     throw new Error("The avatar requires the desktop app (npx tauri dev)");
   }
@@ -977,6 +1016,21 @@ export function demoProject(): Project {
     created_at: "",
     settings: { whisper_language: "auto", whisper_model: "base", autosave_secs: 60 },
     assets: [cam, gameplay, screen, voice, music, logo],
+    avatars: [
+      {
+        id: "av_demo",
+        name: "Demo avatar",
+        expressions: [
+          { name: "calm", path: "/avatars/calm.png", description: "neutral, explaining" },
+          { name: "angry", path: "/avatars/angry.mp4", description: "furious, complaining" },
+        ],
+        shake_factor: 1,
+        scale: 0.25,
+        model: "",
+        api_base: "",
+        api_key: "",
+      },
+    ],
     transcripts: [voiceTranscript],
     sequences: [seq],
     active_sequence: seq.id,

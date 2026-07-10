@@ -1504,6 +1504,337 @@ fn add_subtitles_clip(state: State<AppState>, clip_id: String) -> Res<StateSnaps
 /// compatible with the Youtubers-toolkit avatar_config. Classifies emotions
 /// (OpenAI-compatible API if OPENAI_API_KEY is set, otherwise offline
 /// heuristic) and measures volumes per segment.
+/// All avatar setups stored in the project.
+#[tauri::command]
+fn list_avatar_configs(state: State<AppState>) -> Vec<ue_core::model::AvatarConfig> {
+    state.store.lock().unwrap().project.avatars.clone()
+}
+
+/// Create or update an avatar setup (undoable, persisted with the project).
+#[tauri::command]
+fn save_avatar_config(
+    state: State<AppState>,
+    config: ue_core::model::AvatarConfig,
+) -> Res<StateSnapshot> {
+    if config.expressions.is_empty() {
+        return Err("add at least one expression".into());
+    }
+    if config.expressions.iter().any(|e| e.name.trim().is_empty()) {
+        return Err("every expression needs a name".into());
+    }
+    let mut store = state.store.lock().unwrap();
+    store
+        .dispatch("Save avatar", vec![ue_core::Action::UpsertAvatarConfig { config }])
+        .map_err(|e| e.to_string())?;
+    Ok(snapshot(&store))
+}
+
+#[tauri::command]
+fn remove_avatar_config(state: State<AppState>, config_id: String) -> Res<StateSnapshot> {
+    let mut store = state.store.lock().unwrap();
+    let id = parse_id(&config_id)?;
+    store
+        .dispatch("Delete avatar", vec![ue_core::Action::RemoveAvatarConfig { config_id: id }])
+        .map_err(|e| e.to_string())?;
+    Ok(snapshot(&store))
+}
+
+/// Pick expression media files (images or videos).
+#[tauri::command]
+async fn pick_avatar_media(app: tauri::AppHandle) -> Res<Vec<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.dialog()
+        .file()
+        .add_filter("Images and videos", &["png", "jpg", "jpeg", "webp", "gif", "mp4", "mov", "webm", "mkv"])
+        .pick_files(move |paths| {
+            let _ = tx.send(paths);
+        });
+    let picked = rx.recv().map_err(|e| e.to_string())?;
+    Ok(picked
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| p.to_string())
+        .collect())
+}
+
+/// Export an avatar setup as a standalone JSON (toolkit-compatible shape,
+/// plus our extra fields). The API key is NEVER written to the file.
+#[tauri::command]
+fn export_avatar_config(state: State<AppState>, config_id: String, path: String) -> Res<String> {
+    let id = parse_id(&config_id)?;
+    let store = state.store.lock().unwrap();
+    let cfg = store
+        .project
+        .avatars
+        .iter()
+        .find(|c| c.id == id)
+        .ok_or("avatar config not found")?;
+    let json = serde_json::json!({
+        "name": cfg.name,
+        "avatars": cfg.avatars_map(),
+        "expressions": cfg.expressions,
+        "shake_factor": cfg.shake_factor,
+        "scale": cfg.scale,
+        "model": cfg.model,
+        "api_base": cfg.api_base,
+    });
+    std::fs::write(&path, serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+/// Import an avatar setup from JSON: ours or the toolkit's config.json.
+#[tauri::command]
+fn import_avatar_config(state: State<AppState>, path: String) -> Res<StateSnapshot> {
+    use ue_core::model::{AvatarConfig, AvatarExpression};
+    let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    let base = Path::new(&path).parent().unwrap_or(Path::new("."));
+    let resolve = |p: &str| -> Option<String> {
+        let pp = Path::new(p);
+        for cand in [pp.to_path_buf(), base.join(pp), base.join(pp.file_name()?)] {
+            if cand.exists() {
+                return Some(cand.to_string_lossy().into_owned());
+            }
+        }
+        None
+    };
+
+    let mut cfg = AvatarConfig::new(
+        v.get("name").and_then(|n| n.as_str()).unwrap_or("Imported avatar"),
+    );
+    // our richer format first
+    if let Some(list) = v.get("expressions").and_then(|e| e.as_array()) {
+        for e in list {
+            let (Some(name), Some(p)) = (
+                e.get("name").and_then(|n| n.as_str()),
+                e.get("path").and_then(|n| n.as_str()),
+            ) else {
+                continue;
+            };
+            if let Some(path) = resolve(p) {
+                cfg.expressions.push(AvatarExpression {
+                    name: name.to_string(),
+                    path,
+                    description: e
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                });
+            }
+        }
+    }
+    // toolkit shape: { "avatars": { emotion: path } }
+    if cfg.expressions.is_empty() {
+        for (name, p) in v.get("avatars").and_then(|a| a.as_object()).ok_or("no avatars in file")? {
+            if let Some(path) = p.as_str().and_then(resolve) {
+                cfg.expressions.push(AvatarExpression {
+                    name: name.clone(),
+                    path,
+                    description: String::new(),
+                });
+            }
+        }
+    }
+    if cfg.expressions.is_empty() {
+        return Err("no expression file from the config exists on disk".into());
+    }
+    if let Some(s) = v.get("shake_factor").and_then(|x| x.as_f64()) {
+        cfg.shake_factor = s;
+    }
+    if let Some(s) = v.get("scale").and_then(|x| x.as_f64()) {
+        cfg.scale = s;
+    }
+    cfg.model = v.get("model").and_then(|m| m.as_str()).unwrap_or_default().to_string();
+    cfg.api_base = v.get("api_base").and_then(|m| m.as_str()).unwrap_or_default().to_string();
+
+    let mut store = state.store.lock().unwrap();
+    store
+        .dispatch("Import avatar", vec![ue_core::Action::UpsertAvatarConfig { config: cfg }])
+        .map_err(|e| e.to_string())?;
+    Ok(snapshot(&store))
+}
+
+/// Generates the avatar video in the BACKGROUND and imports it as media.
+/// Steps: classify each transcript segment's emotion (LLM if configured, the
+/// offline heuristic otherwise) → render with ffmpeg → import the asset.
+/// Emits "avatar-progress" ({stage, progress, message}) and "state-changed".
+#[tauri::command]
+fn generate_avatar_video(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    config_id: String,
+    driver_asset: String,
+) -> Res<()> {
+    let cfg_id = parse_id(&config_id)?;
+    let asset_id = parse_id(&driver_asset)?;
+
+    let (config, mut doc, conform, seq_size, seq_fps, cache_dir) = {
+        let store = state.store.lock().unwrap();
+        let config = store
+            .project
+            .avatars
+            .iter()
+            .find(|c| c.id == cfg_id)
+            .ok_or("avatar setup not found")?
+            .clone();
+        if config.expressions.is_empty() {
+            return Err("the avatar has no expressions".into());
+        }
+        let doc = store
+            .project
+            .transcripts
+            .iter()
+            .find(|t| t.asset_id == asset_id)
+            .ok_or("transcribe the clip first (Whisper)")?
+            .clone();
+        let asset = store.project.asset(asset_id).ok_or("asset not found")?;
+        let conform = asset.audio_conform.clone();
+        let seq = store
+            .project
+            .sequence(store.project.active_sequence)
+            .ok_or("no active sequence")?;
+        (
+            config,
+            doc,
+            conform,
+            seq.resolution,
+            seq.fps,
+            state.cache_dir.lock().unwrap().clone().ok_or("no cache dir")?,
+        )
+    };
+
+    let emit = {
+        let app = app.clone();
+        move |stage: &str, progress: f64, message: String| {
+            let _ = app.emit(
+                "avatar-progress",
+                serde_json::json!({ "stage": stage, "progress": progress, "message": message }),
+            );
+        }
+    };
+
+    std::thread::spawn(move || {
+        let mut run = || -> Result<PathBuf, String> {
+            emit("analyzing", 0.05, "Measuring volume per segment…".into());
+            if let Some(c) = &conform {
+                if let Ok(wav) = ue_audio::wav::WavMap::open(Path::new(c)) {
+                    ue_ai::emotion::measure_volumes(&mut doc, &wav);
+                }
+            }
+
+            // classify each segment: LLM when configured, heuristic otherwise
+            let described: Vec<(String, String)> = config
+                .expressions
+                .iter()
+                .map(|e| (e.name.clone(), e.description.clone()))
+                .collect();
+            let labels: Vec<String> = described.iter().map(|(n, _)| n.clone()).collect();
+            let api_key = if config.api_key.is_empty() {
+                std::env::var("OPENAI_API_KEY").unwrap_or_default()
+            } else {
+                config.api_key.clone()
+            };
+            let api_base = if config.api_base.is_empty() {
+                "https://api.openai.com/v1".to_string()
+            } else {
+                config.api_base.clone()
+            };
+            let use_api = !config.model.is_empty() && !api_key.is_empty();
+            let total = doc.segments.len().max(1);
+            let avg = doc.global_avg_volume;
+            let segs: Vec<(String, f64, f64)> = doc
+                .segments
+                .iter()
+                .map(|s| {
+                    (
+                        s.text.clone(),
+                        s.volume_rms,
+                        (s.end_us - s.start_us) as f64 / 1e6,
+                    )
+                })
+                .collect();
+            for (i, seg) in doc.segments.iter_mut().enumerate() {
+                emit(
+                    "classifying",
+                    0.05 + 0.55 * (i as f64 / total as f64),
+                    format!("Emotion {}/{}", i + 1, total),
+                );
+                let (text, vol, secs) = &segs[i];
+                let emotion = if use_api {
+                    ue_ai::emotion::classify_via_api_described(
+                        &api_base,
+                        &api_key,
+                        &config.model,
+                        text,
+                        &described,
+                    )
+                } else {
+                    None
+                };
+                seg.emotion = Some(emotion.unwrap_or_else(|| {
+                    let wps = text.split_whitespace().count() as f64 / secs.max(0.1);
+                    ue_ai::emotion::classify_heuristic(*vol, avg, wps, &labels)
+                }));
+            }
+
+            emit("rendering", 0.65, "Rendering the avatar video…".into());
+            let out = cache_dir.join(format!("avatar_{}_{}.mov", config.id, asset_id));
+            let duration = doc
+                .segments
+                .last()
+                .map(|s| s.end_us)
+                .unwrap_or(0)
+                .max(1_000_000);
+            ue_export::avatar_gen::generate(
+                &config,
+                &doc,
+                duration,
+                seq_size,
+                seq_fps,
+                &out,
+                |_p| {},
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(out)
+        };
+
+        match run() {
+            Ok(path) => {
+                emit("importing", 0.95, "Adding it to Media…".into());
+                let state = app.state::<AppState>();
+                match ue_media::import_file(&path) {
+                    Ok(asset) => {
+                        {
+                            let mut store = state.store.lock().unwrap();
+                            if !store
+                                .project
+                                .assets
+                                .iter()
+                                .any(|a| a.content_hash == asset.content_hash)
+                            {
+                                store.project.assets.push(asset);
+                            }
+                            store.version += 1;
+                            store.dirty = true;
+                        }
+                        let _ = app.emit("state-changed", ());
+                        emit("done", 1.0, "Avatar ready in Media".into());
+                    }
+                    Err(e) => emit("error", 1.0, format!("Could not import: {e}")),
+                }
+            }
+            Err(e) => {
+                dlog("avatar", &format!("generation failed: {e}"));
+                emit("error", 1.0, e);
+            }
+        }
+    });
+    Ok(())
+}
+
 #[tauri::command]
 fn add_avatar_clip(state: State<AppState>, clip_id: String, config_path: String) -> Res<StateSnapshot> {
     use ue_core::model::ClipPayload;
@@ -2350,6 +2681,13 @@ pub fn run() {
             set_word_text,
             replace_words,
             add_avatar_clip,
+            list_avatar_configs,
+            generate_avatar_video,
+            save_avatar_config,
+            remove_avatar_config,
+            pick_avatar_media,
+            export_avatar_config,
+            import_avatar_config,
             export_video,
             cancel_export,
             playback_play,

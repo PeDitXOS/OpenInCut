@@ -10,6 +10,7 @@ import { Inspector } from "./Inspector";
 import { Timeline } from "./Timeline";
 import { StatusBar } from "./StatusBar";
 import { ExportDialog } from "./ExportDialog";
+import { AvatarDialog } from "./AvatarDialog";
 import { TranscriptPanel } from "./TranscriptPanel";
 
 function useKeyboard() {
@@ -219,6 +220,7 @@ export function App() {
       </section>
       <StatusBar />
       <ExportDialog />
+      <AvatarDialog />
     </div>
   );
 }

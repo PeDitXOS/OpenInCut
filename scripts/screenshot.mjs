@@ -223,5 +223,28 @@ if ((await txtPanel.getByText("collisions", { exact: true }).count()) !== 0)
 await shot("14-text-document-editing");
 await page.getByRole("button", { name: /Media/ }).click();
 
+// 15. Avatar dialog: full setup UI (expressions, look, classifier)
+await page.getByRole("button", { name: /Media/ }).click();
+await page.evaluate(() => {
+  const store = window.__ue_store;
+  const asset = store.getState().project.assets.find((a) => a.probe.audio_channels > 0);
+  store.getState().openAvatarDialog(asset.id);
+});
+await page.waitForTimeout(350);
+if ((await page.getByText("Reactive avatar").count()) === 0)
+  throw new Error("the avatar dialog did not open");
+for (const section of ["Expressions", "Look", "Emotion classifier"]) {
+  if ((await page.getByText(section, { exact: true }).count()) === 0)
+    throw new Error(`the avatar dialog is missing the ${section} section`);
+}
+// the demo setup loads with its expressions listed and editable
+if ((await page.locator('input[value="angry"]').count()) === 0)
+  throw new Error("the saved expressions are not listed");
+await shot("15-avatar-dialog");
+await page.getByRole("button", { name: "Close", exact: true }).click();
+await page.waitForTimeout(200);
+if ((await page.getByText("Reactive avatar").count()) !== 0)
+  throw new Error("the avatar dialog did not close");
+
 await browser.close();
 console.log(`\nScreenshots in ${outDir}`);

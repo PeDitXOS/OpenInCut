@@ -3,6 +3,7 @@ import type {
   EffectDef,
   EffectInstance,
   Id,
+  AvatarConfig,
   GeneratorDef,
   Param,
   StateSnapshot,
@@ -184,6 +185,19 @@ export interface EngineClient {
 
   /** Creates an Avatar clip over a transcribed clip, from a toolkit config.json. */
   addAvatarClip(clipId: Id, configPath: string): Promise<StateSnapshot>;
+  listAvatarConfigs(): Promise<AvatarConfig[]>;
+  saveAvatarConfig(config: AvatarConfig): Promise<StateSnapshot>;
+  removeAvatarConfig(configId: Id): Promise<StateSnapshot>;
+  pickAvatarMedia(): Promise<string[]>;
+  exportAvatarConfig(configId: Id, path: string): Promise<string>;
+  importAvatarConfig(path: string): Promise<StateSnapshot>;
+  /** Background render; progress arrives via onAvatarProgress. */
+  generateAvatarVideo(configId: Id, driverAsset: Id): Promise<void>;
+  onAvatarProgress(
+    cb: (p: { stage: string; progress: number; message: string }) => void,
+  ): Promise<() => void>;
+  pickJsonSavePath(defaultName: string): Promise<string | null>;
+  pickJsonOpenPath(): Promise<string | null>;
   pickAvatarConfig(): Promise<string | null>;
 
   /** Generates the 1080x1920 vertical sequence (blurred background) and activates it. */

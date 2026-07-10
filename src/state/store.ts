@@ -5,6 +5,7 @@ import { MockEngine, demoProject } from "../engine/mock";
 import { TauriEngine, isTauri } from "../engine/tauri";
 import type {
   AudioProps,
+  AvatarConfig,
   EffectDef,
   EffectInstance,
   GeneratorDef,
@@ -109,6 +110,16 @@ export interface UiState {
   addSubtitlesClip: (clipId: Id) => Promise<void>;
   generateVertical: () => Promise<void>;
   addAvatarClip: (clipId: Id) => Promise<void>;
+  showAvatarDialog: boolean;
+  avatarDriverAsset: Id | null;
+  openAvatarDialog: (driverAsset: Id) => void;
+  setShowAvatarDialog: (v: boolean) => void;
+  saveAvatarConfig: (config: AvatarConfig) => Promise<void>;
+  removeAvatarConfig: (configId: Id) => Promise<void>;
+  importAvatarConfig: () => Promise<void>;
+  exportAvatarConfig: (configId: Id) => Promise<void>;
+  generateAvatarVideo: (configId: Id, driverAsset: Id) => Promise<void>;
+  avatarProgress: { stage: string; progress: number; message: string } | null;
   setActiveSequence: (sequenceId: Id) => Promise<void>;
   cutTimelineRanges: (ranges: [TimeUs, TimeUs][]) => Promise<void>;
   moveTimelineRange: (fromUs: TimeUs, toUs: TimeUs, destUs: TimeUs) => Promise<void>;
@@ -148,6 +159,7 @@ const emptyProject: Project = {
   settings: { whisper_language: "auto", whisper_model: "base", autosave_secs: 60 },
   assets: [],
   transcripts: [],
+  avatars: [],
   sequences: [
     {
       id: "seq_pending",
@@ -227,6 +239,12 @@ export const useStore = create<UiState>((set, get) => {
         applySnapshot(await engine.getState());
       });
       void engine.onExportProgress((p) => set({ exportProgress: p }));
+      void engine.onAvatarProgress((p) => {
+        set({ avatarProgress: p, lastActionLabel: `Avatar: ${p.message}` });
+        if (p.stage === "done" || p.stage === "error") {
+          window.setTimeout(() => set({ avatarProgress: null }), 4000);
+        }
+      });
       try {
         set({ effectsCatalog: await engine.getEffectsCatalog() });
       } catch {
@@ -657,6 +675,49 @@ export const useStore = create<UiState>((set, get) => {
       }
     },
 
+    showAvatarDialog: false,
+    avatarDriverAsset: null,
+    avatarProgress: null,
+    openAvatarDialog: (driverAsset) =>
+      set({ showAvatarDialog: true, avatarDriverAsset: driverAsset, avatarProgress: null }),
+    setShowAvatarDialog: (v) => set({ showAvatarDialog: v }),
+    saveAvatarConfig: (config) => run("Save avatar", () => engine.saveAvatarConfig(config)),
+    removeAvatarConfig: (configId) =>
+      run("Delete avatar", () => engine.removeAvatarConfig(configId)),
+    importAvatarConfig: async () => {
+      try {
+        const path = await engine.pickJsonOpenPath();
+        if (!path) return;
+        applySnapshot(await engine.importAvatarConfig(path), "Avatar setup imported");
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        engine.uiLog("error", `import avatar: ${msg}`);
+        set({ lastActionLabel: `⚠ ${msg}` });
+      }
+    },
+    exportAvatarConfig: async (configId) => {
+      try {
+        const path = await engine.pickJsonSavePath("avatar.json");
+        if (!path) return;
+        const written = await engine.exportAvatarConfig(configId, path);
+        set({ lastActionLabel: `Avatar setup exported to ${written}` });
+      } catch (e) {
+        set({ lastActionLabel: `⚠ ${e instanceof Error ? e.message : String(e)}` });
+      }
+    },
+    generateAvatarVideo: async (configId, driverAsset) => {
+      try {
+        set({ avatarProgress: { stage: "starting", progress: 0, message: "Starting…" } });
+        await engine.generateAvatarVideo(configId, driverAsset);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        set({
+          avatarProgress: { stage: "error", progress: 1, message: msg },
+          lastActionLabel: `⚠ ${msg}`,
+        });
+      }
+    },
+
     undo: async () => {
       const snap = await engine.undo();
       applySnapshot(snap, "Undo");
@@ -668,3 +729,8 @@ export const useStore = create<UiState>((set, get) => {
     },
   };
 });
+
+// Dev-only handle for the visual harness (never in production builds).
+if (import.meta.env.DEV) {
+  (window as unknown as { __ue_store?: typeof useStore }).__ue_store = useStore;
+}

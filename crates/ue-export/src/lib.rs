@@ -9,6 +9,7 @@
 //! - speed != 1.0 not supported yet (explicit error).
 
 pub mod edl;
+pub mod avatar_gen;
 pub mod graph;
 
 use std::io::{BufRead, BufReader, Read};

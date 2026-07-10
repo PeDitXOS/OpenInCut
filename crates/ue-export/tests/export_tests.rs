@@ -1932,3 +1932,147 @@ fn single_range_in_ranges_matches_shorthand() {
     let dur: f64 = meta["format"]["duration"].as_str().unwrap().parse().unwrap();
     assert!((1.9..=2.2).contains(&dur), "2 s piece, got {dur}");
 }
+
+// ---------------------------------------------------------------------------
+// Avatar generation (standalone media asset)
+// ---------------------------------------------------------------------------
+
+/// Spans cover the whole duration: gaps are filled with the default
+/// expression and unknown emotions fall back to it.
+#[test]
+fn avatar_spans_cover_the_timeline() {
+    use ue_core::model::{AvatarConfig, AvatarExpression};
+    let mut cfg = AvatarConfig::new("me");
+    cfg.expressions = vec![
+        AvatarExpression { name: "calm".into(), path: "c.png".into(), description: String::new() },
+        AvatarExpression { name: "angry".into(), path: "a.png".into(), description: String::new() },
+    ];
+    let doc = TranscriptDoc {
+        id: Id::new(),
+        asset_id: Id::new(),
+        language: "es".into(),
+        model: "t".into(),
+        words: vec![],
+        segments: vec![
+            ue_core::model::Segment {
+                text: "one".into(),
+                start_us: 1 * SEC,
+                end_us: 2 * SEC,
+                word_range: (0, 0),
+                emotion: Some("angry".into()),
+                volume_rms: 2.0,
+            },
+            ue_core::model::Segment {
+                text: "two".into(),
+                start_us: 3 * SEC,
+                end_us: 4 * SEC,
+                word_range: (0, 0),
+                emotion: Some("unknown-emotion".into()),
+                volume_rms: 1.0,
+            },
+        ],
+        global_avg_volume: 1.0,
+    };
+    let spans = ue_export::avatar_gen::plan_spans(&doc, &cfg, 5 * SEC);
+    assert_eq!(spans.len(), 5, "gap-filled: [0,1) [1,2) [2,3) [3,4) [4,5)");
+    assert_eq!(spans[0].expression, "calm");
+    assert_eq!(spans[1].expression, "angry");
+    assert!((spans[1].volume_ratio - 2.0).abs() < 1e-9, "loud segment shakes more");
+    assert_eq!(spans[2].expression, "calm", "gap uses the default");
+    assert_eq!(spans[3].expression, "calm", "unknown emotion falls back");
+    assert_eq!(spans.last().unwrap().to_us, 5 * SEC, "covers to the end");
+}
+
+/// End-to-end: an avatar video built from a PNG and an MP4 expression, with a
+/// transparent background, correct duration, and the right expression visible
+/// in each span.
+#[test]
+fn avatar_video_generates_from_images_and_videos() {
+    let Some(dir) = media_dir() else { return };
+    use ue_core::model::{AvatarConfig, AvatarExpression};
+    // calm = solid green PNG; angry = solid red MP4
+    let calm = dir.join("av_calm.png");
+    let angry = dir.join("av_angry.mp4");
+    if !calm.exists() {
+        assert!(Command::new(ue_media::ffmpeg_bin())
+            .args(["-y", "-v", "error", "-f", "lavfi", "-i", "color=c=green:s=200x200", "-frames:v", "1"])
+            .arg(&calm).status().unwrap().success());
+    }
+    if !angry.exists() {
+        assert!(Command::new(ue_media::ffmpeg_bin())
+            .args(["-y", "-v", "error", "-f", "lavfi", "-i", "color=c=red:s=200x200:d=1:r=30"])
+            .args(["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"])
+            .arg(&angry).status().unwrap().success());
+    }
+
+    let mut cfg = AvatarConfig::new("me");
+    cfg.shake_factor = 0.0; // deterministic pixel positions
+    cfg.scale = 0.5; // 200px avatar on a 400px canvas → corners transparent
+    cfg.expressions = vec![
+        AvatarExpression {
+            name: "calm".into(),
+            path: calm.to_string_lossy().into_owned(),
+            description: "neutral".into(),
+        },
+        AvatarExpression {
+            name: "angry".into(),
+            path: angry.to_string_lossy().into_owned(),
+            description: "furious, upset".into(),
+        },
+    ];
+    let doc = TranscriptDoc {
+        id: Id::new(),
+        asset_id: Id::new(),
+        language: "es".into(),
+        model: "t".into(),
+        words: vec![],
+        segments: vec![ue_core::model::Segment {
+            text: "grr".into(),
+            start_us: 1 * SEC,
+            end_us: 2 * SEC,
+            word_range: (0, 0),
+            emotion: Some("angry".into()),
+            volume_rms: 1.0,
+        }],
+        global_avg_volume: 1.0,
+    };
+
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-avatar.mov");
+    let spans = ue_export::avatar_gen::generate(
+        &cfg,
+        &doc,
+        3 * SEC,
+        (400, 400),
+        (30, 1),
+        &out,
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(spans.len(), 3);
+
+    let meta = ffprobe_json(&out);
+    let dur: f64 = meta["format"]["duration"].as_str().unwrap().parse().unwrap();
+    assert!((2.8..=3.3).contains(&dur), "3 s avatar video, got {dur}");
+    let v = meta["streams"].as_array().unwrap().iter().find(|s| s["codec_type"] == "video").unwrap();
+    assert_eq!(v["codec_name"], "qtrle", "alpha-capable codec");
+
+    // RGBA probe: corner transparent, center shows the current expression
+    let rgba = |t: f64, x: u32, y: u32| -> [u8; 4] {
+        let o = Command::new(ue_media::ffmpeg_bin())
+            .args(["-v", "error", "-ss", &t.to_string(), "-i"])
+            .arg(&out)
+            .args(["-frames:v", "1", "-vf", &format!("crop=1:1:{x}:{y}"), "-pix_fmt", "rgba",
+                   "-f", "rawvideo", "-"])
+            .output()
+            .unwrap();
+        [o.stdout[0], o.stdout[1], o.stdout[2], o.stdout[3]]
+    };
+    let corner = rgba(0.5, 5, 5);
+    assert_eq!(corner[3], 0, "background is transparent (alpha=0), got {corner:?}");
+    let calm_px = rgba(0.5, 200, 200);
+    assert!(calm_px[1] > 90 && calm_px[0] < 90 && calm_px[3] == 255, "calm=green opaque: {calm_px:?}");
+    let angry_px = rgba(1.5, 200, 200);
+    assert!(angry_px[0] > 90 && angry_px[1] < 90, "angry=red: {angry_px:?}");
+    let back_px = rgba(2.5, 200, 200);
+    assert!(back_px[1] > 90 && back_px[0] < 90, "back to calm: {back_px:?}");
+}
