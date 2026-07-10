@@ -178,7 +178,9 @@ export const useStore = create<UiState>((set, get) => {
     try {
       applySnapshot(await op(), label);
     } catch (e) {
-      set({ lastActionLabel: `⚠ ${e instanceof Error ? e.message : String(e)}` });
+      const msg = e instanceof Error ? e.message : String(e);
+      engine.uiLog("error", `${label}: ${msg}`);
+      set({ lastActionLabel: `⚠ ${msg}` });
     }
   };
 

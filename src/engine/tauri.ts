@@ -127,6 +127,9 @@ export class TauriEngine implements EngineClient {
   playbackSetRate(rate: number, fromUs: TimeUs): Promise<void> {
     return invoke("playback_set_rate", { rate, fromUs: us(fromUs) });
   }
+  uiLog(level: "error" | "warn" | "info", message: string): void {
+    void invoke("ui_log", { level, message }).catch(() => {});
+  }
   checkRecovery(): Promise<string | null> {
     return invoke("check_recovery", { path: null });
   }

@@ -295,6 +295,30 @@ pub fn transform_vf_at(
 ) -> Option<String> {
     let mut parts: Vec<String> = vec![];
 
+    // Does any geometric/opacity transform apply? Then the frame must be
+    // FITTED to the sequence canvas before compositing: the preview may be
+    // decoding a half-size proxy, and without the fit a mere position nudge
+    // would suddenly render the clip at proxy size (field-reported bug).
+    // Layers (transparent) keep their native size on purpose (PiP semantics).
+    let pre_scale_animated = animated(&t.scale.0) || animated(&t.scale.1);
+    let (pre_sx, pre_sy) =
+        (t.scale.0.eval(0).clamp(0.01, 10.0), t.scale.1.eval(0).clamp(0.01, 10.0));
+    let pre_has_scale =
+        pre_scale_animated || (pre_sx - 1.0).abs() > 1e-4 || (pre_sy - 1.0).abs() > 1e-4;
+    let pre_has_rot = animated(&t.rotation) || t.rotation.eval(0).abs() > 1e-4;
+    let pre_op = t.opacity.eval(0).clamp(0.0, 1.0);
+    let pre_has_op = animated(&t.opacity) || pre_op < 0.999;
+    let pre_has_pos = animated(&t.position.0)
+        || animated(&t.position.1)
+        || t.position.0.eval(0).round() as i64 != 0
+        || t.position.1.eval(0).round() as i64 != 0;
+    let fit_to_canvas = !transparent
+        && (pre_has_pos || pre_has_scale || pre_has_rot || pre_has_op)
+        && canvas.is_some();
+    if let (true, Some((cw, ch))) = (fit_to_canvas, canvas) {
+        parts.push(format!("scale={cw}:{ch}:force_original_aspect_ratio=decrease"));
+    }
+
     let (l, top, r, b) = (
         t.crop.0.eval(0).clamp(0.0, 0.49),
         t.crop.1.eval(0).clamp(0.0, 0.49),

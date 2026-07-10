@@ -13,7 +13,7 @@ use ue_audio::items::{collect_specs, load_items};
 use ue_audio::player::Player;
 use ue_core::model::{AudioProps, Clip, Id, MediaKind, Project, TrackKind, Transform2D};
 use ue_core::ops::InsertMode;
-use ue_core::{ProjectStore, TimeUs};
+use ue_core::{dlog, ProjectStore, TimeUs};
 use ue_media::stream::MjpegSession;
 
 pub mod mcp;
@@ -150,6 +150,15 @@ fn frame_service_loop(app: tauri::AppHandle, latest: Arc<Mutex<Vec<u8>>>, runnin
                 && src_t <= s.next_src_us() + 1_500_000
         });
         if !reusable {
+            dlog(
+                "frame",
+                &format!(
+                    "open session {} @ {:.3}s (vf: {})",
+                    path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default(),
+                    src_t as f64 / 1e6,
+                    vf.as_deref().map(|v| v.len().to_string()).unwrap_or_else(|| "none".into())
+                ),
+            );
             // the stream runs with -ss: t=0 at the open point, at SOURCE
             // rate → clip time = t/speed + offset_at_open. This way the
             // transform curves ANIMATE during playback too.
@@ -357,6 +366,13 @@ fn set_project_settings(
     store.version += 1;
     store.dirty = true;
     Ok(snapshot(&store))
+}
+
+/// Frontend log bridge: UI errors/warnings become terminal lines so the
+/// user can copy-paste them when reporting bugs.
+#[tauri::command]
+fn ui_log(level: String, message: String) {
+    dlog(&format!("ui:{level}"), &message);
 }
 
 #[tauri::command]
@@ -709,6 +725,7 @@ fn spawn_proxy_job(app: &tauri::AppHandle, asset: &ue_core::model::MediaAsset, c
 
 #[tauri::command]
 fn playback_play(app: tauri::AppHandle, state: State<AppState>, from_us: TimeUs) -> Res<()> {
+    dlog("play", &format!("play from {:.3}s", from_us as f64 / 1e6));
     sync_player(&state)?;
     {
         let guard = state.player.lock().unwrap();
@@ -850,6 +867,7 @@ fn playback_set_rate(
 
 #[tauri::command]
 fn playback_seek(state: State<AppState>, t_us: TimeUs) -> Res<()> {
+    dlog("play", &format!("seek to {:.3}s", t_us as f64 / 1e6));
     if let Some(p) = state.player.lock().unwrap().as_ref() {
         p.seek(t_us);
     }
@@ -1123,10 +1141,20 @@ fn render_frame(
     if let Some(suffix) = avatar_vf_suffix(&project, seq_id, t_us, max_width) {
         vf = Some(format!("{}{}", vf.unwrap_or_else(|| "null".into()), suffix));
     }
-    let bytes =
-        ue_media::frame::render_frame(&project, seq_id, t_us, max_width, &base_dir, vf.as_deref())
-            .map_err(|e| e.to_string())?
-            .unwrap_or_default();
+    let t0 = std::time::Instant::now();
+    let result =
+        ue_media::frame::render_frame(&project, seq_id, t_us, max_width, &base_dir, vf.as_deref());
+    let ms = t0.elapsed().as_millis();
+    let bytes = match result {
+        Ok(b) => b.unwrap_or_default(),
+        Err(e) => {
+            dlog("frame", &format!("render_frame @ {:.3}s FAILED: {e}", t_us as f64 / 1e6));
+            return Err(e.to_string());
+        }
+    };
+    if ms > 400 {
+        dlog("frame", &format!("slow render_frame @ {:.3}s: {ms} ms", t_us as f64 / 1e6));
+    }
     Ok(tauri::ipc::Response::new(bytes))
 }
 
@@ -1928,6 +1956,7 @@ async fn export_video(
     let cancel = state.export_cancel.clone();
     cancel.store(false, Ordering::SeqCst);
     let out = PathBuf::from(&path);
+    dlog("export", &format!("start → {path}"));
     let extra_packs = state.user_packs.lock().unwrap().clone();
     let defaults = ue_export::ExportSettings::default();
     let range = match (range_in_us, range_out_us) {
@@ -1965,7 +1994,15 @@ async fn export_video(
         .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| {
+        dlog("export", &format!("join error: {e}"));
+        e.to_string()
+    })?
+    .map_err(|e| {
+        dlog("export", &format!("FAILED: {e}"));
+        e
+    })?;
+    dlog("export", &format!("done → {path}"));
     Ok(path)
 }
 
@@ -2192,6 +2229,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
+            ui_log,
             set_project_settings,
             split_clip,
             delete_clips,

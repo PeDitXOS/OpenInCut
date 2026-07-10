@@ -495,6 +495,7 @@ pub fn handle_rpc(state: &AppState, req: &Value) -> Option<Value> {
             let name = req.pointer("/params/name").and_then(|v| v.as_str()).unwrap_or("");
             let empty = json!({});
             let args = req.pointer("/params/arguments").unwrap_or(&empty);
+            ue_core::dlog("mcp", &format!("tool {name} {args}"));
             call_tool(state, name, args)
         }
         _ => {

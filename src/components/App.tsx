@@ -150,6 +150,22 @@ function useNativeFileDrop() {
   }, []);
 }
 
+/** Surface webview errors in the dev terminal (debugging without devtools). */
+function useErrorBridge() {
+  useEffect(() => {
+    const onError = (e: ErrorEvent) =>
+      engine.uiLog("error", `${e.message} @ ${e.filename}:${e.lineno}`);
+    const onRejection = (e: PromiseRejectionEvent) =>
+      engine.uiLog("error", `unhandled rejection: ${e.reason}`);
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
+  }, []);
+}
+
 export function App() {
   const init = useStore((s) => s.init);
   const [leftTab, setLeftTab] = useState<"media" | "text">("media");
@@ -160,6 +176,7 @@ export function App() {
   useKeyboard();
   usePlayback();
   useNativeFileDrop();
+  useErrorBridge();
 
   return (
     <div className="flex h-full flex-col bg-bg0">

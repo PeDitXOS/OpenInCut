@@ -72,6 +72,8 @@ export interface EngineClient {
   playbackSeek(tUs: TimeUs): Promise<void>;
   /** [position µs, playing] according to the audio clock. */
   /** Path of the autosave newer than the project, or null. */
+  /** UI log bridge: errors land in the dev terminal (no-op in the browser). */
+  uiLog(level: "error" | "warn" | "info", message: string): void;
   checkRecovery(): Promise<string | null>;
   /** Loads the recovery copy (keeps the real project's path). */
   recoverProject(autosave: string, original: string | null): Promise<StateSnapshot>;

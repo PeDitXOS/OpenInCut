@@ -279,6 +279,10 @@ export class MockEngine implements EngineClient {
   }
   async playbackSeek(): Promise<void> {}
   async playbackSetRate(): Promise<void> {}
+  uiLog(level: "error" | "warn" | "info", message: string): void {
+    // browser demo: the devtools console is the terminal
+    (level === "error" ? console.error : console.warn)(`[ui] ${message}`);
+  }
   async checkRecovery(): Promise<string | null> {
     return null;
   }

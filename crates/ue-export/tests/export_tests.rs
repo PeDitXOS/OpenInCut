@@ -1772,3 +1772,49 @@ fn corrected_words_appear_in_captions() {
     store.undo().unwrap();
     assert_eq!(store.project.transcripts[0].words[1].label(), "godo");
 }
+
+/// THE foundational compositing rule (field bug dragged since the start):
+/// a transform must NEVER change the apparent size of a clip. Frames are
+/// fitted to the sequence canvas before compositing, so a small source (or
+/// the preview's half-size proxy) renders identically with and without a
+/// position offset.
+#[test]
+fn position_offset_does_not_change_apparent_size() {
+    let Some(dir) = media_dir() else { return };
+    let src = dir.join("solid_red.mp4"); // 640x360 in a 1920x1080 sequence
+    assert!(src.exists());
+    let mut project = Project::new("fit-canvas");
+    let seq_id = project.active_sequence;
+    let asset = ue_media::import_file(&src).unwrap();
+    let aid = asset.id;
+    project.assets.push(asset);
+    let v1 = project
+        .sequence(seq_id)
+        .unwrap()
+        .tracks
+        .iter()
+        .find(|t| t.kind == TrackKind::Video)
+        .unwrap()
+        .id;
+    let mut store = ProjectStore::new(project);
+    let mut clip = Clip::new_media(aid, 0, 2 * SEC, 0);
+    clip.transform.position.0 = 110.0.into();
+    store.insert_clip(v1, clip, InsertMode::Strict).unwrap();
+
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-fit-canvas.mp4");
+    export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+
+    // fitted to canvas then shifted: red spans [110, 1920), black strip on the left
+    let (r, _g, _b) = pixel_at(&out, 1.0, 50, 540);
+    assert!(r < 60, "left strip is background, got r={r}");
+    let (r, _g, _b) = pixel_at(&out, 1.0, 300, 540);
+    assert!(r > 180, "content starts right after the offset, got r={r}");
+    let (r, _g, _b) = pixel_at(&out, 1.0, 1800, 540);
+    assert!(
+        r > 180,
+        "content still fills the canvas far right: the clip must NOT shrink \
+         to its native size when positioned (got r={r})"
+    );
+    let (r, _g, _b) = pixel_at(&out, 1.0, 960, 100);
+    assert!(r > 180, "vertical extent fills the canvas too, got r={r}");
+}

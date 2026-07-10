@@ -34,6 +34,7 @@ impl ProjectStore {
             match apply(&mut self.project, action.clone()) {
                 Ok(inv) => inverses.push(inv),
                 Err(e) => {
+                    crate::dlog("edit", &format!("'{label}' FAILED: {e} (rolled back)"));
                     for inv in inverses.into_iter().rev() {
                         apply(&mut self.project, inv).expect("rollback must be infallible");
                     }
@@ -41,6 +42,10 @@ impl ProjectStore {
                 }
             }
         }
+        crate::dlog(
+            "edit",
+            &format!("'{}' ({} action{})", label, actions.len(), if actions.len() == 1 { "" } else { "s" }),
+        );
         debug_assert_eq!(
             validate(&self.project),
             Vec::<String>::new(),
