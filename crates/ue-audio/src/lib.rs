@@ -11,6 +11,7 @@
 pub mod items;
 pub mod mixer;
 pub mod player;
+pub mod stretch;
 pub mod wav;
 
 use thiserror::Error;

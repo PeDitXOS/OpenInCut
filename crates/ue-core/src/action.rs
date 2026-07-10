@@ -51,6 +51,7 @@ pub enum Action {
     SetClipSpeed { clip_id: Id, speed: f64, duration: TimeUs },
     SetClipGroup { clip_id: Id, group: Option<Id> },
     AddSequence { sequence: Sequence },
+    SetSequenceProps { sequence_id: Id, resolution: (u32, u32), fps: (u32, u32) },
     RemoveSequence { sequence_id: Id },
     SetActiveSequence { sequence_id: Id },
 }
@@ -413,6 +414,21 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
             let id = sequence.id;
             project.sequences.push(sequence);
             Ok(Action::RemoveSequence { sequence_id: id })
+        }
+
+        Action::SetSequenceProps { sequence_id, resolution, fps } => {
+            if resolution.0 < 16 || resolution.1 < 16 || fps.0 == 0 || fps.1 == 0 {
+                return Err(UeError::Invalid("invalid resolution or fps".into()));
+            }
+            let seq = project
+                .sequence_mut(sequence_id)
+                .ok_or_else(|| UeError::NotFound(format!("sequence {sequence_id}")))?;
+            let old = Action::SetSequenceProps {
+                sequence_id,
+                resolution: std::mem::replace(&mut seq.resolution, resolution),
+                fps: std::mem::replace(&mut seq.fps, fps),
+            };
+            Ok(old)
         }
 
         Action::RemoveSequence { sequence_id } => {

@@ -139,6 +139,13 @@ export interface EngineClient {
   addTrack(kind: "video" | "audio"): Promise<StateSnapshot>;
   /** Delete a sequence (never the last one; switches away if active). */
   removeSequence(sequenceId: Id): Promise<StateSnapshot>;
+  setSequenceProps(
+    sequenceId: Id,
+    width: number,
+    height: number,
+    fpsNum: number,
+    fpsDen: number,
+  ): Promise<StateSnapshot>;
   removeTrack(trackId: Id): Promise<StateSnapshot>;
   renameTrack(trackId: Id, name: string): Promise<StateSnapshot>;
   setTrackVolume(trackId: Id, db: number): Promise<StateSnapshot>;

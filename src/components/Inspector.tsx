@@ -608,7 +608,7 @@ function ClipInspector({ clip }: { clip: Clip }) {
           </div>
           <p className="mt-1.5 text-[10px] leading-snug text-ink-faint">
             The clip {clip.speed > 1 ? "gets shorter" : clip.speed < 1 ? "gets longer" : "doesn't change"};
-            on export the voice pitch is preserved (atempo).
+            the voice pitch is preserved live (WSOLA) and on export (atempo).
           </p>
         </Section>
       )}
@@ -1224,6 +1224,7 @@ export function Inspector() {
   const selection = useStore((s) => s.selection);
   const project = useStore((s) => s.project);
   const setAiSettings = useStore((s) => s.setAiSettings);
+  const setSequenceProps = useStore((s) => s.setSequenceProps);
   useStore((s) => s.version);
 
   const seq = activeSequence(project);
@@ -1240,14 +1241,63 @@ export function Inspector() {
         <div className="px-3 py-4">
           <div className="rounded-lg border border-line bg-bg2 p-3">
             <div className="text-[12px] font-medium text-ink">{seq.name}</div>
-            <div className="mt-1.5 space-y-0.5 font-[var(--font-mono)] text-[10px] text-ink-faint">
-              <div>
-                {seq.resolution[0]}×{seq.resolution[1]} · {Math.round(seq.fps[0] / seq.fps[1])} fps
-              </div>
-              <div>
-                {seq.tracks.length} tracks · {(seq.sample_rate / 1000).toFixed(0)} kHz
-              </div>
+            <div className="mt-1.5 font-[var(--font-mono)] text-[10px] text-ink-faint">
+              {seq.tracks.length} tracks · {(seq.sample_rate / 1000).toFixed(0)} kHz
             </div>
+            <Row label="Resolution">
+              <select
+                className="focus-ring min-w-0 flex-1 cursor-pointer rounded-md border border-line bg-bg1 px-2 py-1 text-[12px] text-ink"
+                value={`${seq.resolution[0]}x${seq.resolution[1]}`}
+                onChange={(e) => {
+                  const [w, h] = e.target.value.split("x").map(Number);
+                  void setSequenceProps(seq.id, w, h, seq.fps[0], seq.fps[1]);
+                }}
+                title="Sequence canvas: clips are fitted into it; exports use this size by default"
+              >
+                {[
+                  [1920, 1080, "1080p (FHD)"],
+                  [2560, 1440, "1440p (QHD)"],
+                  [3840, 2160, "2160p (4K)"],
+                  [1280, 720, "720p"],
+                  [1080, 1920, "1080×1920 (vertical)"],
+                  [2160, 3840, "2160×3840 (vertical 4K)"],
+                ].map(([w, h, label]) => (
+                  <option key={`${w}x${h}`} value={`${w}x${h}`}>
+                    {label}
+                  </option>
+                ))}
+                {!["1920x1080", "2560x1440", "3840x2160", "1280x720", "1080x1920", "2160x3840"].includes(
+                  `${seq.resolution[0]}x${seq.resolution[1]}`,
+                ) && (
+                  <option value={`${seq.resolution[0]}x${seq.resolution[1]}`}>
+                    {seq.resolution[0]}×{seq.resolution[1]}
+                  </option>
+                )}
+              </select>
+            </Row>
+            <Row label="Frame rate">
+              <select
+                className="focus-ring min-w-0 flex-1 cursor-pointer rounded-md border border-line bg-bg1 px-2 py-1 text-[12px] text-ink"
+                value={`${seq.fps[0]}/${seq.fps[1]}`}
+                onChange={(e) => {
+                  const [n, d] = e.target.value.split("/").map(Number);
+                  void setSequenceProps(seq.id, seq.resolution[0], seq.resolution[1], n, d);
+                }}
+              >
+                {[
+                  [24, 1, "24 fps"],
+                  [25, 1, "25 fps"],
+                  [30, 1, "30 fps"],
+                  [30000, 1001, "29.97 fps"],
+                  [50, 1, "50 fps"],
+                  [60, 1, "60 fps"],
+                ].map(([n, d, label]) => (
+                  <option key={`${n}/${d}`} value={`${n}/${d}`}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </Row>
           </div>
           <div className="mt-3 rounded-lg border border-line bg-bg2 p-3">
             <h3 className="panel-eyebrow mb-2">AI · Whisper</h3>

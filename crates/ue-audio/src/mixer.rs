@@ -14,8 +14,8 @@ pub struct MixItem {
     pub src_in: i64,
     /// Clip duration in frames (TIMELINE, already divided by speed).
     pub len: i64,
-    /// Clip speed: the source is read at this rate. Live it changes the
-    /// pitch (simple resampling); export preserves pitch with atempo.
+    /// Clip speed: the source is read at this rate. With a `stretcher` the
+    /// pitch is preserved live (WSOLA), matching the export's atempo.
     pub speed: f64,
     /// Static linear gain (clip's const gain_db + track volume).
     pub gain: f32,
@@ -25,6 +25,9 @@ pub struct MixItem {
     /// Pan -1 (full left) .. 1 (full right): attenuates the opposite
     /// channel without touching its own (center = unity).
     pub pan: f32,
+    /// WSOLA stretcher when speed ≠ 1: live playback keeps the voice pitch.
+    /// Only the audio thread touches it (uncontended Mutex).
+    pub stretcher: Option<std::sync::Mutex<crate::stretch::Wsola>>,
     pub fade_in: i64,
     pub fade_out: i64,
 }
@@ -70,12 +73,15 @@ pub fn mix_frame(items: &[MixItem], pos: i64) -> (f32, f32) {
         if rel < 0 || rel >= item.len {
             continue;
         }
-        let src_rel = if (item.speed - 1.0).abs() > 1e-9 {
-            (rel as f64 * item.speed).round() as i64
+        let (l, r) = if let Some(st) = &item.stretcher {
+            // pitch-preserved time stretch (same idea as atempo on export)
+            st.lock().unwrap().frame_at(&item.wav, item.src_in, rel)
+        } else if (item.speed - 1.0).abs() > 1e-9 {
+            // fallback: plain resample (pitch shifts)
+            item.wav.frame(item.src_in + (rel as f64 * item.speed).round() as i64)
         } else {
-            rel
+            item.wav.frame(item.src_in + rel)
         };
-        let (l, r) = item.wav.frame(item.src_in + src_rel);
         let g = item.factor_at(rel);
         let (pl, pr) = pan_gains(item.pan);
         acc.0 += l * g * pl;

@@ -99,6 +99,8 @@ pub fn load_items(
                 gain: db_to_linear(spec.gain_db),
                 gain_curve: spec.gain_curve.clone(),
                 pan: spec.pan as f32,
+                stretcher: ((spec.speed - 1.0).abs() > 1e-9)
+                    .then(|| std::sync::Mutex::new(crate::stretch::Wsola::new(spec.speed))),
                 fade_in: us_to_frames(spec.fade_in_us),
                 fade_out: us_to_frames(spec.fade_out_us),
             }),

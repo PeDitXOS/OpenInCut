@@ -597,6 +597,20 @@ export class MockEngine implements EngineClient {
       throw new Error("generator clip not found");
     });
   }
+  async setSequenceProps(
+    sequenceId: Id,
+    width: number,
+    height: number,
+    fpsNum: number,
+    fpsDen: number,
+  ): Promise<StateSnapshot> {
+    return this.transaction("Sequence settings", () => {
+      const seq = this.project.sequences.find((s) => s.id === sequenceId);
+      if (!seq) throw new Error("sequence not found");
+      seq.resolution = [width, height];
+      seq.fps = [fpsNum, fpsDen];
+    });
+  }
   async removeSequence(sequenceId: Id): Promise<StateSnapshot> {
     return this.transaction("Delete sequence", () => {
       if (this.project.sequences.length <= 1)

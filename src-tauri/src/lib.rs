@@ -1162,7 +1162,7 @@ pub(crate) fn generate_vertical_impl(state: &AppState) -> Result<String, String>
     }
     let mut vertical = duplicate_sequence(seq);
     vertical.name = twin_name;
-    vertical.resolution = (1080, 1920);
+    vertical.resolution = (seq.resolution.1, seq.resolution.0);
     for track in vertical.tracks.iter_mut().filter(|t| t.kind == TrackKind::Video) {
         for clip in &mut track.clips {
             if matches!(clip.payload, ClipPayload::Media { .. }) {
@@ -1219,6 +1219,31 @@ fn remove_sequence(state: State<AppState>, sequence_id: String) -> Res<StateSnap
     }
     actions.push(ue_core::Action::RemoveSequence { sequence_id: id });
     store.dispatch("Delete sequence", actions).map_err(|e| e.to_string())?;
+    Ok(snapshot(&store))
+}
+
+/// Sequence resolution/frame rate (undoable). 4K, portrait, 60 fps, etc.
+#[tauri::command]
+fn set_sequence_props(
+    state: State<AppState>,
+    sequence_id: String,
+    width: u32,
+    height: u32,
+    fps_num: u32,
+    fps_den: u32,
+) -> Res<StateSnapshot> {
+    let mut store = state.store.lock().unwrap();
+    let id = parse_id(&sequence_id)?;
+    store
+        .dispatch(
+            "Sequence settings",
+            vec![ue_core::Action::SetSequenceProps {
+                sequence_id: id,
+                resolution: (width.clamp(16, 8192) & !1, height.clamp(16, 8192) & !1),
+                fps: (fps_num.clamp(1, 240), fps_den.clamp(1, 1001)),
+            }],
+        )
+        .map_err(|e| e.to_string())?;
     Ok(snapshot(&store))
 }
 
@@ -2095,6 +2120,7 @@ pub fn run() {
             generate_vertical,
             set_active_sequence,
             remove_sequence,
+            set_sequence_props,
             add_avatar_clip,
             export_video,
             cancel_export,

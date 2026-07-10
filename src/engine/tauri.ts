@@ -245,6 +245,15 @@ export class TauriEngine implements EngineClient {
   removeSequence(sequenceId: Id): Promise<StateSnapshot> {
     return invoke("remove_sequence", { sequenceId });
   }
+  setSequenceProps(
+    sequenceId: Id,
+    width: number,
+    height: number,
+    fpsNum: number,
+    fpsDen: number,
+  ): Promise<StateSnapshot> {
+    return invoke("set_sequence_props", { sequenceId, width, height, fpsNum, fpsDen });
+  }
   addTrack(kind: "video" | "audio"): Promise<StateSnapshot> {
     return invoke("add_track", { kind });
   }

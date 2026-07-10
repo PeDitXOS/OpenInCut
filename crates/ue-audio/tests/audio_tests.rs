@@ -49,6 +49,7 @@ fn dc_item(path: &PathBuf, timeline_start: i64, len: i64) -> MixItem {
         gain: 1.0,
         gain_curve: None,
         pan: 0.0,
+        stretcher: None,
         fade_in: 0,
         fade_out: 0,
     }
@@ -162,6 +163,7 @@ fn timeline_offset_and_src_in_mapping() {
         gain: 1.0,
         gain_curve: None,
         pan: 0.0,
+        stretcher: None,
         fade_in: 0,
         fade_out: 0,
     };
@@ -177,6 +179,7 @@ fn timeline_offset_and_src_in_mapping() {
         gain: 1.0,
         gain_curve: None,
         pan: 0.0,
+        stretcher: None,
         fade_in: 0,
         fade_out: 0,
     };
@@ -192,6 +195,7 @@ fn timeline_offset_and_src_in_mapping() {
         gain: 1.0,
         gain_curve: None,
         pan: 0.0,
+        stretcher: None,
         fade_in: 0,
         fade_out: 0,
     };
@@ -211,6 +215,7 @@ fn fades_ramp_linearly() {
         gain: 1.0,
         gain_curve: None,
         pan: 0.0,
+        stretcher: None,
         fade_in: 200,
         fade_out: 200,
     };
@@ -386,4 +391,80 @@ fn player_clock_advances_if_device_available() {
             let _ = us_to_frames(0); // silences unused in builds without asserts
         }
     }
+}
+
+/// THE pitch test: a 220 Hz sine played at 2× through the WSOLA stretcher
+/// must still be ~220 Hz (the naive resample would give 440 Hz).
+#[test]
+fn wsola_preserves_pitch_at_double_speed() {
+    use ue_audio::stretch::Wsola;
+    let sr = RATE as f64;
+    let hz = 220.0;
+    let frames = 4 * RATE as i64;
+    let path = write_wav("sine220.wav", frames, |i| {
+        let v = (2.0 * std::f64::consts::PI * hz * i as f64 / sr).sin();
+        (((v * 20000.0) as i16), ((v * 20000.0) as i16))
+    });
+    let wav = WavMap::open(&path).unwrap();
+
+    let mut st = Wsola::new(2.0);
+    // skip the fade-in, then collect half a second of stretched output
+    let n = RATE as i64 / 2;
+    let mut out = Vec::with_capacity(n as usize);
+    for rel in 0..(n + 2048) {
+        let (l, _r) = st.frame_at(&wav, 0, rel);
+        if rel >= 2048 {
+            out.push(l);
+        }
+    }
+    // zero crossings → frequency
+    let mut crossings = 0u32;
+    for w in out.windows(2) {
+        if (w[0] >= 0.0) != (w[1] >= 0.0) {
+            crossings += 1;
+        }
+    }
+    let freq = crossings as f64 / 2.0 / (out.len() as f64 / sr);
+    assert!(
+        (195.0..=245.0).contains(&freq),
+        "pitch preserved at 2x: expected ~220 Hz, got {freq:.1} Hz"
+    );
+    // and the naive resample really does shift it (sanity check of the test)
+    let mut crossings2 = 0u32;
+    let mut prev = 0.0f32;
+    for rel in 0..n {
+        let (l, _r) = wav.frame((rel as f64 * 2.0) as i64);
+        if rel > 0 && (prev >= 0.0) != (l >= 0.0) {
+            crossings2 += 1;
+        }
+        prev = l;
+    }
+    let freq2 = crossings2 as f64 / 2.0 / (n as f64 / sr);
+    assert!(freq2 > 400.0, "naive resample doubles the pitch ({freq2:.1} Hz)");
+}
+
+/// Stretched output has no gross discontinuities (no clicks): the max jump
+/// between consecutive samples stays in the same ballpark as the source's.
+#[test]
+fn wsola_output_is_continuous() {
+    use ue_audio::stretch::Wsola;
+    let sr = RATE as f64;
+    let frames = 2 * RATE as i64;
+    let path = write_wav("sine330.wav", frames, |i| {
+        let v = (2.0 * std::f64::consts::PI * 330.0 * i as f64 / sr).sin();
+        (((v * 20000.0) as i16), ((v * 20000.0) as i16))
+    });
+    let wav = WavMap::open(&path).unwrap();
+    let mut st = Wsola::new(1.5);
+    let mut prev = 0.0f32;
+    let mut max_jump = 0.0f32;
+    for rel in 0..RATE as i64 {
+        let (l, _r) = st.frame_at(&wav, 0, rel);
+        if rel > 2048 {
+            max_jump = max_jump.max((l - prev).abs());
+        }
+        prev = l;
+    }
+    // a 330 Hz sine at full scale moves ≤ ~0.045/sample; allow overlap slack
+    assert!(max_jump < 0.09, "no clicks: max jump {max_jump}");
 }

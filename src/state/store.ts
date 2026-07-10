@@ -116,6 +116,13 @@ export interface UiState {
   toggleTrack: (trackId: Id, prop: "muted" | "solo" | "locked") => Promise<void>;
   addTrack: (kind: "video" | "audio") => Promise<void>;
   removeSequence: (sequenceId: Id) => Promise<void>;
+  setSequenceProps: (
+    sequenceId: Id,
+    width: number,
+    height: number,
+    fpsNum: number,
+    fpsDen: number,
+  ) => Promise<void>;
   /** Assets currently being transcribed (background jobs). */
   transcribingIds: Id[];
   removeTrack: (trackId: Id) => Promise<void>;
@@ -538,6 +545,10 @@ export const useStore = create<UiState>((set, get) => {
     addTrack: (kind) => run("Add track", () => engine.addTrack(kind)),
     removeSequence: (sequenceId) =>
       run("Delete sequence", () => engine.removeSequence(sequenceId)),
+    setSequenceProps: (sequenceId, width, height, fpsNum, fpsDen) =>
+      run("Sequence settings", () =>
+        engine.setSequenceProps(sequenceId, width, height, fpsNum, fpsDen),
+      ),
     transcribingIds: [],
     removeTrack: (trackId) => run("Delete track", () => engine.removeTrack(trackId)),
     renameTrack: (trackId, name) =>
