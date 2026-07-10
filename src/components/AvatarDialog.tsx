@@ -43,6 +43,9 @@ export function AvatarDialog() {
   const importAvatarConfig = useStore((s) => s.importAvatarConfig);
   const exportAvatarConfig = useStore((s) => s.exportAvatarConfig);
   const avatarProgress = useStore((s) => s.avatarProgress);
+  const setAvatarDriver = useStore((s) => s.setAvatarDriver);
+  const transcribeAsset = useStore((s) => s.transcribeAsset);
+  const transcribingIds = useStore((s) => s.transcribingIds);
 
   const saved = project.avatars ?? [];
   const [draft, setDraft] = useState<AvatarConfig>(newAvatarConfig());
@@ -56,8 +59,11 @@ export function AvatarDialog() {
 
   if (!show) return null;
 
+  // the avatar is driven by the VOICE: any asset with audio qualifies
+  const voiceAssets = project.assets.filter((a) => a.probe.audio_channels > 0);
   const driver = project.assets.find((a) => a.id === driverAssetId);
   const hasTranscript = project.transcripts.some((t) => t.asset_id === driverAssetId);
+  const transcribing = driverAssetId ? transcribingIds.includes(driverAssetId) : false;
   const canGenerate = draft.id !== "" && draft.expressions.length > 0 && hasTranscript;
 
   const patch = (p: Partial<AvatarConfig>) => setDraft((d) => ({ ...d, ...p }));
@@ -159,14 +165,35 @@ export function AvatarDialog() {
                 onChange={(e) => patch({ name: e.target.value })}
               />
             </Field>
-            <Field label="Driver clip" hint="The transcript whose emotions drive the avatar">
-              <span className="flex-1 truncate text-[12px] text-ink">
-                {driver ? assetName(driver) : "— select a transcribed clip —"}
-              </span>
-              {!hasTranscript && driver && (
-                <span className="shrink-0 text-[10.5px] text-danger">needs a transcript</span>
-              )}
+            <Field label="Voice" hint="The audio whose speech and emotion drive the avatar">
+              <select
+                className="focus-ring min-w-0 flex-1 cursor-pointer rounded-md border border-line bg-bg2 px-2 py-1 text-[12px] text-ink"
+                value={driverAssetId ?? ""}
+                onChange={(e) => setAvatarDriver(e.target.value)}
+              >
+                {voiceAssets.length === 0 && <option value="">— no audio in the project —</option>}
+                {voiceAssets.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {assetName(a)}
+                    {project.transcripts.some((t) => t.asset_id === a.id) ? " ✓" : ""}
+                  </option>
+                ))}
+              </select>
             </Field>
+            {driver && !hasTranscript && (
+              <div className="mt-1 flex items-center gap-2 rounded-md border border-accent/40 bg-bg2 px-2 py-1.5">
+                <span className="flex-1 text-[11px] text-ink-dim">
+                  The avatar needs the words and emotions of this voice.
+                </span>
+                <button
+                  className="focus-ring shrink-0 rounded-md border border-accent/60 px-2 py-1 text-[11px] font-medium text-accent hover:bg-bg3 disabled:opacity-50"
+                  disabled={transcribing}
+                  onClick={() => void transcribeAsset(driver.id)}
+                >
+                  {transcribing ? "⏳ Transcribing…" : "🎙 Transcribe"}
+                </button>
+              </div>
+            )}
           </div>
 
           <section className="rounded-lg border border-line-soft bg-bg2/40 p-2.5">
@@ -362,7 +389,7 @@ export function AvatarDialog() {
             onClick={() => void generateAvatarVideo(draft.id, driverAssetId as Id)}
             title={
               !hasTranscript
-                ? "Transcribe the driver clip first"
+                ? "Transcribe the voice first"
                 : draft.id === ""
                   ? "Save the setup first"
                   : "Render the avatar video in the background and add it to Media"

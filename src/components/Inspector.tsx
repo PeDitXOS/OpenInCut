@@ -713,9 +713,15 @@ function ClipInspector({ clip }: { clip: Clip }) {
               ✂ Split
             </button>
           </div>
+        </Section>
+      )}
+
+      {/* AI tools: driven by the clip's AUDIO, so any clip with sound gets them */}
+      {clip.payload.type === "media" && asset && asset.probe.audio_channels > 0 && (
+        <Section title="AI">
           {!asset.transcript && (
             <button
-              className="focus-ring mt-1.5 w-full rounded-md border border-accent/60 bg-bg2 px-2.5 py-2 text-[12px] font-medium text-accent hover:bg-bg3 disabled:opacity-50"
+              className="focus-ring w-full rounded-md border border-accent/60 bg-bg2 px-2.5 py-2 text-[12px] font-medium text-accent hover:bg-bg3 disabled:opacity-50"
               disabled={transcribing}
               onClick={() => void transcribeAsset(asset.id)}
               title="Word-by-word transcription with Whisper (downloads the model the first time). Enables text-based editing, subtitles and the avatar."
@@ -724,23 +730,23 @@ function ClipInspector({ clip }: { clip: Clip }) {
             </button>
           )}
           {asset.transcript && (
-            <>
-              <button
-                className="focus-ring mt-1.5 w-full rounded-md border border-line bg-bg2 px-2.5 py-2 text-[12px] text-ink hover:bg-bg3"
-                onClick={() => void addSubtitlesClip(clip.id)}
-                title="Creates an auto-subtitles clip (by phrases) over this clip"
-              >
-                💬 Auto subtitles
-              </button>
-              <button
-                className="focus-ring mt-1.5 w-full rounded-md border border-line bg-bg2 px-2.5 py-2 text-[12px] text-ink hover:bg-bg3"
-                onClick={() => asset && openAvatarDialog(asset.id)}
-                title="Emotion-reactive avatar (pick the config.json of your avatars, compatible with the toolkit)"
-              >
-                🧑‍🎤 Reactive avatar…
-              </button>
-            </>
+            <button
+              className="focus-ring w-full rounded-md border border-line bg-bg2 px-2.5 py-2 text-[12px] text-ink hover:bg-bg3"
+              onClick={() => void addSubtitlesClip(clip.id)}
+              title="Creates an auto-subtitles clip (by phrases) over this clip"
+            >
+              💬 Auto subtitles
+            </button>
           )}
+          {/* the avatar is driven by the VOICE: always reachable, it asks for
+              the transcript from inside the dialog if it is missing */}
+          <button
+            className="focus-ring mt-1.5 w-full rounded-md border border-line bg-bg2 px-2.5 py-2 text-[12px] text-ink hover:bg-bg3"
+            onClick={() => openAvatarDialog(asset.id)}
+            title="Emotion-reactive avatar: expressions, look and classifier. Driven by this clip's voice."
+          >
+            🧑‍🎤 Reactive avatar…
+          </button>
         </Section>
       )}
 

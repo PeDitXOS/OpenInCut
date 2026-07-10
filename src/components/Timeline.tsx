@@ -685,6 +685,7 @@ export function Timeline() {
   const setActiveSequence = useStore((s) => s.setActiveSequence);
   const addTrack = useStore((s) => s.addTrack);
   const addGeneratorClip = useStore((s) => s.addGeneratorClip);
+  const openAvatarDialog = useStore((s) => s.openAvatarDialog);
   const removeSequence = useStore((s) => s.removeSequence);
   const rangeInUs = useStore((s) => s.rangeInUs);
   const rangeOutUs = useStore((s) => s.rangeOutUs);
@@ -1017,6 +1018,13 @@ export function Timeline() {
           title="Add a color rectangle at the playhead (Inspector: color, size, gradient)"
         >
           ▦ Shape
+        </button>
+        <button
+          className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
+          onClick={() => openAvatarDialog()}
+          title="Reactive avatar: expressions, look and classifier — driven by your voice"
+        >
+          🧑‍🎤 Avatar
         </button>
         <button
           className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"

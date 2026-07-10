@@ -112,7 +112,8 @@ export interface UiState {
   addAvatarClip: (clipId: Id) => Promise<void>;
   showAvatarDialog: boolean;
   avatarDriverAsset: Id | null;
-  openAvatarDialog: (driverAsset: Id) => void;
+  openAvatarDialog: (driverAsset?: Id) => void;
+  setAvatarDriver: (assetId: Id) => void;
   setShowAvatarDialog: (v: boolean) => void;
   saveAvatarConfig: (config: AvatarConfig) => Promise<void>;
   removeAvatarConfig: (configId: Id) => Promise<void>;
@@ -678,8 +679,21 @@ export const useStore = create<UiState>((set, get) => {
     showAvatarDialog: false,
     avatarDriverAsset: null,
     avatarProgress: null,
-    openAvatarDialog: (driverAsset) =>
-      set({ showAvatarDialog: true, avatarDriverAsset: driverAsset, avatarProgress: null }),
+    openAvatarDialog: (driverAsset) => {
+      const { project } = get();
+      const withAudio = project.assets.filter((a) => a.probe.audio_channels > 0);
+      // best guess for the voice: already transcribed > audio-only > any
+      const best =
+        withAudio.find((a) => project.transcripts.some((t) => t.asset_id === a.id)) ??
+        withAudio.find((a) => a.kind === "audio") ??
+        withAudio[0];
+      set({
+        showAvatarDialog: true,
+        avatarDriverAsset: driverAsset ?? best?.id ?? null,
+        avatarProgress: null,
+      });
+    },
+    setAvatarDriver: (assetId) => set({ avatarDriverAsset: assetId }),
     setShowAvatarDialog: (v) => set({ showAvatarDialog: v }),
     saveAvatarConfig: (config) => run("Save avatar", () => engine.saveAvatarConfig(config)),
     removeAvatarConfig: (configId) =>
