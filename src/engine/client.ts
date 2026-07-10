@@ -186,11 +186,13 @@ export interface EngineClient {
   /** Creates an Avatar clip over a transcribed clip, from a toolkit config.json. */
   addAvatarClip(clipId: Id, configPath: string): Promise<StateSnapshot>;
   listAvatarConfigs(): Promise<AvatarConfig[]>;
-  saveAvatarConfig(config: AvatarConfig): Promise<StateSnapshot>;
+  /** Returns the saved id (a new draft gets one) plus the snapshot. */
+  saveAvatarConfig(config: AvatarConfig): Promise<[Id, StateSnapshot]>;
   removeAvatarConfig(configId: Id): Promise<StateSnapshot>;
   pickAvatarMedia(): Promise<string[]>;
   exportAvatarConfig(configId: Id, path: string): Promise<string>;
-  importAvatarConfig(path: string): Promise<StateSnapshot>;
+  /** Returns the imported id plus the snapshot. */
+  importAvatarConfig(path: string): Promise<[Id, StateSnapshot]>;
   /** Background render; progress arrives via onAvatarProgress. */
   generateAvatarVideo(configId: Id, driverAsset: Id): Promise<void>;
   onAvatarProgress(

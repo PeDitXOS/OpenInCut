@@ -115,9 +115,11 @@ export interface UiState {
   openAvatarDialog: (driverAsset?: Id) => void;
   setAvatarDriver: (assetId: Id) => void;
   setShowAvatarDialog: (v: boolean) => void;
-  saveAvatarConfig: (config: AvatarConfig) => Promise<void>;
+  /** Saves and returns the id (a new draft gets one). */
+  saveAvatarConfig: (config: AvatarConfig) => Promise<Id | null>;
   removeAvatarConfig: (configId: Id) => Promise<void>;
-  importAvatarConfig: () => Promise<void>;
+  /** Imports and returns the id so the dialog can select it. */
+  importAvatarConfig: () => Promise<Id | null>;
   exportAvatarConfig: (configId: Id) => Promise<void>;
   generateAvatarVideo: (configId: Id, driverAsset: Id) => Promise<void>;
   avatarProgress: { stage: string; progress: number; message: string } | null;
@@ -695,18 +697,32 @@ export const useStore = create<UiState>((set, get) => {
     },
     setAvatarDriver: (assetId) => set({ avatarDriverAsset: assetId }),
     setShowAvatarDialog: (v) => set({ showAvatarDialog: v }),
-    saveAvatarConfig: (config) => run("Save avatar", () => engine.saveAvatarConfig(config)),
+    saveAvatarConfig: async (config) => {
+      try {
+        const [id, snap] = await engine.saveAvatarConfig(config);
+        applySnapshot(snap, "Avatar setup saved");
+        return id;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        engine.uiLog("error", `save avatar: ${msg}`);
+        set({ lastActionLabel: `⚠ ${msg}` });
+        return null;
+      }
+    },
     removeAvatarConfig: (configId) =>
       run("Delete avatar", () => engine.removeAvatarConfig(configId)),
     importAvatarConfig: async () => {
       try {
         const path = await engine.pickJsonOpenPath();
-        if (!path) return;
-        applySnapshot(await engine.importAvatarConfig(path), "Avatar setup imported");
+        if (!path) return null;
+        const [id, snap] = await engine.importAvatarConfig(path);
+        applySnapshot(snap, "Avatar setup imported");
+        return id;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         engine.uiLog("error", `import avatar: ${msg}`);
         set({ lastActionLabel: `⚠ ${msg}` });
+        return null;
       }
     },
     exportAvatarConfig: async (configId) => {

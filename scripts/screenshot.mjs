@@ -245,6 +245,12 @@ const voiceValue = await voiceSelect.first().inputValue();
 const voiceLabel = await voiceSelect.first().locator(`option[value="${voiceValue}"]`).textContent();
 if (!voiceLabel.includes("voiceover.wav"))
   throw new Error(`the transcribed voice is not preselected (got ${voiceLabel})`);
+// saving a NEW setup must select it in the picker (it gets an id)
+await page.getByTitle("Start a new setup").click();
+await page.waitForTimeout(150);
+const picker = page.locator("select").filter({ hasText: "unsaved" });
+if ((await picker.count()) === 0)
+  throw new Error("a new draft is not shown as unsaved in the picker");
 await shot("15-avatar-dialog");
 await page.getByRole("button", { name: "Close", exact: true }).click();
 await page.waitForTimeout(200);

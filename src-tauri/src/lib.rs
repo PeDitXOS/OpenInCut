@@ -1514,19 +1514,35 @@ fn list_avatar_configs(state: State<AppState>) -> Vec<ue_core::model::AvatarConf
 #[tauri::command]
 fn save_avatar_config(
     state: State<AppState>,
-    config: ue_core::model::AvatarConfig,
-) -> Res<StateSnapshot> {
+    config: serde_json::Value,
+) -> Res<(String, StateSnapshot)> {
+    // a brand-new draft arrives with id:"" — mint one before deserializing
+    let mut config = config;
+    let fresh = config
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.is_empty())
+        .unwrap_or(true);
+    if fresh {
+        config["id"] = serde_json::json!(ue_core::model::Id::new().to_string());
+    }
+    let mut config: ue_core::model::AvatarConfig =
+        serde_json::from_value(config).map_err(|e| format!("invalid avatar setup: {e}"))?;
     if config.expressions.is_empty() {
         return Err("add at least one expression".into());
     }
     if config.expressions.iter().any(|e| e.name.trim().is_empty()) {
         return Err("every expression needs a name".into());
     }
+    if config.id.is_nil() {
+        config.id = ue_core::model::Id::new();
+    }
+    let id = config.id;
     let mut store = state.store.lock().unwrap();
     store
         .dispatch("Save avatar", vec![ue_core::Action::UpsertAvatarConfig { config }])
         .map_err(|e| e.to_string())?;
-    Ok(snapshot(&store))
+    Ok((id.to_string(), snapshot(&store)))
 }
 
 #[tauri::command]
@@ -1585,8 +1601,11 @@ fn export_avatar_config(state: State<AppState>, config_id: String, path: String)
 }
 
 /// Import an avatar setup from JSON: ours or the toolkit's config.json.
+/// Imports an avatar setup. Returns the id of the setup so the UI can select
+/// it. Re-importing a setup with the same NAME replaces it instead of piling
+/// up duplicates.
 #[tauri::command]
-fn import_avatar_config(state: State<AppState>, path: String) -> Res<StateSnapshot> {
+fn import_avatar_config(state: State<AppState>, path: String) -> Res<(String, StateSnapshot)> {
     use ue_core::model::{AvatarConfig, AvatarExpression};
     let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
@@ -1601,8 +1620,16 @@ fn import_avatar_config(state: State<AppState>, path: String) -> Res<StateSnapsh
         None
     };
 
+    // the toolkit's config.json has no name: fall back to its folder
+    // ("avatar_config" → "avatar config"), so two different setups don't
+    // both land as "Imported avatar" and collide on re-import
+    let fallback_name = base
+        .file_name()
+        .map(|f| f.to_string_lossy().replace(['_', '-'], " "))
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "Imported avatar".to_string());
     let mut cfg = AvatarConfig::new(
-        v.get("name").and_then(|n| n.as_str()).unwrap_or("Imported avatar"),
+        v.get("name").and_then(|n| n.as_str()).unwrap_or(&fallback_name),
     );
     // our richer format first
     if let Some(list) = v.get("expressions").and_then(|e| e.as_array()) {
@@ -1651,10 +1678,15 @@ fn import_avatar_config(state: State<AppState>, path: String) -> Res<StateSnapsh
     cfg.api_base = v.get("api_base").and_then(|m| m.as_str()).unwrap_or_default().to_string();
 
     let mut store = state.store.lock().unwrap();
+    // same name → update it in place (Upsert matches on id)
+    if let Some(existing) = store.project.avatars.iter().find(|c| c.name == cfg.name) {
+        cfg.id = existing.id;
+    }
+    let id = cfg.id;
     store
         .dispatch("Import avatar", vec![ue_core::Action::UpsertAvatarConfig { config: cfg }])
         .map_err(|e| e.to_string())?;
-    Ok(snapshot(&store))
+    Ok((id.to_string(), snapshot(&store)))
 }
 
 /// Generates the avatar video in the BACKGROUND and imports it as media.

@@ -51,11 +51,17 @@ export function AvatarDialog() {
   const [draft, setDraft] = useState<AvatarConfig>(newAvatarConfig());
   const [showKey, setShowKey] = useState(false);
 
-  // load the first saved setup when the dialog opens
+  // opening loads the first saved setup (or a blank one)
   useEffect(() => {
     if (show) setDraft(saved.length ? structuredClone(saved[0]) : newAvatarConfig());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [show]);
+
+  /** Load a setup into the editor by id (after save/import it must show up). */
+  const loadById = (id: Id | null) => {
+    const found = id ? saved.find((c) => c.id === id) : undefined;
+    if (found) setDraft(structuredClone(found));
+  };
 
   if (!show) return null;
 
@@ -124,12 +130,12 @@ export function AvatarDialog() {
               }}
               title="Saved setups (stored in the project)"
             >
+              {draft.id === "" && <option value="">(unsaved: {draft.name})</option>}
               {saved.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
                 </option>
               ))}
-              {draft.id === "" && <option value="">(new)</option>}
             </select>
           )}
           <button
@@ -141,7 +147,7 @@ export function AvatarDialog() {
           </button>
           <button
             className="focus-ring rounded-md border border-line px-2 py-1 text-[11px] text-ink-dim hover:text-ink"
-            onClick={() => void importAvatarConfig()}
+            onClick={() => void importAvatarConfig().then(loadById)}
             title="Import a JSON setup (also reads the Youtubers-toolkit config.json)"
           >
             Import…
@@ -378,7 +384,7 @@ export function AvatarDialog() {
           <button
             className="focus-ring rounded-md border border-line px-3 py-1.5 text-[12px] text-ink hover:bg-bg2 disabled:opacity-40"
             disabled={draft.expressions.length === 0 || !draft.name.trim()}
-            onClick={() => void saveAvatarConfig(draft)}
+            onClick={() => void saveAvatarConfig(draft).then(loadById)}
             title="Save the setup in the project"
           >
             Save

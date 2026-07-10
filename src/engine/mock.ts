@@ -427,14 +427,15 @@ export class MockEngine implements EngineClient {
   async listAvatarConfigs(): Promise<AvatarConfig[]> {
     return this.project.avatars ?? [];
   }
-  async saveAvatarConfig(config: AvatarConfig): Promise<StateSnapshot> {
-    return this.transaction("Save avatar", () => {
+  async saveAvatarConfig(config: AvatarConfig): Promise<[Id, StateSnapshot]> {
+    const id = config.id || `av_${Math.random().toString(36).slice(2, 8)}`;
+    const snap = await this.transaction("Save avatar", () => {
       this.project.avatars = this.project.avatars ?? [];
-      const id = config.id || `av_${Math.random().toString(36).slice(2, 8)}`;
-      const idx = this.project.avatars.findIndex((c) => c.id === config.id);
+      const idx = this.project.avatars.findIndex((c) => c.id === id);
       if (idx >= 0) this.project.avatars[idx] = { ...config, id };
       else this.project.avatars.push({ ...config, id });
     });
+    return [id, snap];
   }
   async removeAvatarConfig(configId: Id): Promise<StateSnapshot> {
     return this.transaction("Delete avatar", () => {
@@ -447,7 +448,7 @@ export class MockEngine implements EngineClient {
   async exportAvatarConfig(): Promise<string> {
     throw new Error("Exporting the avatar setup requires the desktop app");
   }
-  async importAvatarConfig(): Promise<StateSnapshot> {
+  async importAvatarConfig(): Promise<[Id, StateSnapshot]> {
     throw new Error("Importing the avatar setup requires the desktop app");
   }
   async generateAvatarVideo(): Promise<void> {

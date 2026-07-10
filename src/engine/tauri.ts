@@ -313,7 +313,7 @@ export class TauriEngine implements EngineClient {
   listAvatarConfigs(): Promise<AvatarConfig[]> {
     return invoke("list_avatar_configs");
   }
-  saveAvatarConfig(config: AvatarConfig): Promise<StateSnapshot> {
+  saveAvatarConfig(config: AvatarConfig): Promise<[Id, StateSnapshot]> {
     return invoke("save_avatar_config", { config });
   }
   removeAvatarConfig(configId: Id): Promise<StateSnapshot> {
@@ -325,7 +325,7 @@ export class TauriEngine implements EngineClient {
   exportAvatarConfig(configId: Id, path: string): Promise<string> {
     return invoke("export_avatar_config", { configId, path });
   }
-  importAvatarConfig(path: string): Promise<StateSnapshot> {
+  importAvatarConfig(path: string): Promise<[Id, StateSnapshot]> {
     return invoke("import_avatar_config", { path });
   }
   generateAvatarVideo(configId: Id, driverAsset: Id): Promise<void> {

@@ -732,3 +732,52 @@ fn simulated_playback_opens_exactly_one_session() {
     assert_eq!(opens, 1, "the reopen-per-tick storm must be gone (opens={opens})");
     assert!(frames >= 20, "frames flowed continuously (frames={frames})");
 }
+
+/// Importing the same avatar setup twice must REPLACE it (same name), not
+/// pile up duplicates in the picker (field report: two "Imported avatar").
+#[test]
+fn importing_the_same_avatar_twice_replaces_it() {
+    use ue_core::model::{AvatarConfig, AvatarExpression};
+    let mut store = ue_core::ProjectStore::new(ue_core::model::Project::new("p"));
+
+    let make = |name: &str| {
+        let mut c = AvatarConfig::new(name);
+        c.expressions.push(AvatarExpression {
+            name: "calm".into(),
+            path: "/x/calm.png".into(),
+            description: String::new(),
+        });
+        c
+    };
+
+    // first import
+    let first = make("Imported avatar");
+    let first_id = first.id;
+    store
+        .dispatch("Import avatar", vec![ue_core::Action::UpsertAvatarConfig { config: first }])
+        .unwrap();
+    assert_eq!(store.project.avatars.len(), 1);
+
+    // second import of the same NAME: the command reuses the existing id
+    let mut second = make("Imported avatar");
+    if let Some(existing) = store.project.avatars.iter().find(|c| c.name == second.name) {
+        second.id = existing.id;
+    }
+    second.shake_factor = 2.5;
+    store
+        .dispatch("Import avatar", vec![ue_core::Action::UpsertAvatarConfig { config: second }])
+        .unwrap();
+
+    assert_eq!(store.project.avatars.len(), 1, "no duplicate entries");
+    assert_eq!(store.project.avatars[0].id, first_id, "same id kept");
+    assert_eq!(store.project.avatars[0].shake_factor, 2.5, "updated in place");
+
+    // a DIFFERENT name is a different setup
+    store
+        .dispatch(
+            "Import avatar",
+            vec![ue_core::Action::UpsertAvatarConfig { config: make("Other") }],
+        )
+        .unwrap();
+    assert_eq!(store.project.avatars.len(), 2);
+}
