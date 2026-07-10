@@ -770,13 +770,25 @@ fn spawn_proxy_job(app: &tauri::AppHandle, asset: &ue_core::model::MediaAsset, c
 
 #[tauri::command]
 fn playback_play(app: tauri::AppHandle, state: State<AppState>, from_us: TimeUs) -> Res<()> {
+    playback_play_impl(&state, Some(&app), from_us)
+}
+
+/// Shared by the playback_play command and the MCP debug tool.
+pub fn playback_play_impl(
+    state: &AppState,
+    app: Option<&tauri::AppHandle>,
+    from_us: TimeUs,
+) -> Res<()> {
     dlog("play", &format!("play from {:.3}s", from_us as f64 / 1e6));
-    sync_player(&state)?;
+    sync_player(state)?;
     {
         let guard = state.player.lock().unwrap();
-        guard.as_ref().unwrap().play(from_us);
+        guard.as_ref().ok_or("no player")?.play(from_us);
     }
-    start_frame_service(&app);
+    match app {
+        Some(a) => start_frame_service(a),
+        None => return Err("no app handle (headless)".into()),
+    }
     Ok(())
 }
 
@@ -1159,12 +1171,8 @@ pub(crate) fn asset_tl(
 }
 
 /// Real JPEG frame at the given time (raw bytes; empty = no signal).
-#[tauri::command]
-fn render_frame(
-    state: State<AppState>,
-    t_us: TimeUs,
-    max_width: u32,
-) -> Res<tauri::ipc::Response> {
+/// Shared by the render_frame command and the MCP debug tool.
+pub fn render_frame_impl(state: &AppState, t_us: TimeUs, max_width: u32) -> Res<Vec<u8>> {
     let (project, seq_id, base_dir) = {
         let store = state.store.lock().unwrap();
         let base = state
@@ -1200,7 +1208,16 @@ fn render_frame(
     if ms > 400 {
         dlog("frame", &format!("slow render_frame @ {:.3}s: {ms} ms", t_us as f64 / 1e6));
     }
-    Ok(tauri::ipc::Response::new(bytes))
+    Ok(bytes)
+}
+
+#[tauri::command]
+fn render_frame(
+    state: State<AppState>,
+    t_us: TimeUs,
+    max_width: u32,
+) -> Res<tauri::ipc::Response> {
+    render_frame_impl(&state, t_us, max_width).map(tauri::ipc::Response::new)
 }
 
 /// Catalog of available effects (for the UI and MCP).
@@ -2264,6 +2281,11 @@ pub fn run() {
                     eprintln!(
                         "[mcp] listening on http://127.0.0.1:{port}/mcp (token: {token})"
                     );
+                    // persist for local tooling (the server only binds loopback)
+                    if let Ok(dir) = app.path().app_config_dir() {
+                        let _ = std::fs::create_dir_all(&dir);
+                        let _ = std::fs::write(dir.join("mcp_token"), &token);
+                    }
                 }
                 None => eprintln!("[mcp] could not open port {}", mcp::MCP_PORT),
             }

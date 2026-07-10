@@ -10,7 +10,7 @@ const SEC: i64 = 1_000_000;
 
 fn rpc(state: &AppState, method: &str, params: Value) -> Value {
     let req = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
-    handle_rpc(state, &req).expect("with an id there is always a response")
+    handle_rpc(state, None, &req).expect("with an id there is always a response")
 }
 
 /// Text of the first content of a tool result, parsed as JSON.
@@ -82,7 +82,7 @@ fn initialize_and_tools_list() {
 
     // notification → no response
     let note = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
-    assert!(handle_rpc(&state, &note).is_none());
+    assert!(handle_rpc(&state, None, &note).is_none());
 
     // unknown method → JSON-RPC error
     let err = rpc(&state, "no/such/method", json!({}));

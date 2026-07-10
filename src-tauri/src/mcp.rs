@@ -117,6 +117,35 @@ fn tool_defs() -> Value {
             }
         },
         {
+            "name": "playback",
+            "description": "Drive the real player for debugging: action play (from_us), pause, or position.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["play", "pause", "position"] },
+                    "from_us": { "type": "integer" }
+                },
+                "required": ["action"]
+            }
+        },
+        {
+            "name": "debug_render_frame",
+            "description": "Render the paused-preview frame at t_us through the exact production path, write it to a temp JPEG and return {path, bytes}. For visual debugging.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "t_us": { "type": "integer" },
+                    "max_width": { "type": "integer" }
+                },
+                "required": ["t_us"]
+            }
+        },
+        {
+            "name": "debug_playback_frame",
+            "description": "Dump the CURRENT playback-stream frame buffer to a temp JPEG and return {path, bytes} (0 = empty buffer).",
+            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        },
+        {
             "name": "replace_words",
             "description": "Fix transcription errors: replaces every whole-word occurrence in a transcript (case-insensitive) with a corrected label. The audio timing is untouched; captions show the correction. Undoable.",
             "inputSchema": {
@@ -168,7 +197,7 @@ fn tool_error(msg: &str) -> Value {
     json!({ "content": [{ "type": "text", "text": msg }], "isError": true })
 }
 
-fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
+fn call_tool(state: &AppState, app: Option<&tauri::AppHandle>, name: &str, args: &Value) -> Value {
     let parse_id = |key: &str| -> Result<ue_core::model::Id, String> {
         args.get(key)
             .and_then(|v| v.as_str())
@@ -311,6 +340,65 @@ fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 Ok((n, us)) => text_result(json!({ "removed": n, "removed_us": us })),
                 Err(e) => tool_error(&e),
             }
+        }
+        "playback" => {
+            let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
+            match action {
+                "play" => {
+                    let from = args.get("from_us").and_then(|v| v.as_i64()).unwrap_or(0);
+                    match crate::playback_play_impl(state, app, from) {
+                        Ok(()) => text_result(json!({ "playing": true, "from_us": from })),
+                        Err(e) => tool_error(&e),
+                    }
+                }
+                "pause" => {
+                    crate::stop_frame_service(state);
+                    let guard = state.player.lock().unwrap();
+                    match guard.as_ref() {
+                        Some(p) => text_result(json!({ "paused_at_us": p.pause() })),
+                        None => tool_error("no player"),
+                    }
+                }
+                "position" => {
+                    let guard = state.player.lock().unwrap();
+                    match guard.as_ref() {
+                        Some(p) => text_result(
+                            json!({ "t_us": p.position_us(), "playing": p.is_playing() }),
+                        ),
+                        None => tool_error("no player"),
+                    }
+                }
+                other => tool_error(&format!("unknown action: {other}")),
+            }
+        }
+        "debug_render_frame" => {
+            let t_us = args.get("t_us").and_then(|v| v.as_i64()).unwrap_or(0);
+            let max_width =
+                args.get("max_width").and_then(|v| v.as_i64()).unwrap_or(1280) as u32;
+            match crate::render_frame_impl(state, t_us, max_width) {
+                Ok(bytes) => {
+                    let path = std::env::temp_dir().join("ue_debug_frame.jpg");
+                    let n = bytes.len();
+                    if let Err(e) = std::fs::write(&path, bytes) {
+                        return tool_error(&e.to_string());
+                    }
+                    text_result(json!({ "path": path.display().to_string(), "bytes": n }))
+                }
+                Err(e) => tool_error(&e),
+            }
+        }
+        "debug_playback_frame" => {
+            let bytes = state
+                .frames
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|f| f.latest.lock().unwrap().clone())
+                .unwrap_or_default();
+            let path = std::env::temp_dir().join("ue_debug_stream.jpg");
+            let n = bytes.len();
+            let _ = std::fs::write(&path, &bytes);
+            text_result(json!({ "path": path.display().to_string(), "bytes": n }))
         }
         "replace_words" => {
             let transcript_id = match parse_id("transcript_id") {
@@ -463,7 +551,7 @@ fn add_clip_inner(state: &AppState, asset_id: ue_core::model::Id, at_us: i64) ->
 // ---------------------------------------------------------------------------
 
 /// Processes a JSON-RPC message. `None` = notification with no response.
-pub fn handle_rpc(state: &AppState, req: &Value) -> Option<Value> {
+pub fn handle_rpc(state: &AppState, app: Option<&tauri::AppHandle>, req: &Value) -> Option<Value> {
     let method = req.get("method")?.as_str()?;
     let id = req.get("id").cloned();
     // notifications (no id) carry no response
@@ -496,7 +584,7 @@ pub fn handle_rpc(state: &AppState, req: &Value) -> Option<Value> {
             let empty = json!({});
             let args = req.pointer("/params/arguments").unwrap_or(&empty);
             ue_core::dlog("mcp", &format!("tool {name} {args}"));
-            call_tool(state, name, args)
+            call_tool(state, app, name, args)
         }
         _ => {
             return Some(json!({
@@ -539,7 +627,7 @@ pub fn start(app: tauri::AppHandle) -> Option<u16> {
                 let mut body = String::new();
                 let _ = request.as_reader().read_to_string(&mut body);
                 let response = match serde_json::from_str::<Value>(&body) {
-                    Ok(msg) => handle_rpc(&state, &msg),
+                    Ok(msg) => handle_rpc(&state, Some(&app), &msg),
                     Err(_) => Some(json!({
                         "jsonrpc": "2.0", "id": Value::Null,
                         "error": { "code": -32700, "message": "invalid JSON" }
