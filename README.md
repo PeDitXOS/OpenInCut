@@ -200,7 +200,7 @@ claude mcp add --transport http ubereditor http://127.0.0.1:4599/mcp \
   --header "Authorization: Bearer <token>"
 ```
 
-**41 tools — everything the UI can do, an agent can do**: import and transcribe media, cut, trim, move and split clips, animate transforms with keyframes, apply effects and transitions, add titles, shapes and subtitles, manage tracks and sequences, remove silences, fix transcription errors, generate the reactive avatar, render (including multi-piece exports), and save the project. Every edit an agent makes is **one** undo entry in the UI, and a call that would break the project fails without changing anything.
+**47 tools — everything the UI can do, an agent can do**: import, relink and transcribe media, cut, trim, move and split clips, animate transforms with keyframes, apply effects and transitions, add titles, shapes and subtitles, manage tracks and sequences, remove silences, fix transcription errors, generate the reactive avatar, render (including multi-piece exports), and save the project. Every edit an agent makes is **one** undo entry in the UI, and a call that would break the project fails without changing anything.
 
 There are also three debugging tools (`debug_render_frame`, `debug_playback_frame`, `playback`) that let an agent *see* what the editor is showing, so it can reproduce a visual bug instead of guessing.
 

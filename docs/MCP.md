@@ -84,7 +84,7 @@ meanwhile.
 
 ## Tools
 
-41 tools. `tools/list` carries the full schema for each, plus MCP annotations:
+47 tools. `tools/list` carries the full schema for each, plus MCP annotations:
 
 | annotation | meaning |
 |---|---|
@@ -100,7 +100,7 @@ meanwhile.
 | `get_timeline` | the full sequence: tracks → clips with payload, transform, audio, effects, transition |
 | `get_media_pool` | assets: id, path, kind, duration, probe, and whether `audio_conform`/`proxy`/`transcript` are ready |
 | `get_transcript` | words with µs timestamps, `display` overrides, segments with emotion and volume |
-| `get_catalog` | effect ids + their params, generator ids, installed font families, avatar setups, subtitle modes, transition ids |
+| `get_catalog` | effect ids + their params, generator ids, installed font families, saved text templates, avatar setups, subtitle modes, transition ids |
 
 ### Media
 
@@ -109,6 +109,11 @@ meanwhile.
 - **`transcribe_asset`** `{asset_id, model?}` → `{transcript_id, words}`.
   Word-level Whisper. Blocking. Required by `add_subtitles_clip`,
   `replace_words`, `set_word_text` and `generate_avatar_video`.
+- **`set_project_settings`** `{whisper_language?, whisper_model?}` — the
+  defaults `transcribe_asset` uses. Set the language (`es`, `en`, `auto`)
+  *before* transcribing.
+- **`relink_asset`** `{asset_id, new_path}` — repairs media flagged `offline`
+  after a project's footage moved.
 
 ### Timeline structure
 
@@ -170,7 +175,10 @@ clip. `style` is a patch too.
   mis-transcription everywhere (`godo` → `Godot`). Audio untouched; captions
   show the correction.
 - **`set_word_text`** `{transcript_id, index, text}` — one word by index.
-- **`save_avatar_config`** `{config}` → `config_id`.
+- **`save_avatar_config`** `{config}` → `config_id`; `remove_avatar_config`,
+  `import_avatar_config` (ours or a Youtubers-toolkit `config.json`; same name
+  replaces instead of duplicating) and `export_avatar_config` (**never** writes
+  the `api_key` out).
 - **`generate_avatar_video`** `{config_id, driver_asset}` → a transparent avatar
   video, imported as an asset. **The driver is the voice**: only the asset's
   transcript and audio matter, never its video. Blocking, minutes.
@@ -179,6 +187,9 @@ clip. `style` is a patch too.
 
 - `new_project`, `open_project`, `save_project` — the first two **discard the
   open project and its history**.
+- `reload_effect_packs` — re-read the user effect packs after writing a
+  manifest to disk, so an agent can extend the editor and use the new effect
+  in the same session.
 - **`export_video`** `{path, ranges?, format?, max_height?, crf?, loudnorm?}` —
   blocking. `ranges: [[start_us, end_us], …]` renders several chunks of the
   timeline concatenated **into one file**, in the order given (the "pieces"
@@ -199,6 +210,27 @@ code paths**. When something looks wrong, check the one that is actually broken:
 
 `bytes: 0` (or a suspiciously tiny JPEG) means the frame came out black. Read
 the file to *see* what the editor sees.
+
+---
+
+## What is deliberately *not* a tool
+
+The coverage test allows exactly these gaps, so the list stays honest:
+
+| Command | Why not |
+|---|---|
+| `get_state`, `ui_log`, `mcp_status` | GUI plumbing; `get_project_summary` + `get_timeline` cover the state |
+| `get_audio_peaks`, `ensure_thumbs`, `get_thumb_strip`, `playback_frame` | visual caches and binary streams for the timeline widget |
+| `pick_avatar_media` | opens a native file dialog; an agent passes paths directly |
+| `cancel_export` | `export_video` blocks the single-threaded server, so nothing could call it |
+| `add_avatar_clip` | legacy toolkit path, superseded by `save_avatar_config` → `generate_avatar_video` → `add_clip` |
+| `check_recovery`, `recover_project`, `discard_recovery` | the UI's crash-recovery prompt; they need the app's data dir |
+| `set_clip_transform/audio/effects/speed/transition`, `set_clip_text`, `set_subtitles_props`, `set_clip_generator` | folded into `set_clip_properties` / `set_clip_content` (one call, one undo) |
+| `rename_track`, `set_track_volume` | folded into `set_track_prop` |
+| `get_effects_catalog`, `get_generators`, `list_fonts`, `list_avatar_configs`, `list_text_templates` | folded into `get_catalog` |
+| `playback_play/pause/seek/position`, `render_frame` | folded into `playback` / `debug_render_frame` |
+
+Everything else registered in `invoke_handler` has a tool.
 
 ---
 

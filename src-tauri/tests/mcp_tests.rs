@@ -126,7 +126,7 @@ fn tools_cover_the_whole_editor_and_are_documented() {
         // read
         "get_project_summary", "get_timeline", "get_media_pool", "get_transcript", "get_catalog",
         // media
-        "import_media", "transcribe_asset",
+        "import_media", "transcribe_asset", "relink_asset", "set_project_settings",
         // timeline
         "add_clip", "add_text_clip", "add_generator_clip", "add_subtitles_clip",
         "split_clip", "delete_clips", "move_clip", "trim_clip", "unlink_clip",
@@ -138,13 +138,27 @@ fn tools_cover_the_whole_editor_and_are_documented() {
         "set_sequence_props", "set_active_sequence", "remove_sequence", "generate_vertical",
         // ai
         "remove_silences", "replace_words", "set_word_text",
-        "save_avatar_config", "generate_avatar_video",
+        "save_avatar_config", "remove_avatar_config",
+        "import_avatar_config", "export_avatar_config", "generate_avatar_video",
         // project / render / history
-        "new_project", "open_project", "save_project",
+        "new_project", "open_project", "save_project", "reload_effect_packs",
         "export_video", "debug_render_frame", "debug_playback_frame", "playback",
         "undo", "redo",
     ] {
         assert!(names.contains(&expected), "missing MCP tool: {expected}");
+    }
+
+    // Deliberately NOT exposed, so this list stays honest about the gap:
+    //   pick_avatar_media / ui_log / mcp_status / get_state / playback_frame /
+    //   get_audio_peaks / ensure_thumbs / get_thumb_strip  → GUI plumbing
+    //   cancel_export                                      → export_video blocks the server
+    //   add_avatar_clip                                    → legacy toolkit path,
+    //       superseded by save_avatar_config + generate_avatar_video + add_clip
+    //   check_recovery / recover_project / discard_recovery → need the AppHandle's
+    //       data dir and are the UI's crash-recovery prompt
+    // Everything else in `invoke_handler` has a tool (see docs/MCP.md).
+    for gui_only in ["ui_log", "mcp_status", "pick_avatar_media", "get_state"] {
+        assert!(!names.contains(&gui_only), "{gui_only} is GUI plumbing, not a tool");
     }
 
     // documentation is part of the contract: an agent only sees these strings
@@ -520,6 +534,120 @@ fn agentic_workflow_import_edit_export() {
     assert_eq!(duration(), 5 * SEC);
     call("undo", json!({})); // the cut
     assert_eq!(duration(), 6 * SEC, "undo restored the cut");
+}
+
+/// Avatar setups are fully manageable from MCP: create, export (without the
+/// api_key), re-import (replacing by name), delete.
+#[test]
+fn avatar_config_crud_round_trip() {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-mcp-avatar-crud");
+    std::fs::create_dir_all(&dir).unwrap();
+    let face = dir.join("calm.png");
+    std::fs::write(&face, b"not really a png, but it exists").unwrap();
+
+    let state = AppState::new_default();
+    let call = |name: &str, arguments: Value| -> Value {
+        let resp = rpc(&state, "tools/call", json!({ "name": name, "arguments": arguments }));
+        assert!(
+            resp.pointer("/result/isError").is_none(),
+            "{name} failed: {}",
+            resp.pointer("/result/content/0/text").unwrap_or(&Value::Null)
+        );
+        tool_json(&resp)
+    };
+
+    let created = call(
+        "save_avatar_config",
+        json!({ "config": {
+            "name": "Presenter",
+            "expressions": [{ "name": "calm", "path": face.to_string_lossy(), "description": "neutral" }],
+            "api_key": "sk-secret-do-not-leak",
+            "model": "gpt-4o-mini"
+        }}),
+    );
+    let config_id = created["config_id"].as_str().unwrap().to_string();
+
+    // it shows up in the catalog an agent reads
+    let cat = call("get_catalog", json!({}));
+    assert_eq!(cat["avatar_setups"][0]["name"], "Presenter");
+
+    // exporting must never write the api_key out
+    let out = dir.join("avatar.json");
+    call("export_avatar_config", json!({ "config_id": config_id, "path": out.to_string_lossy() }));
+    let written = std::fs::read_to_string(&out).unwrap();
+    assert!(!written.contains("sk-secret-do-not-leak"), "the api key leaked into the export");
+    assert!(written.contains("Presenter"));
+
+    // re-importing the same name replaces it instead of duplicating
+    let reimported = call("import_avatar_config", json!({ "path": out.to_string_lossy() }));
+    assert_eq!(reimported["config_id"], config_id, "same name → same setup");
+    assert_eq!(state.store.lock().unwrap().project.avatars.len(), 1, "no duplicate");
+
+    // and it can be deleted (undoably)
+    call("remove_avatar_config", json!({ "config_id": config_id }));
+    assert!(state.store.lock().unwrap().project.avatars.is_empty());
+    call("undo", json!({}));
+    assert_eq!(state.store.lock().unwrap().project.avatars.len(), 1, "undo restores the setup");
+}
+
+/// Relinking repairs an offline asset: new path, re-probe, back online.
+#[test]
+fn relink_asset_brings_media_back_online() {
+    let (state, _clip) = state_with_clip();
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-mcp-relink");
+    std::fs::create_dir_all(&dir).unwrap();
+    let real = dir.join("moved.mp4");
+    std::fs::write(&real, b"pretend this is a video").unwrap();
+
+    let asset_id = {
+        let mut store = state.store.lock().unwrap();
+        store.project.assets[0].offline = true;
+        store.project.assets[0].id
+    };
+
+    // a path that does not exist fails, and changes nothing
+    let bad = rpc(
+        &state,
+        "tools/call",
+        json!({ "name": "relink_asset", "arguments": {
+            "asset_id": asset_id.to_string(), "new_path": "/nope/missing.mp4"
+        }}),
+    );
+    assert_eq!(bad.pointer("/result/isError").unwrap(), true);
+    assert!(state.store.lock().unwrap().project.assets[0].offline, "still offline");
+
+    // import_file probes with ffprobe; without ffmpeg there is nothing to relink to
+    let ff_ok = std::process::Command::new(ue_media::ffmpeg_bin())
+        .arg("-version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !ff_ok {
+        eprintln!("NOTE: no ffmpeg; the success half is skipped");
+        return;
+    }
+    // a real, probeable file
+    let src = dir.join("real.mp4");
+    if !src.exists() {
+        let st = std::process::Command::new(ue_media::ffmpeg_bin())
+            .args(["-y", "-v", "error", "-f", "lavfi", "-i", "testsrc=duration=1:size=64x64:rate=10"])
+            .args(["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"])
+            .arg(&src)
+            .status()
+            .unwrap();
+        assert!(st.success());
+    }
+    let ok = rpc(
+        &state,
+        "tools/call",
+        json!({ "name": "relink_asset", "arguments": {
+            "asset_id": asset_id.to_string(), "new_path": src.to_string_lossy()
+        }}),
+    );
+    assert!(ok.pointer("/result/isError").is_none(), "{ok}");
+    let store = state.store.lock().unwrap();
+    assert!(!store.project.assets[0].offline, "back online");
+    assert_eq!(store.project.assets[0].path, src.to_string_lossy());
 }
 
 /// The server is loopback-only AND token-gated: no header, a wrong token, or
@@ -1226,4 +1354,13 @@ fn importing_the_same_avatar_twice_replaces_it() {
         )
         .unwrap();
     assert_eq!(store.project.avatars.len(), 2);
+}
+
+/// The advertised tool count in the docs must match reality.
+#[test]
+fn tool_count_matches_the_docs() {
+    let state = AppState::new_default();
+    let tools = rpc(&state, "tools/list", json!({}));
+    let n = tools.pointer("/result/tools").unwrap().as_array().unwrap().len();
+    assert_eq!(n, 47, "README/docs/MCP.md advertise the tool count; update them");
 }

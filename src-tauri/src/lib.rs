@@ -63,7 +63,7 @@ impl AppState {
 
 /// Reloads the user packs from disk and rebuilds the registry.
 /// Returns errors from invalid manifests (they break nothing).
-fn reload_packs(state: &AppState) -> Vec<String> {
+pub(crate) fn reload_packs(state: &AppState) -> Vec<String> {
     let dir = state.effects_dir.lock().unwrap().clone();
     let (user, errors) = match dir {
         Some(d) => ue_render::load_packs_from_dir(&d),
@@ -399,18 +399,31 @@ fn parse_id(s: &str) -> Result<Id, String> {
 
 type Res<T> = Result<T, String>;
 
+/// Transcription defaults. Not undoable (settings, not an edit).
+pub(crate) fn set_project_settings_impl(
+    state: &AppState,
+    whisper_language: Option<String>,
+    whisper_model: Option<String>,
+) {
+    let mut store = state.store.lock().unwrap();
+    if let Some(lang) = whisper_language {
+        store.project.settings.whisper_language = lang;
+    }
+    if let Some(model) = whisper_model {
+        store.project.settings.whisper_model = model;
+    }
+    store.version += 1;
+    store.dirty = true;
+}
+
 #[tauri::command]
 fn set_project_settings(
     state: State<AppState>,
     whisper_language: String,
     whisper_model: String,
 ) -> Res<StateSnapshot> {
-    let mut store = state.store.lock().unwrap();
-    store.project.settings.whisper_language = whisper_language;
-    store.project.settings.whisper_model = whisper_model;
-    store.version += 1;
-    store.dirty = true;
-    Ok(snapshot(&store))
+    set_project_settings_impl(&state, Some(whisper_language), Some(whisper_model));
+    Ok(snapshot(&state.store.lock().unwrap()))
 }
 
 /// Frontend log bridge: UI errors/warnings become terminal lines so the
@@ -494,14 +507,18 @@ fn templates_path(state: &AppState) -> Option<PathBuf> {
     })
 }
 
+/// Saved title templates (name → style). An empty object when there are none.
+pub(crate) fn text_templates(state: &AppState) -> serde_json::Value {
+    templates_path(state)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
 /// Saved title templates (name → style).
 #[tauri::command]
 fn list_text_templates(state: State<AppState>) -> Res<serde_json::Value> {
-    let Some(path) = templates_path(&state) else { return Ok(serde_json::json!({})) };
-    match std::fs::read_to_string(path) {
-        Ok(s) => serde_json::from_str(&s).map_err(|e| e.to_string()),
-        Err(_) => Ok(serde_json::json!({})),
-    }
+    Ok(text_templates(&state))
 }
 
 #[tauri::command]
@@ -1629,9 +1646,9 @@ async fn pick_avatar_media(app: tauri::AppHandle) -> Res<Vec<String>> {
 
 /// Export an avatar setup as a standalone JSON (toolkit-compatible shape,
 /// plus our extra fields). The API key is NEVER written to the file.
-#[tauri::command]
-fn export_avatar_config(state: State<AppState>, config_id: String, path: String) -> Res<String> {
-    let id = parse_id(&config_id)?;
+/// Writes an avatar setup to a shareable JSON. The `api_key` is deliberately
+/// NOT serialized: a setup can be shared without leaking the user's key.
+pub(crate) fn export_avatar_config_impl(state: &AppState, id: Id, path: &str) -> Res<String> {
     let store = state.store.lock().unwrap();
     let cfg = store
         .project
@@ -1648,21 +1665,25 @@ fn export_avatar_config(state: State<AppState>, config_id: String, path: String)
         "model": cfg.model,
         "api_base": cfg.api_base,
     });
-    std::fs::write(&path, serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?)
+    std::fs::write(path, serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
-    Ok(path)
+    Ok(path.to_string())
+}
+
+#[tauri::command]
+fn export_avatar_config(state: State<AppState>, config_id: String, path: String) -> Res<String> {
+    export_avatar_config_impl(&state, parse_id(&config_id)?, &path)
 }
 
 /// Import an avatar setup from JSON: ours or the toolkit's config.json.
 /// Imports an avatar setup. Returns the id of the setup so the UI can select
 /// it. Re-importing a setup with the same NAME replaces it instead of piling
 /// up duplicates.
-#[tauri::command]
-fn import_avatar_config(state: State<AppState>, path: String) -> Res<(String, StateSnapshot)> {
+pub(crate) fn import_avatar_config_impl(state: &AppState, path: &str) -> Res<Id> {
     use ue_core::model::{AvatarConfig, AvatarExpression};
-    let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let raw = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-    let base = Path::new(&path).parent().unwrap_or(Path::new("."));
+    let base = Path::new(path).parent().unwrap_or(Path::new("."));
     let resolve = |p: &str| -> Option<String> {
         let pp = Path::new(p);
         for cand in [pp.to_path_buf(), base.join(pp), base.join(pp.file_name()?)] {
@@ -1739,7 +1760,16 @@ fn import_avatar_config(state: State<AppState>, path: String) -> Res<(String, St
     store
         .dispatch("Import avatar", vec![ue_core::Action::UpsertAvatarConfig { config: cfg }])
         .map_err(|e| e.to_string())?;
-    Ok((id.to_string(), snapshot(&store)))
+    Ok(id)
+}
+
+/// Import an avatar setup from JSON: ours or the toolkit's config.json.
+/// Returns the id of the setup so the UI can select it. Re-importing a setup
+/// with the same NAME replaces it instead of piling up duplicates.
+#[tauri::command]
+fn import_avatar_config(state: State<AppState>, path: String) -> Res<(String, StateSnapshot)> {
+    let id = import_avatar_config_impl(&state, &path)?;
+    Ok((id.to_string(), snapshot(&state.store.lock().unwrap())))
 }
 
 /// Renders the avatar video on the CALLING thread and imports it as media.
@@ -2705,15 +2735,13 @@ fn open_project(
     Ok(snapshot(&state.store.lock().unwrap()))
 }
 
-/// Relinks an offline media: new path, re-probe and conform.
-#[tauri::command]
-fn relink_asset(
-    app: tauri::AppHandle,
-    state: State<AppState>,
-    asset_id: String,
+/// Relinks an offline media: new path, re-probe and conform. Not undoable.
+pub(crate) fn relink_asset_impl(
+    app: Option<&tauri::AppHandle>,
+    state: &AppState,
+    id: Id,
     new_path: String,
-) -> Res<StateSnapshot> {
-    let id = parse_id(&asset_id)?;
+) -> Res<()> {
     let fresh = ue_media::import_file(Path::new(&new_path)).map_err(|e| e.to_string())?;
     let cache_dir = state.cache_dir.lock().unwrap().clone();
     let mut store = state.store.lock().unwrap();
@@ -2730,15 +2758,26 @@ fn relink_asset(
     asset.audio_conform = None;
     asset.proxy = None;
     let asset_snapshot = asset.clone();
-    if let Some(cache) = &cache_dir {
+    if let (Some(app), Some(cache)) = (app, &cache_dir) {
         if asset_snapshot.probe.audio_channels > 0 {
-            spawn_conform_job(&app, &asset_snapshot, cache);
+            spawn_conform_job(app, &asset_snapshot, cache);
         }
-        spawn_proxy_job(&app, &asset_snapshot, cache);
+        spawn_proxy_job(app, &asset_snapshot, cache);
     }
     store.version += 1;
     store.dirty = true;
-    Ok(snapshot(&store))
+    Ok(())
+}
+
+#[tauri::command]
+fn relink_asset(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    asset_id: String,
+    new_path: String,
+) -> Res<StateSnapshot> {
+    relink_asset_impl(Some(&app), &state, parse_id(&asset_id)?, new_path)?;
+    Ok(snapshot(&state.store.lock().unwrap()))
 }
 
 /// Replaces the in-memory project with an empty one. DESTRUCTIVE: unsaved

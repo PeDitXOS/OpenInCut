@@ -212,6 +212,29 @@ fn tool_defs() -> Value {
             }),
             &["asset_id"], Kind::Destructive,
         ),
+        tool(
+            "relink_asset",
+            "Points an asset at a new file. This is the fix for media flagged \
+             `offline` after opening a project whose footage moved. Re-probes the \
+             file and rebuilds its proxy and audio conform in the background. \
+             Not undoable.",
+            json!({
+                "asset_id": str_("asset id (from get_media_pool)"),
+                "new_path": str_("absolute path to the file"),
+            }),
+            &["asset_id", "new_path"], Kind::Destructive,
+        ),
+        tool(
+            "set_project_settings",
+            "Transcription defaults used by transcribe_asset when it is not given \
+             a model. Set the language BEFORE transcribing: 'auto' detects it, \
+             otherwise pass a code like 'es' or 'en'. Not undoable.",
+            json!({
+                "whisper_language": str_("'auto' or a language code ('es', 'en', …)"),
+                "whisper_model": str_("default ggml model, e.g. 'base', 'small', 'medium'"),
+            }),
+            &[], Kind::Destructive,
+        ),
 
         // ------------------------------------------------------------ timeline
         tool(
@@ -585,6 +608,32 @@ fn tool_defs() -> Value {
             &["config"], Kind::Edit,
         ),
         tool(
+            "remove_avatar_config",
+            "Deletes an avatar setup from the project. The videos it already \
+             generated stay in the media pool.",
+            json!({ "config_id": str_("avatar setup id") }),
+            &["config_id"], Kind::Edit,
+        ),
+        tool(
+            "import_avatar_config",
+            "Loads an avatar setup from a JSON file — ours, or a Youtubers-toolkit \
+             `config.json` ({\"avatars\": {emotion: path}}). Expression paths \
+             resolve relative to the file. Re-importing a setup with the same name \
+             replaces it instead of duplicating it. Returns its id.",
+            json!({ "path": str_("absolute path to the JSON file") }),
+            &["path"], Kind::Edit,
+        ),
+        tool(
+            "export_avatar_config",
+            "Writes an avatar setup to a shareable JSON file. The api_key is NEVER \
+             written out.",
+            json!({
+                "config_id": str_("avatar setup id"),
+                "path": str_("absolute output path (.json)"),
+            }),
+            &["config_id", "path"], Kind::Destructive,
+        ),
+        tool(
             "generate_avatar_video",
             "Renders a transparent avatar video driven by an asset's VOICE: each \
              transcript segment is classified into one of the avatar's \
@@ -598,6 +647,14 @@ fn tool_defs() -> Value {
                 "driver_asset": str_("asset id of the VOICE; must be transcribed"),
             }),
             &["config_id", "driver_asset"], Kind::Destructive,
+        ),
+        tool(
+            "reload_effect_packs",
+            "Re-reads the user effect packs from the effects folder and rebuilds \
+             the catalog. Call it after writing a new pack manifest to disk; \
+             returns the folder and any manifest errors (a bad manifest is \
+             skipped, never fatal).",
+            json!({}), &[], Kind::Edit,
         ),
 
         // ------------------------------------------------------------- project
@@ -670,10 +727,11 @@ fn tool_defs() -> Value {
         tool(
             "playback",
             "Drives the real player, so you can reproduce what the user sees: \
-             `play` (from from_us), `pause`, or `position` (where it is now).",
+             `play` (from from_us), `pause`, `seek` (move the playhead to from_us \
+             without playing), or `position` (where it is now).",
             json!({
-                "action": { "type": "string", "enum": ["play", "pause", "position"] },
-                "from_us": int("play: where to start, in µs (default 0)"),
+                "action": { "type": "string", "enum": ["play", "pause", "seek", "position"] },
+                "from_us": int("play/seek: the target time in µs (default 0)"),
             }),
             &["action"], Kind::Edit,
         ),
@@ -904,6 +962,21 @@ fn call_tool(state: &AppState, app: Option<&tauri::AppHandle>, name: &str, raw: 
             let (transcript_id, words) = crate::transcribe_blocking(state, asset_id, model)?;
             Ok(json!({ "transcript_id": transcript_id.to_string(), "words": words }))
         })()),
+        "relink_asset" => finish((|| {
+            let asset_id = args.id("asset_id")?;
+            let new_path = args.str("new_path")?.to_string();
+            crate::relink_asset_impl(app, state, asset_id, new_path)?;
+            Ok(json!({ "ok": true }))
+        })()),
+        "set_project_settings" => finish((|| {
+            let lang = args.get("whisper_language").and_then(|v| v.as_str()).map(str::to_string);
+            let model = args.get("whisper_model").and_then(|v| v.as_str()).map(str::to_string);
+            if lang.is_none() && model.is_none() {
+                return Err("pass whisper_language and/or whisper_model".into());
+            }
+            crate::set_project_settings_impl(state, lang, model);
+            Ok(json!({ "ok": true }))
+        })()),
 
         // ------------------------------------------------------------ timeline
         "add_clip" => finish((|| {
@@ -1108,6 +1181,25 @@ fn call_tool(state: &AppState, app: Option<&tauri::AppHandle>, name: &str, raw: 
             let id = crate::save_avatar_config_impl(state, config)?;
             Ok(json!({ "config_id": id.to_string() }))
         })()),
+        "remove_avatar_config" => finish((|| {
+            let config_id = args.id("config_id")?;
+            state
+                .store
+                .lock()
+                .unwrap()
+                .dispatch("Delete avatar", vec![ue_core::Action::RemoveAvatarConfig { config_id }])
+                .map_err(|e| e.to_string())?;
+            Ok(json!({ "ok": true }))
+        })()),
+        "import_avatar_config" => finish((|| {
+            let id = crate::import_avatar_config_impl(state, args.str("path")?)?;
+            Ok(json!({ "config_id": id.to_string() }))
+        })()),
+        "export_avatar_config" => finish((|| {
+            let config_id = args.id("config_id")?;
+            let path = crate::export_avatar_config_impl(state, config_id, args.str("path")?)?;
+            Ok(json!({ "path": path }))
+        })()),
         "generate_avatar_video" => finish((|| {
             let config_id = args.id("config_id")?;
             let driver_asset = args.id("driver_asset")?;
@@ -1117,6 +1209,14 @@ fn call_tool(state: &AppState, app: Option<&tauri::AppHandle>, name: &str, raw: 
                 })?;
             Ok(json!({ "asset_id": asset_id.to_string() }))
         })()),
+        "reload_effect_packs" => {
+            let errors = crate::reload_packs(state);
+            text_result(json!({
+                "effects": ue_render::catalog_json(&state.registry.lock().unwrap()),
+                "errors": errors,
+                "dir": state.effects_dir.lock().unwrap().as_ref().map(|d| d.display().to_string()),
+            }))
+        }
 
         // ------------------------------------------------------------- project
         "new_project" => finish((|| {
@@ -1259,6 +1359,7 @@ fn get_catalog(state: &AppState) -> Result<Value, String> {
                 "name": e.name, "path": e.path, "description": e.description,
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
+        "text_templates": crate::text_templates(state),
         "subtitle_modes": ["phrase", "word", "karaoke"],
         "transitions": ["core.crossfade"],
     }))
@@ -1617,6 +1718,10 @@ fn export_video(state: &AppState, args: &Args) -> Result<Value, String> {
     Ok(json!({ "path": path, "pieces": pieces }))
 }
 
+/// The player is created lazily on the first `play`, so pause/seek/position
+/// before that have nothing to talk to.
+const NO_PLAYER: &str = "no player yet: call playback {\"action\":\"play\"} first";
+
 fn playback(
     state: &AppState,
     app: Option<&tauri::AppHandle>,
@@ -1631,15 +1736,22 @@ fn playback(
         "pause" => {
             crate::stop_frame_service(state);
             let guard = state.player.lock().unwrap();
-            let p = guard.as_ref().ok_or("no player")?;
+            let p = guard.as_ref().ok_or(NO_PLAYER)?;
             Ok(json!({ "paused_at_us": p.pause() }))
+        }
+        "seek" => {
+            let to = args.i64_or("from_us", 0);
+            let guard = state.player.lock().unwrap();
+            let p = guard.as_ref().ok_or(NO_PLAYER)?;
+            p.seek(to);
+            Ok(json!({ "t_us": to }))
         }
         "position" => {
             let guard = state.player.lock().unwrap();
-            let p = guard.as_ref().ok_or("no player")?;
+            let p = guard.as_ref().ok_or(NO_PLAYER)?;
             Ok(json!({ "t_us": p.position_us(), "playing": p.is_playing() }))
         }
-        other => Err(format!("unknown action: {other} (play|pause|position)")),
+        other => Err(format!("unknown action: {other} (play|pause|seek|position)")),
     }
 }
 
