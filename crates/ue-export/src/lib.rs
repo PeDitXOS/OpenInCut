@@ -58,7 +58,12 @@ pub struct ExportSettings {
     /// R128 loudness normalization (loudnorm -14 LUFS) at the end of the master.
     pub loudnorm: bool,
     /// Export only [in, out) of the timeline (µs). None = everything.
+    /// Shorthand for a single-entry `ranges`.
     pub range: Option<(ue_core::TimeUs, ue_core::TimeUs)>,
+    /// Export SEVERAL pieces concatenated in order (µs). Overrides `range`.
+    /// Empty = unused. Each piece is trimmed from the finished master, so
+    /// transitions, overlays and audio stay exactly as previewed.
+    pub ranges: Vec<(ue_core::TimeUs, ue_core::TimeUs)>,
     /// User effect packs (merged on top of the core ones).
     pub extra_packs: Vec<ue_render::EffectDef>,
 }
@@ -73,6 +78,7 @@ impl Default for ExportSettings {
             audio_bitrate_k: 256,
             loudnorm: false,
             range: None,
+            ranges: vec![],
             extra_packs: vec![],
         }
     }

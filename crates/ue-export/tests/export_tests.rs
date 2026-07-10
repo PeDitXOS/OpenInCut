@@ -1818,3 +1818,117 @@ fn position_offset_does_not_change_apparent_size() {
     let (r, _g, _b) = pixel_at(&out, 1.0, 960, 100);
     assert!(r > 180, "vertical extent fills the canvas too, got r={r}");
 }
+
+/// Paused preview at a FRACTIONAL seek time with a position transform must
+/// not be black. Field bug: -ss lands between keyframes so the fg PTS is
+/// large while the canvas `color` source starts at 0 → overlay emitted only
+/// the background. clip_vf_sampled rebases the fg PTS (single-frame path).
+#[test]
+fn paused_frame_with_position_is_not_black_at_fractional_seeks() {
+    let Some(dir) = media_dir() else { return };
+    let src = dir.join("gop_video.mp4"); // short GOP, like the app's proxies
+    if !src.exists() {
+        let st = Command::new(ue_media::ffmpeg_bin())
+            .args(["-y", "-v", "error", "-f", "lavfi", "-i",
+                   "testsrc=duration=25:size=640x360:rate=30"])
+            .args(["-c:v", "libx264", "-preset", "ultrafast", "-g", "12", "-pix_fmt", "yuv420p"])
+            .arg(&src)
+            .status()
+            .unwrap();
+        assert!(st.success());
+    }
+
+    let mut project = Project::new("paused-black");
+    let seq_id = project.active_sequence;
+    let asset = ue_media::import_file(&src).unwrap();
+    let aid = asset.id;
+    project.assets.push(asset);
+    let v1 = project
+        .sequence(seq_id)
+        .unwrap()
+        .tracks
+        .iter()
+        .find(|t| t.kind == TrackKind::Video)
+        .unwrap()
+        .id;
+    let mut store = ProjectStore::new(project);
+    let mut clip = Clip::new_media(aid, 0, 20 * SEC, 0);
+    clip.transform.position.0 = 454.0.into(); // his exact value
+    store.insert_clip(v1, clip, InsertMode::Strict).unwrap();
+    let dur = store.project.sequence(seq_id).unwrap().tracks
+        .iter().find(|t| t.id == v1).unwrap().clips[0].duration;
+    assert_eq!(dur, 20 * SEC, "clip inserted with the expected duration");
+
+    let reg = ue_render::core_registry();
+    // the exact times his app rendered black
+    for t_us in [12_400_000i64, 15_154_000, 19_115_000] {
+        let r = ue_media::frame::resolve_top_video(&store.project, seq_id, t_us).unwrap();
+        let vf = ue_render::clip_vf_sampled(
+            &reg,
+            &r.effects,
+            &r.transform,
+            Some((1920, 1080)),
+            r.clip_rel_us,
+        );
+        let bytes =
+            ue_media::frame::render_frame(&store.project, seq_id, t_us, 1280, dir, vf.as_deref())
+                .unwrap()
+                .expect("a frame");
+        assert!(
+            bytes.len() > 20_000,
+            "paused frame at {:.3}s is essentially black ({} bytes)",
+            t_us as f64 / 1e6,
+            bytes.len()
+        );
+    }
+}
+
+/// Multi-range export: several pieces of the finished master, concatenated
+/// in order, with audio. Duration = sum of the pieces, and the content of
+/// each piece matches the corresponding master time (burned counter check).
+#[test]
+fn multi_range_export_concatenates_pieces() {
+    let Some(dir) = media_dir() else { return };
+    let (store, seq_id) = simple_store(dir); // counter.mp4, 4 s, with audio
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-multi-range.mp4");
+    let settings = ExportSettings {
+        ranges: vec![(0, 1 * SEC), (2 * SEC, 3 * SEC), (3 * SEC, 4 * SEC)],
+        ..Default::default()
+    };
+    export_sequence(&store.project, seq_id, dir, &out, &settings).unwrap();
+
+    let meta = ffprobe_json(&out);
+    let dur: f64 = meta["format"]["duration"].as_str().unwrap().parse().unwrap();
+    assert!((2.9..=3.2).contains(&dur), "3 pieces of 1 s each, got {dur}");
+    let streams = meta["streams"].as_array().unwrap();
+    assert!(streams.iter().any(|s| s["codec_type"] == "audio"), "audio survived the concat");
+    assert!(streams.iter().any(|s| s["codec_type"] == "video"));
+
+    // the second output second must show master t≈2s, not t≈1s
+    let frames_dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-multi-range-frames");
+    std::fs::create_dir_all(&frames_dir).unwrap();
+    for (name, t) in [("piece1_0.5s", 0.5f64), ("piece2_1.5s", 1.5), ("piece3_2.5s", 2.5)] {
+        let st = Command::new(ue_media::ffmpeg_bin())
+            .args(["-y", "-v", "error", "-ss", &t.to_string(), "-i"])
+            .arg(&out)
+            .args(["-frames:v", "1"])
+            .arg(frames_dir.join(format!("{name}.jpg")))
+            .status()
+            .unwrap();
+        assert!(st.success());
+    }
+    eprintln!("multi-range frames in {}", frames_dir.display());
+}
+
+/// A single entry in `ranges` behaves exactly like the `range` shorthand.
+#[test]
+fn single_range_in_ranges_matches_shorthand() {
+    let Some(dir) = media_dir() else { return };
+    let (store, seq_id) = simple_store(dir);
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-one-of-ranges.mp4");
+    let settings = ExportSettings { ranges: vec![(1 * SEC, 3 * SEC)], ..Default::default() };
+    export_sequence(&store.project, seq_id, dir, &out, &settings).unwrap();
+    let meta = ffprobe_json(&out);
+    let dur: f64 = meta["format"]["duration"].as_str().unwrap().parse().unwrap();
+    assert!((1.9..=2.2).contains(&dur), "2 s piece, got {dur}");
+}

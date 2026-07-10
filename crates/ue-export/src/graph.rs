@@ -1180,26 +1180,63 @@ pub fn build_ffmpeg_args(
     let mut vlabel = "[vout]".to_string();
     let mut alabel = "[aout]".to_string();
     let mut duration_us = total_us;
-    if let Some((r_in, r_out)) = settings.range {
-        let a = r_in.clamp(0, total_us);
-        let b = r_out.clamp(a, total_us);
-        if b > a {
-            fc.push(format!(
-                "[vout]trim=start={}:end={},setpts=PTS-STARTPTS[voutr]",
-                secs(a),
-                secs(b)
-            ));
-            vlabel = "[voutr]".into();
-            if has_audio && !is_gif {
-                fc.push(format!(
-                    "[aout]atrim=start={}:end={},asetpts=PTS-STARTPTS[aoutr]",
-                    secs(a),
-                    secs(b)
-                ));
-                alabel = "[aoutr]".into();
+    // normalize the requested pieces: `ranges` wins over the `range` shorthand
+    let requested: Vec<(TimeUs, TimeUs)> = if !settings.ranges.is_empty() {
+        settings.ranges.clone()
+    } else {
+        settings.range.into_iter().collect()
+    };
+    let pieces: Vec<(TimeUs, TimeUs)> = requested
+        .iter()
+        .map(|&(a, b)| (a.clamp(0, total_us), b.clamp(0, total_us)))
+        .filter(|(a, b)| b > a)
+        .collect();
+    if !pieces.is_empty() {
+        let want_audio = has_audio && !is_gif;
+        let n = pieces.len();
+        // the master is consumed once per piece → split it first
+        if n > 1 {
+            let vs: String = (0..n).map(|i| format!("[vs{i}]")).collect();
+            fc.push(format!("[vout]split={n}{vs}"));
+            if want_audio {
+                let as_: String = (0..n).map(|i| format!("[as{i}]")).collect();
+                fc.push(format!("[aout]asplit={n}{as_}"));
             }
-            duration_us = b - a;
         }
+        for (i, (a, b)) in pieces.iter().enumerate() {
+            let vsrc = if n > 1 { format!("[vs{i}]") } else { "[vout]".to_string() };
+            fc.push(format!(
+                "{vsrc}trim=start={}:end={},setpts=PTS-STARTPTS[vp{i}]",
+                secs(*a),
+                secs(*b)
+            ));
+            if want_audio {
+                let asrc = if n > 1 { format!("[as{i}]") } else { "[aout]".to_string() };
+                fc.push(format!(
+                    "{asrc}atrim=start={}:end={},asetpts=PTS-STARTPTS[ap{i}]",
+                    secs(*a),
+                    secs(*b)
+                ));
+            }
+        }
+        if n == 1 {
+            vlabel = "[vp0]".into();
+            if want_audio {
+                alabel = "[ap0]".into();
+            }
+        } else {
+            let inputs: String = (0..n)
+                .map(|i| if want_audio { format!("[vp{i}][ap{i}]") } else { format!("[vp{i}]") })
+                .collect();
+            let a_flag = u8::from(want_audio);
+            let outs = if want_audio { "[vcat][acat]" } else { "[vcat]" };
+            fc.push(format!("{inputs}concat=n={n}:v=1:a={a_flag}{outs}"));
+            vlabel = "[vcat]".into();
+            if want_audio {
+                alabel = "[acat]".into();
+            }
+        }
+        duration_us = pieces.iter().map(|(a, b)| b - a).sum();
     }
 
     // ---- GIF: optimized palette over the already-trimmed master ----

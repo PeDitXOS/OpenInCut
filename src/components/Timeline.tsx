@@ -120,6 +120,7 @@ function drawRuler(
   view: View,
   project: Project,
   range: [number | null, number | null],
+  pieces: [number, number][],
 ) {
   ctx.fillStyle = "#161412";
   ctx.fillRect(0, 0, w, RULER_H);
@@ -152,6 +153,24 @@ function drawRuler(
   }
 
   // working range band I-O
+  // saved export pieces (rendered concatenated, in order)
+  pieces.forEach(([a, b], i) => {
+    const x0 = usToX(a);
+    const x1 = usToX(b);
+    if (x1 < -10 || x0 > w + 10) return;
+    ctx.fillStyle = "rgba(70, 167, 88, 0.22)";
+    ctx.fillRect(x0, 0, Math.max(2, x1 - x0), RULER_H - 1);
+    ctx.fillStyle = "#46a758";
+    ctx.fillRect(x0, 0, 2, RULER_H - 1);
+    ctx.fillRect(x1 - 2, 0, 2, RULER_H - 1);
+    if (x1 - x0 > 18) {
+      ctx.font = '600 9px "JetBrains Mono", monospace';
+      ctx.textAlign = "left";
+      ctx.textBaseline = "top";
+      ctx.fillText(`${i + 1}`, x0 + 4, 2);
+    }
+  });
+
   const [rin, rout] = range;
   if (rin != null || rout != null) {
     const a = usToX(rin ?? view.viewStartUs);
@@ -420,6 +439,7 @@ function drawTimeline(
   playheadUs: number,
   ghost: DragGhost | null,
   range: [number | null, number | null],
+  pieces: [number, number][],
 ) {
   ctx.clearRect(0, 0, w, h);
   ctx.fillStyle = COLORS.bg;
@@ -440,7 +460,7 @@ function drawTimeline(
     }
   });
 
-  drawRuler(ctx, w, view, project, range);
+  drawRuler(ctx, w, view, project, range, pieces);
 
   // clips
   tracks.forEach((t, i) => {
@@ -668,6 +688,8 @@ export function Timeline() {
   const removeSequence = useStore((s) => s.removeSequence);
   const rangeInUs = useStore((s) => s.rangeInUs);
   const rangeOutUs = useStore((s) => s.rangeOutUs);
+  const exportRanges = useStore((s) => s.exportRanges);
+  const addExportRange = useStore((s) => s.addExportRange);
   const visualsBump = useStore((s) => s.visualsBump);
 
   // follow the playhead during playback
@@ -711,8 +733,9 @@ export function Timeline() {
       playheadUs,
       ghost,
       [rangeInUs, rangeOutUs],
+      exportRanges,
     );
-  }, [project, version, selection, playheadUs, viewStartUs, pxPerSec, size, ghost, rangeInUs, rangeOutUs, visualsBump]);
+  }, [project, version, selection, playheadUs, viewStartUs, pxPerSec, size, ghost, rangeInUs, rangeOutUs, visualsBump, exportRanges]);
 
   useEffect(() => {
     requestVisuals(project);
@@ -980,6 +1003,13 @@ export function Timeline() {
           title="Generate a vertical copy (1080x1920) with a blurred background (Shorts/Reels)"
         >
           📱 Vertical
+        </button>
+        <button
+          className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
+          onClick={() => addExportRange()}
+          title="Save the I–O range as an export piece (P) — several pieces render concatenated"
+        >
+          + Piece{exportRanges.length > 0 ? ` (${exportRanges.length})` : ""}
         </button>
         <button
           className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"

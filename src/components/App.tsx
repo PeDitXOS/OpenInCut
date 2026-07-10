@@ -58,6 +58,8 @@ function useKeyboard() {
         s.setRangeIn(Math.round(s.playheadUs));
       } else if (e.key.toLowerCase() === "o" && !mod) {
         s.setRangeOut(Math.round(s.playheadUs));
+      } else if (e.key.toLowerCase() === "p" && !mod) {
+        s.addExportRange();
       } else if (e.key.toLowerCase() === "x" && e.shiftKey) {
         s.setRangeIn(null);
         s.setRangeOut(null);

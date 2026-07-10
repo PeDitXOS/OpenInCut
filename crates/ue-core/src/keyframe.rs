@@ -44,6 +44,28 @@ pub enum Param {
 }
 
 impl Param {
+    /// Curves must be strictly increasing in `t` (a project invariant).
+    /// UI gestures (dragging a key past/onto another) can emit unsorted or
+    /// duplicated keys, so every write path sanitizes: sort by t, keep the
+    /// LAST value for duplicate times, and collapse ≤1 key to a constant.
+    pub fn sanitized(self) -> Param {
+        let Param::Curve(mut c) = self else { return self };
+        c.keys.sort_by_key(|k| k.t);
+        c.keys.dedup_by(|newer, older| {
+            if newer.t == older.t {
+                *older = newer.clone(); // later entry wins
+                true
+            } else {
+                false
+            }
+        });
+        match c.keys.len() {
+            0 => Param::Const(0.0),
+            1 => Param::Const(c.keys[0].value),
+            _ => Param::Curve(c),
+        }
+    }
+
     pub fn eval(&self, t: TimeUs) -> f64 {
         match self {
             Param::Const(v) => *v,

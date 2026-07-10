@@ -19,7 +19,17 @@ pub fn dlog(category: &str, msg: &str) {
     static START: OnceLock<Instant> = OnceLock::new();
     if debug_enabled() {
         let t = START.get_or_init(Instant::now).elapsed().as_secs_f64();
-        eprintln!("[{t:>9.3}] [{category}] {msg}");
+        let line = format!("[{t:>9.3}] [{category}] {msg}");
+        eprintln!("{line}");
+        // also append to a file: lets tooling read the logs of a running app
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(std::env::temp_dir().join("ue_debug.log"))
+        {
+            let _ = writeln!(f, "{line}");
+        }
     }
 }
 pub mod error;

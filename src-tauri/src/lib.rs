@@ -2002,6 +2002,7 @@ async fn export_video(
     loudnorm: Option<bool>,
     range_in_us: Option<i64>,
     range_out_us: Option<i64>,
+    ranges: Option<Vec<(i64, i64)>>,
     format: Option<String>,
 ) -> Res<String> {
     let (project, seq_id, base_dir) = {
@@ -2025,6 +2026,12 @@ async fn export_video(
         (Some(a), Some(b)) if b > a => Some((a.max(0), b)),
         _ => None,
     };
+    let ranges: Vec<(i64, i64)> = ranges
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(a, b)| (a.max(0), b))
+        .filter(|(a, b)| b > a)
+        .collect();
     let format = match format.as_deref() {
         None | Some("mp4") => ue_export::ExportFormat::Mp4,
         Some("m4a") => ue_export::ExportFormat::M4a,
@@ -2039,6 +2046,7 @@ async fn export_video(
         audio_bitrate_k: audio_bitrate_k.unwrap_or(defaults.audio_bitrate_k),
         loudnorm: loudnorm.unwrap_or(false),
         range,
+        ranges,
         extra_packs,
     };
     tauri::async_runtime::spawn_blocking(move || {

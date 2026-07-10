@@ -659,3 +659,39 @@ fn coalesced_dispatches_undo_as_one_gesture() {
     store.redo().unwrap();
     assert_eq!(store.project.clip(c).unwrap().transform.position.0.eval(0), 100.0);
 }
+
+/// Field crash: dragging a curve key onto another (or a UI rounding collision)
+/// produced two keys with the same t; validate() then aborted the process
+/// ('non-increasing keys in position.x'). The action must SANITIZE curves
+/// instead: sort by t and drop duplicates (last write wins).
+#[test]
+fn duplicate_curve_keys_are_sanitized_not_fatal() {
+    use ue_core::keyframe::{Interp, Keyframe, KeyframeCurve, Param};
+    let (mut store, _seq, vtrack, _at, va, _aa) = fixture();
+    let c = store
+        .insert_clip(vtrack, Clip::new_media(va, 0, 4 * SEC, 0), InsertMode::Strict)
+        .unwrap();
+    let mut t = store.project.clip(c).unwrap().transform.clone();
+    // out of order AND duplicated t (exactly what the curve editor can emit)
+    t.position.0 = Param::Curve(KeyframeCurve::new(vec![
+        Keyframe { t: 2 * SEC, value: 50.0, interp: Interp::Linear },
+        Keyframe { t: 0, value: 0.0, interp: Interp::Linear },
+        Keyframe { t: 2 * SEC, value: 90.0, interp: Interp::Linear },
+    ]));
+    store
+        .dispatch(
+            "Edit transform",
+            vec![ue_core::Action::SetClipTransform { clip_id: c, transform: t }],
+        )
+        .expect("must not panic nor error");
+
+    let keys = match &store.project.clip(c).unwrap().transform.position.0 {
+        Param::Curve(k) => k.keys.clone(),
+        Param::Const(_) => panic!("still a curve"),
+    };
+    assert_eq!(keys.len(), 2, "duplicate t collapsed");
+    assert_eq!(keys[0].t, 0);
+    assert_eq!(keys[1].t, 2 * SEC);
+    assert_eq!(keys[1].value, 90.0, "last write wins");
+    assert!(ue_core::validate::validate(&store.project).is_empty(), "invariants hold");
+}

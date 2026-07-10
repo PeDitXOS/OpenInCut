@@ -30,6 +30,8 @@ export interface ExportUiSettings {
   /** I-O range in µs, or null to export everything. */
   rangeInUs: number | null;
   rangeOutUs: number | null;
+  /** Several pieces of the master concatenated in order (overrides the range). */
+  ranges?: [number, number][];
 }
 
 export interface EngineClient {

@@ -505,6 +505,26 @@ pub struct Transform2D {
 }
 
 impl Transform2D {
+    /// Every animatable param sanitized (see `Param::sanitized`): UI gestures
+    /// can emit unsorted or duplicated curve keys, which would otherwise break
+    /// the strictly-increasing-keys invariant (and abort the process).
+    pub fn sanitized(self) -> Transform2D {
+        Transform2D {
+            position: (self.position.0.sanitized(), self.position.1.sanitized()),
+            scale: (self.scale.0.sanitized(), self.scale.1.sanitized()),
+            rotation: self.rotation.sanitized(),
+            crop: (
+                self.crop.0.sanitized(),
+                self.crop.1.sanitized(),
+                self.crop.2.sanitized(),
+                self.crop.3.sanitized(),
+            ),
+            opacity: self.opacity.sanitized(),
+            flip_h: self.flip_h,
+            flip_v: self.flip_v,
+        }
+    }
+
     /// Snapshot with all curves evaluated at `at` (µs relative to the
     /// clip). Used for the preview while scrubbing.
     pub fn sampled(&self, at: TimeUs) -> Transform2D {
@@ -549,6 +569,17 @@ pub struct AudioProps {
     /// variant, export inserts the same filter in the audio chain.
     #[serde(default)]
     pub denoise: bool,
+}
+
+impl AudioProps {
+    /// Every animatable param sanitized (see `Param::sanitized`).
+    pub fn sanitized(self) -> AudioProps {
+        AudioProps {
+            gain_db: self.gain_db.sanitized(),
+            pan: self.pan.sanitized(),
+            ..self
+        }
+    }
 }
 
 impl Default for AudioProps {

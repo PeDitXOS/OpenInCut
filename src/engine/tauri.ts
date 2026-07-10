@@ -111,6 +111,7 @@ export class TauriEngine implements EngineClient {
       loudnorm: settings?.loudnorm ?? null,
       rangeInUs: settings?.rangeInUs != null ? us(settings.rangeInUs) : null,
       rangeOutUs: settings?.rangeOutUs != null ? us(settings.rangeOutUs) : null,
+      ranges: settings?.ranges?.map(([a, b]) => [us(a), us(b)]) ?? null,
       format: settings?.format ?? null,
     });
   }

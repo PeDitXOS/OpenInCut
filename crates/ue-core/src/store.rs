@@ -74,11 +74,23 @@ impl ProjectStore {
             );
         }
         self.last_edit_label = Some(label.to_string());
-        debug_assert_eq!(
-            validate(&self.project),
-            Vec::<String>::new(),
-            "invariants broken after '{label}'"
-        );
+        // Never abort the app on a broken invariant: roll back the whole
+        // transaction and surface it as an error (a debug_assert here killed
+        // the editor mid-gesture in the field).
+        let issues = validate(&self.project);
+        if !issues.is_empty() {
+            crate::dlog(
+                "edit",
+                &format!("'{label}' broke invariants: {} (rolled back)", issues.join("; ")),
+            );
+            for inv in inverses.into_iter().rev() {
+                apply(&mut self.project, inv).expect("rollback must be infallible");
+            }
+            return Err(UeError::Invalid(format!(
+                "'{label}' would break invariants: {}",
+                issues.join("; ")
+            )));
+        }
         let entry = HistoryEntry { label: label.to_string(), actions, inverses, stamp: None };
         if coalesce {
             self.history.push_coalesced(entry);

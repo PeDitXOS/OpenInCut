@@ -60,6 +60,11 @@ export interface UiState {
   rangeOutUs: number | null;
   setRangeIn: (us: number | null) => void;
   setRangeOut: (us: number | null) => void;
+  /** Saved export pieces: rendered concatenated, in order. */
+  exportRanges: [number, number][];
+  addExportRange: () => void;
+  removeExportRange: (index: number) => void;
+  clearExportRanges: () => void;
   showExportDialog: boolean;
   setShowExportDialog: (v: boolean) => void;
   exportProgress: number | null;
@@ -375,6 +380,20 @@ export const useStore = create<UiState>((set, get) => {
     rangeOutUs: null,
     setRangeIn: (us) => set({ rangeInUs: us }),
     setRangeOut: (us) => set({ rangeOutUs: us }),
+    exportRanges: [],
+    addExportRange: () => {
+      const { rangeInUs, rangeOutUs, exportRanges } = get();
+      if (rangeInUs == null || rangeOutUs == null || rangeOutUs <= rangeInUs) {
+        set({ lastActionLabel: "⚠ mark a range with I and O first" });
+        return;
+      }
+      const pair: [number, number] = [rangeInUs, rangeOutUs];
+      const next: [number, number][] = [...exportRanges, pair].sort((a, b) => a[0] - b[0]);
+      set({ exportRanges: next, lastActionLabel: `Piece ${next.length} added` });
+    },
+    removeExportRange: (index) =>
+      set((st) => ({ exportRanges: st.exportRanges.filter((_, i) => i !== index) })),
+    clearExportRanges: () => set({ exportRanges: [] }),
     showExportDialog: false,
     setShowExportDialog: (v) => set({ showExportDialog: v }),
     exportProgress: null,
@@ -403,6 +422,20 @@ export const useStore = create<UiState>((set, get) => {
     rangeOutUs: null,
     setRangeIn: (us) => set({ rangeInUs: us }),
     setRangeOut: (us) => set({ rangeOutUs: us }),
+    exportRanges: [],
+    addExportRange: () => {
+      const { rangeInUs, rangeOutUs, exportRanges } = get();
+      if (rangeInUs == null || rangeOutUs == null || rangeOutUs <= rangeInUs) {
+        set({ lastActionLabel: "⚠ mark a range with I and O first" });
+        return;
+      }
+      const pair: [number, number] = [rangeInUs, rangeOutUs];
+      const next: [number, number][] = [...exportRanges, pair].sort((a, b) => a[0] - b[0]);
+      set({ exportRanges: next, lastActionLabel: `Piece ${next.length} added` });
+    },
+    removeExportRange: (index) =>
+      set((st) => ({ exportRanges: st.exportRanges.filter((_, i) => i !== index) })),
+    clearExportRanges: () => set({ exportRanges: [] }),
     showExportDialog: false,
     setShowExportDialog: (v) => set({ showExportDialog: v }),
           exportProgress: null,

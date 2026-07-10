@@ -117,6 +117,31 @@ fn tool_defs() -> Value {
             }
         },
         {
+            "name": "export_video",
+            "description": "Render the active sequence to a file. Optionally pass `ranges`: a list of [start_us, end_us] pieces of the timeline that are concatenated in order (render several chunks in one file). Blocking; returns the output path.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "absolute output path (.mp4/.m4a/.gif)" },
+                    "ranges": {
+                        "type": "array",
+                        "items": {
+                            "type": "array",
+                            "items": { "type": "integer" },
+                            "minItems": 2,
+                            "maxItems": 2
+                        },
+                        "description": "[[start_us, end_us], …] pieces, concatenated in order"
+                    },
+                    "max_height": { "type": "integer" },
+                    "crf": { "type": "integer" },
+                    "loudnorm": { "type": "boolean" },
+                    "format": { "type": "string", "enum": ["mp4", "m4a", "gif"] }
+                },
+                "required": ["path"]
+            }
+        },
+        {
             "name": "playback",
             "description": "Drive the real player for debugging: action play (from_us), pause, or position.",
             "inputSchema": {
@@ -339,6 +364,69 @@ fn call_tool(state: &AppState, app: Option<&tauri::AppHandle>, name: &str, args:
             match remove_silences_inner(state, clip_id, &mode, &params) {
                 Ok((n, us)) => text_result(json!({ "removed": n, "removed_us": us })),
                 Err(e) => tool_error(&e),
+            }
+        }
+        "export_video" => {
+            let Some(path) = args.get("path").and_then(|v| v.as_str()) else {
+                return tool_error("missing path");
+            };
+            let ranges: Vec<(i64, i64)> = args
+                .get("ranges")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|p| {
+                            let p = p.as_array()?;
+                            Some((p.first()?.as_i64()?, p.get(1)?.as_i64()?))
+                        })
+                        .filter(|(a, b)| b > a)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let format = match args.get("format").and_then(|v| v.as_str()) {
+                None | Some("mp4") => ue_export::ExportFormat::Mp4,
+                Some("m4a") => ue_export::ExportFormat::M4a,
+                Some("gif") => ue_export::ExportFormat::Gif,
+                Some(o) => return tool_error(&format!("unknown format: {o}")),
+            };
+            let defaults = ue_export::ExportSettings::default();
+            let settings = ue_export::ExportSettings {
+                format,
+                max_height: args.get("max_height").and_then(|v| v.as_u64()).map(|v| v as u32),
+                crf: args
+                    .get("crf")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| (v as u8).clamp(10, 40))
+                    .unwrap_or(defaults.crf),
+                loudnorm: args.get("loudnorm").and_then(|v| v.as_bool()).unwrap_or(false),
+                ranges,
+                extra_packs: state.user_packs.lock().unwrap().clone(),
+                ..defaults
+            };
+            let (project, seq_id, base_dir) = {
+                let store = state.store.lock().unwrap();
+                let base = state
+                    .path
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                (store.project.clone(), store.project.active_sequence, base)
+            };
+            let cancel = state.export_cancel.clone();
+            cancel.store(false, std::sync::atomic::Ordering::SeqCst);
+            match ue_export::export_sequence_with_progress(
+                &project,
+                seq_id,
+                &base_dir,
+                std::path::Path::new(path),
+                &settings,
+                |_| {},
+                &cancel,
+            ) {
+                Ok(()) => text_result(json!({ "path": path })),
+                Err(e) => tool_error(&e.to_string()),
             }
         }
         "playback" => {

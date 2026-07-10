@@ -210,7 +210,7 @@ pub fn clip_vf_sampled(
 ) -> Option<String> {
     match (
         render_chain_at(registry, effects, at_us),
-        transform_vf(&transform.sampled(at_us), canvas),
+        transform_vf_full(&transform.sampled(at_us), canvas, false, "t", true),
     ) {
         (Some(e), Some(t)) => Some(format!("{e},{t}")),
         (Some(e), None) => Some(e),
@@ -292,6 +292,18 @@ pub fn transform_vf_at(
     canvas: Option<(u32, u32)>,
     transparent: bool,
     tvar: &str,
+) -> Option<String> {
+    transform_vf_full(t, canvas, transparent, tvar, false)
+}
+
+/// `pts_rebase` rebases the foreground PTS before the canvas overlay: needed
+/// ONLY for single-frame extraction (paused preview). See the comment below.
+pub fn transform_vf_full(
+    t: &ue_core::model::Transform2D,
+    canvas: Option<(u32, u32)>,
+    transparent: bool,
+    tvar: &str,
+    pts_rebase: bool,
 ) -> Option<String> {
     let mut parts: Vec<String> = vec![];
 
@@ -415,8 +427,14 @@ pub fn transform_vf_at(
         };
         // format=auto: keep the fg alpha when compositing over a transparent canvas
         let of = if transparent { ":format=auto" } else { "" };
+        // Single-frame extraction (paused preview): -ss lands between
+        // keyframes, so the fg PTS is large while `color` starts at 0 and
+        // overlay emits only the background (black paused frame). Rebasing
+        // the fg PTS fixes it. Streams/export keep their timeline PTS,
+        // which `enable=between(t,…)` and animations depend on.
+        let fg_pts = if pts_rebase { "setpts=PTS-STARTPTS" } else { "null" };
         parts.push(format!(
-            "null[p{n}fg];color=c={bg}:s={cw}x{ch}{bg_fmt}[p{n}bg];[p{n}bg][p{n}fg]overlay=x={xe}:y={ye}:shortest=1{of}"
+            "{fg_pts}[p{n}fg];color=c={bg}:s={cw}x{ch}{bg_fmt}[p{n}bg];[p{n}bg][p{n}fg]overlay=x={xe}:y={ye}:shortest=1{of}"
         ));
     }
 

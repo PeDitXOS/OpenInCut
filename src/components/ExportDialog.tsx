@@ -41,6 +41,9 @@ export function ExportDialog() {
   const exportVideo = useStore((s) => s.exportVideo);
   const rangeInUs = useStore((s) => s.rangeInUs);
   const rangeOutUs = useStore((s) => s.rangeOutUs);
+  const exportRanges = useStore((s) => s.exportRanges);
+  const removeExportRange = useStore((s) => s.removeExportRange);
+  const clearExportRanges = useStore((s) => s.clearExportRanges);
 
   const [presetIdx, setPresetIdx] = useState(0);
   const [maxHeight, setMaxHeight] = useState<number | null>(1080);
@@ -49,7 +52,7 @@ export function ExportDialog() {
   const [audioK, setAudioK] = useState(256);
   const [format, setFormat] = useState<"mp4" | "m4a" | "gif">("mp4");
   const [loudnorm, setLoudnorm] = useState(false);
-  const [useRange, setUseRange] = useState(false);
+  const [scope, setScope] = useState<"all" | "range" | "pieces">("all");
 
   if (!show) return null;
 
@@ -63,6 +66,9 @@ export function ExportDialog() {
     setAudioK(p.audioBitrateK);
     setFormat(p.format);
   };
+  const hasPieces = exportRanges.length > 0;
+  const usePieces = scope === "pieces" && hasPieces;
+  const useRange = scope === "range" && hasRange;
   const settings: ExportUiSettings = {
     format,
     maxHeight,
@@ -70,9 +76,11 @@ export function ExportDialog() {
     preset: codecPreset,
     audioBitrateK: audioK,
     loudnorm,
-    rangeInUs: useRange && hasRange ? rangeInUs : null,
-    rangeOutUs: useRange && hasRange ? rangeOutUs : null,
+    rangeInUs: useRange ? rangeInUs : null,
+    rangeOutUs: useRange ? rangeOutUs : null,
+    ranges: usePieces ? exportRanges : undefined,
   };
+  const totalPiecesUs = exportRanges.reduce((acc, [a, b]) => acc + (b - a), 0);
 
   return (
     <div
@@ -180,35 +188,89 @@ export function ExportDialog() {
           </label>
         </div>
 
-        <div className="mt-2.5 flex items-center gap-3 text-[12px] text-ink">
-          <span className="w-24 shrink-0 text-[11px] text-ink-dim">Range</span>
-          <label className="flex cursor-pointer items-center gap-1.5">
-            <input
-              type="radio"
-              className="accent-(--color-accent)"
-              checked={!useRange}
-              onChange={() => setUseRange(false)}
-            />
-            All
-          </label>
-          <label
-            className={`flex items-center gap-1.5 ${hasRange ? "cursor-pointer" : "opacity-40"}`}
-            title={hasRange ? "" : "Mark the range with the I and O keys on the timeline"}
-          >
-            <input
-              type="radio"
-              className="accent-(--color-accent)"
-              disabled={!hasRange}
-              checked={useRange && hasRange}
-              onChange={() => setUseRange(true)}
-            />
-            Range I–O
-            {hasRange && (
-              <span className="font-[var(--font-mono)] text-[11px] text-ink-faint">
-                {usToDuration(rangeInUs)}–{usToDuration(rangeOutUs)}
-              </span>
-            )}
-          </label>
+        <div className="mt-2.5 flex flex-col gap-1.5 text-[12px] text-ink">
+          <div className="flex items-center gap-3">
+            <span className="w-24 shrink-0 text-[11px] text-ink-dim">Scope</span>
+            <label className="flex cursor-pointer items-center gap-1.5">
+              <input
+                type="radio"
+                className="accent-(--color-accent)"
+                checked={scope === "all"}
+                onChange={() => setScope("all")}
+              />
+              All
+            </label>
+            <label
+              className={`flex items-center gap-1.5 ${hasRange ? "cursor-pointer" : "opacity-40"}`}
+              title={hasRange ? "" : "Mark the range with the I and O keys on the timeline"}
+            >
+              <input
+                type="radio"
+                className="accent-(--color-accent)"
+                disabled={!hasRange}
+                checked={scope === "range"}
+                onChange={() => setScope("range")}
+              />
+              Range I–O
+              {hasRange && (
+                <span className="font-[var(--font-mono)] text-[11px] text-ink-faint">
+                  {usToDuration(rangeInUs)}–{usToDuration(rangeOutUs)}
+                </span>
+              )}
+            </label>
+            <label
+              className={`flex items-center gap-1.5 ${hasPieces ? "cursor-pointer" : "opacity-40"}`}
+              title={
+                hasPieces
+                  ? "Render the saved pieces concatenated, in order"
+                  : "Mark a range (I/O) and press P — or '+ Piece' — to add pieces"
+              }
+            >
+              <input
+                type="radio"
+                className="accent-(--color-accent)"
+                disabled={!hasPieces}
+                checked={scope === "pieces"}
+                onChange={() => setScope("pieces")}
+              />
+              Pieces ({exportRanges.length})
+            </label>
+          </div>
+
+          {hasPieces && (
+            <div className="ml-24 rounded-md border border-line-soft bg-bg2/40 p-1.5">
+              <div className="max-h-24 overflow-y-auto">
+                {exportRanges.map(([a, b], i) => (
+                  <div
+                    key={`${a}-${b}`}
+                    className="flex items-center gap-2 px-1 py-0.5 font-[var(--font-mono)] text-[11px] text-ink-dim"
+                  >
+                    <span className="w-4 text-right text-clip-audio-hi">{i + 1}</span>
+                    <span>
+                      {usToDuration(a)} → {usToDuration(b)}
+                    </span>
+                    <span className="text-ink-faint">({usToDuration(b - a)})</span>
+                    <button
+                      className="focus-ring ml-auto rounded px-1 text-ink-faint hover:text-danger"
+                      onClick={() => removeExportRange(i)}
+                      title="Remove this piece"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-1 flex items-center gap-2 border-t border-line-soft px-1 pt-1 text-[10.5px] text-ink-faint">
+                <span>Total {usToDuration(totalPiecesUs)}</span>
+                <button
+                  className="focus-ring ml-auto rounded px-1 hover:text-ink"
+                  onClick={() => clearExportRanges()}
+                >
+                  Clear all
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="mt-4 flex justify-end gap-2">

@@ -306,7 +306,8 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
                 .locate_clip(clip_id)
                 .ok_or_else(|| UeError::NotFound(format!("clip {clip_id}")))?;
             let clip = &mut project.sequences[si].tracks[ti].clips[ci];
-            let old = std::mem::replace(&mut clip.transform, transform);
+            // UI gestures can emit unsorted/duplicated curve keys
+            let old = std::mem::replace(&mut clip.transform, transform.sanitized());
             Ok(Action::SetClipTransform { clip_id, transform: old })
         }
 
@@ -315,7 +316,7 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
                 .locate_clip(clip_id)
                 .ok_or_else(|| UeError::NotFound(format!("clip {clip_id}")))?;
             let clip = &mut project.sequences[si].tracks[ti].clips[ci];
-            let old = std::mem::replace(&mut clip.audio, audio);
+            let old = std::mem::replace(&mut clip.audio, audio.sanitized());
             Ok(Action::SetClipAudio { clip_id, audio: old })
         }
 
@@ -324,6 +325,13 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
                 .locate_clip(clip_id)
                 .ok_or_else(|| UeError::NotFound(format!("clip {clip_id}")))?;
             let clip = &mut project.sequences[si].tracks[ti].clips[ci];
+            let effects: Vec<EffectInstance> = effects
+                .into_iter()
+                .map(|mut e| {
+                    e.params = e.params.into_iter().map(|(k, v)| (k, v.sanitized())).collect();
+                    e
+                })
+                .collect();
             let old = std::mem::replace(&mut clip.effects, effects);
             Ok(Action::SetClipEffects { clip_id, effects: old })
         }
@@ -354,6 +362,8 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
                     params: p,
                     color_params: c,
                 } => {
+                    let params: std::collections::BTreeMap<String, crate::keyframe::Param> =
+                        params.into_iter().map(|(k, v)| (k, v.sanitized())).collect();
                     let old = Action::SetClipGenerator {
                         clip_id,
                         generator_id: std::mem::replace(g, generator_id),
