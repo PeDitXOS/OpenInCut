@@ -210,6 +210,7 @@ export interface AudioProps {
   fade_in_us: TimeUs;
   fade_out_us: TimeUs;
   muted: boolean;
+  denoise: boolean;
 }
 
 export const DEFAULT_AUDIO: AudioProps = {
@@ -218,6 +219,7 @@ export const DEFAULT_AUDIO: AudioProps = {
   fade_in_us: 0,
   fade_out_us: 0,
   muted: false,
+  denoise: false,
 };
 
 export interface EffectInstance {
@@ -284,12 +286,18 @@ export interface ProjectSettings {
   autosave_secs: number;
 }
 
+/** What captions and the text editor show (user correction wins). */
+export function wordLabel(w: TranscriptWord): string {
+  return w.display ?? w.text;
+}
+
 export interface TranscriptWord {
   text: string;
   start_us: TimeUs;
   end_us: TimeUs;
   confidence: number;
   rejected: boolean;
+  display?: string | null;
 }
 
 export interface TranscriptSegment {
@@ -386,19 +394,19 @@ export function captionPhrases(
     return doc.segments.map((s) => ({ text: s.text, words: [], s: s.start_us, e: s.end_us }));
   }
   const cuts = [0];
-  let chars = words[0].text.length;
+  let chars = wordLabel(words[0]).length;
   let chunkStart = words[0].start_us;
   for (let i = 1; i < words.length; i++) {
     const w = words[i];
     const gap = w.start_us - words[i - 1].end_us;
-    const tooLong = chars + 1 + w.text.length > maxChars;
+    const tooLong = chars + 1 + wordLabel(w).length > maxChars;
     const tooSlow = w.end_us - chunkStart > CAPTION_MAX_DUR_US;
     if (tooLong || gap > CAPTION_GAP_US || tooSlow) {
       cuts.push(i);
-      chars = w.text.length;
+      chars = wordLabel(w).length;
       chunkStart = w.start_us;
     } else {
-      chars += 1 + w.text.length;
+      chars += 1 + wordLabel(w).length;
     }
   }
   cuts.push(words.length);
@@ -409,7 +417,7 @@ export function captionPhrases(
     const next = words[cuts[c + 1]];
     const e = next ? Math.min(naturalEnd, next.start_us) : naturalEnd;
     out.push({
-      text: group.map((w) => w.text).join(" "),
+      text: group.map((w) => wordLabel(w)).join(" "),
       words: group,
       s: group[0].start_us,
       e: Math.max(e, group[0].start_us + 1),
@@ -446,7 +454,7 @@ export function activeSubtitleText(
       if (mode === "phrase" || !ph.words.length) return { content: ph.text, style };
       const spans = ph.words.map((w) => {
         const wTl = assetTimeToTimeline(project, doc.asset_id, w.start_us) ?? tlStart;
-        return { text: w.text, active: playheadUs >= wTl };
+        return { text: wordLabel(w), active: playheadUs >= wTl };
       });
       return { content: ph.text, style, spans };
     }
@@ -461,9 +469,91 @@ export function activeSubtitleText(
     if (tlStart === null) continue;
     const from = Math.max(tlStart, clip.start);
     const to = Math.min(tlStart + (w.end_us - w.start_us), clip.start + clip.duration);
-    if (playheadUs >= from && playheadUs < to) return { content: w.text, style: effStyle };
+    if (playheadUs >= from && playheadUs < to) return { content: wordLabel(w), style: effStyle };
   }
   return null;
+}
+
+// -- document projection (Descript-style editing) ------------------------------
+
+/** A word occurrence ON the timeline (a clip may appear duplicated). */
+export interface DocToken {
+  key: string;
+  clipId: Id;
+  wordIdx: number;
+  word: TranscriptWord;
+  tlStart: TimeUs;
+  tlEnd: TimeUs;
+}
+
+/**
+ * Projects the timeline through a transcript: words in TIMELINE order,
+ * only the material that is still present. Editing the document = timeline
+ * operations, so text and video can never diverge.
+ */
+export function timelineDocument(project: Project, doc: TranscriptDoc): DocToken[] {
+  const seq = activeSequence(project);
+  // prefer video clips of the asset; fall back to audio-track clips
+  const kinds: TrackKind[] = ["video", "audio"];
+  for (const kind of kinds) {
+    const clips = seq.tracks
+      .filter((t) => t.kind === kind)
+      .flatMap((t) => t.clips)
+      .filter(
+        (c) => c.payload.type === "media" && c.payload.asset_id === doc.asset_id,
+      )
+      .sort((a, b) => a.start - b.start);
+    if (!clips.length) continue;
+    const tokens: DocToken[] = [];
+    for (const clip of clips) {
+      if (clip.payload.type !== "media") continue;
+      const { src_in, src_out } = clip.payload;
+      doc.words.forEach((w, i) => {
+        if (w.rejected) return;
+        // the word belongs to this clip if its midpoint is inside the window
+        const mid = (w.start_us + w.end_us) / 2;
+        if (mid < src_in || mid >= src_out) return;
+        const tlStart = clip.start + Math.round((w.start_us - src_in) / clip.speed);
+        const tlEnd = clip.start + Math.round((w.end_us - src_in) / clip.speed);
+        tokens.push({
+          key: `${clip.id}:${i}`,
+          clipId: clip.id,
+          wordIdx: i,
+          word: w,
+          tlStart: Math.max(clip.start, tlStart),
+          tlEnd: Math.min(clip.start + clip.duration, Math.max(tlEnd, tlStart + 1)),
+        });
+      });
+    }
+    tokens.sort((a, b) => a.tlStart - b.tlStart);
+    return tokens;
+  }
+  return [];
+}
+
+/**
+ * Timeline range covered by a CONTIGUOUS run of tokens, extended to the
+ * midpoints towards its neighbors (the silence between words travels with
+ * its phrase), clamped to the clip when the neighbor is another clip.
+ */
+export function tokenRunRange(
+  tokens: DocToken[],
+  startIdx: number,
+  endIdx: number,
+): [TimeUs, TimeUs] {
+  const first = tokens[startIdx];
+  const last = tokens[endIdx];
+  const prev = tokens[startIdx - 1];
+  const next = tokens[endIdx + 1];
+  const from =
+    prev && prev.clipId === first.clipId
+      ? Math.round((prev.tlEnd + first.tlStart) / 2)
+      : first.tlStart;
+  const to =
+    next && next.clipId === last.clipId
+      ? Math.round((last.tlEnd + next.tlStart) / 2)
+      : last.tlEnd;
+  return [from, Math.max(to, from + 1)];
 }
 
 /** Timeline ranges for a set of words, with padding and merging. */

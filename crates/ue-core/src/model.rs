@@ -545,6 +545,10 @@ pub struct AudioProps {
     pub fade_out_us: TimeUs,
     #[serde(default)]
     pub muted: bool,
+    /// Background-noise reduction (afftdn): live uses a denoised conform
+    /// variant, export inserts the same filter in the audio chain.
+    #[serde(default)]
+    pub denoise: bool,
 }
 
 impl Default for AudioProps {
@@ -555,6 +559,7 @@ impl Default for AudioProps {
             fade_in_us: 0,
             fade_out_us: 0,
             muted: false,
+            denoise: false,
         }
     }
 }
@@ -610,6 +615,17 @@ pub struct Word {
     pub confidence: f32,
     #[serde(default)]
     pub rejected: bool,
+    /// User correction ("godo" → "godot"): same audio span, relabeled.
+    /// `text` stays as what Whisper heard; captions show `label()`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
+}
+
+impl Word {
+    /// What captions and the text editor show.
+    pub fn label(&self) -> &str {
+        self.display.as_deref().unwrap_or(&self.text)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

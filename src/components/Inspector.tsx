@@ -533,6 +533,19 @@ function ClipInspector({ clip }: { clip: Clip }) {
             onChange={(v) => void setClipAudio(clip.id, { ...clip.audio, pan: v })}
           />
         </Row>
+        <Row label="Denoise">
+          <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-[11px] text-ink-dim">
+            <input
+              type="checkbox"
+              className="accent-(--color-accent)"
+              checked={clip.audio.denoise}
+              onChange={(e) =>
+                void setClipAudio(clip.id, { ...clip.audio, denoise: e.target.checked })
+              }
+            />
+            Reduce background noise
+          </label>
+        </Row>
         <Row label="Fade in">
           <Slider
             value={clip.audio.fade_in_us / 1e6}

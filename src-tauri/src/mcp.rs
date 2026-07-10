@@ -117,6 +117,19 @@ fn tool_defs() -> Value {
             }
         },
         {
+            "name": "replace_words",
+            "description": "Fix transcription errors: replaces every whole-word occurrence in a transcript (case-insensitive) with a corrected label. The audio timing is untouched; captions show the correction. Undoable.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "transcript_id": { "type": "string" },
+                    "from": { "type": "string" },
+                    "to": { "type": "string" }
+                },
+                "required": ["transcript_id", "from", "to"]
+            }
+        },
+        {
             "name": "move_range",
             "description": "Moves the timeline range [from_us, to_us) to dest_us (reorders material on all tracks; 1 undo). Useful for reordering phrases.",
             "inputSchema": {
@@ -298,6 +311,48 @@ fn call_tool(state: &AppState, name: &str, args: &Value) -> Value {
                 Ok((n, us)) => text_result(json!({ "removed": n, "removed_us": us })),
                 Err(e) => tool_error(&e),
             }
+        }
+        "replace_words" => {
+            let transcript_id = match parse_id("transcript_id") {
+                Ok(v) => v,
+                Err(e) => return tool_error(&e),
+            };
+            let (Some(from), Some(to)) = (
+                args.get("from").and_then(|v| v.as_str()),
+                args.get("to").and_then(|v| v.as_str()),
+            ) else {
+                return tool_error("missing from/to");
+            };
+            let needle = from.trim().to_lowercase();
+            let mut store = state.store.lock().unwrap();
+            let Some(doc) = store.project.transcripts.iter().find(|t| t.id == transcript_id)
+            else {
+                return tool_error("transcript not found");
+            };
+            let matches: Vec<usize> = doc
+                .words
+                .iter()
+                .enumerate()
+                .filter(|(_, w)| w.label().trim().to_lowercase() == needle)
+                .map(|(i, _)| i)
+                .collect();
+            let display =
+                if to.trim().is_empty() { None } else { Some(to.trim().to_string()) };
+            let actions: Vec<ue_core::Action> = matches
+                .iter()
+                .map(|i| ue_core::Action::SetWordText {
+                    transcript_id,
+                    index: *i,
+                    display: display.clone(),
+                })
+                .collect();
+            let n = actions.len();
+            if n > 0 {
+                if let Err(e) = store.dispatch("Replace words", actions) {
+                    return tool_error(&e.to_string());
+                }
+            }
+            text_result(json!({ "replaced": n }))
         }
         "move_range" => {
             let get = |k: &str| args.get(k).and_then(|v| v.as_i64());

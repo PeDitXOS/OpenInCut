@@ -133,6 +133,7 @@ pub fn transcribe(
             end_us: t1 as TimeUs * 10_000,
             confidence: 0.0,
             rejected: false,
+            display: None,
         });
     }
 

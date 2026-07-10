@@ -37,6 +37,7 @@ struct AudioItem {
     gain_curve: Option<ue_core::keyframe::KeyframeCurve>,
     /// Balance -1..1 (same law as the live mixer).
     pan: f64,
+    denoise: bool,
     fade_in_us: TimeUs,
     fade_out_us: TimeUs,
 }
@@ -120,6 +121,7 @@ fn collect_audio(project: &Project, sequence_id: Id) -> Vec<AudioItem> {
                     gain_db: gain_const + track.volume_db as f64,
                     gain_curve,
                     pan: clip.audio.pan.eval(0).clamp(-1.0, 1.0),
+                    denoise: clip.audio.denoise,
                     fade_in_us: clip.audio.fade_in_us,
                     fade_out_us: clip.audio.fade_out_us,
                 });
@@ -344,6 +346,10 @@ fn build_audio_only_args(
             secs(item.src_in),
             secs(item.src_out),
         );
+        if item.denoise {
+            chain.push(',');
+            chain.push_str(ue_media::denoise::DENOISE_FILTER);
+        }
         if (item.speed - 1.0).abs() > 1e-9 {
             chain.push(',');
             chain.push_str(&atempo_chain(item.speed));
@@ -458,25 +464,25 @@ fn caption_phrases(
     let mut chunk_start = words[0].start_us;
     for (i, w) in words.iter().enumerate() {
         if i == 0 {
-            chars = w.text.len();
+            chars = w.label().len();
             continue;
         }
         let gap = w.start_us - words[i - 1].end_us;
-        let too_long = chars + 1 + w.text.len() > max_chars;
+        let too_long = chars + 1 + w.label().len() > max_chars;
         let too_slow = w.end_us - chunk_start > CAPTION_MAX_DUR_US;
         if too_long || gap > CAPTION_GAP_US || too_slow {
             cuts.push(i);
-            chars = w.text.len();
+            chars = w.label().len();
             chunk_start = w.start_us;
         } else {
-            chars += 1 + w.text.len();
+            chars += 1 + w.label().len();
         }
     }
     cuts.push(words.len());
     let mut out = Vec::with_capacity(cuts.len() - 1);
     for c in cuts.windows(2) {
         let group = &words[c[0]..c[1]];
-        let text = group.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
+        let text = group.iter().map(|w| w.label()).collect::<Vec<_>>().join(" ");
         let start = group[0].start_us;
         let natural_end = group.last().unwrap().end_us + CAPTION_LINGER_US;
         let end = match words.get(c[1]) {
@@ -542,7 +548,7 @@ fn karaoke_overlays(
         // line layout: per-word widths + spaces
         let widths: Vec<f64> = words
             .iter()
-            .map(|w| measure_text_px(&font_path, &w.text, px).unwrap_or(px * 0.5))
+            .map(|w| measure_text_px(&font_path, w.label(), px).unwrap_or(px * 0.5))
             .collect();
         let total: f64 =
             widths.iter().sum::<f64>() + space_w * (words.len().saturating_sub(1)) as f64;
@@ -554,12 +560,12 @@ fn karaoke_overlays(
                 .max(clip.start);
             // dim layer (whole phrase visible during the segment)
             out.push(drawtext_at(
-                &font_part, &w.text, fontsize, &base_color, &x_expr, y_off, scale, seg_from,
+                &font_part, w.label(), fontsize, &base_color, &x_expr, y_off, scale, seg_from,
                 seg_to,
             ));
             // highlighted layer (from when the word plays)
             out.push(drawtext_at(
-                &font_part, &w.text, fontsize, &hi_color, &x_expr, y_off, scale,
+                &font_part, w.label(), fontsize, &hi_color, &x_expr, y_off, scale,
                 word_tl.min(seg_to), seg_to,
             ));
             prefix += widths[i] + space_w;
@@ -629,7 +635,7 @@ fn build_text_overlays(
                             .words
                             .iter()
                             .filter(|w| !w.rejected)
-                            .map(|w| (w.text.clone(), w.start_us, w.end_us))
+                            .map(|w| (w.label().to_string(), w.start_us, w.end_us))
                             .collect(),
                     };
                     let items: Vec<(&str, i64, i64)> =
@@ -1086,6 +1092,10 @@ pub fn build_ffmpeg_args(
             secs(item.src_in),
             secs(item.src_out),
         );
+        if item.denoise {
+            chain.push(',');
+            chain.push_str(ue_media::denoise::DENOISE_FILTER);
+        }
         if (item.speed - 1.0).abs() > 1e-9 {
             chain.push(',');
             chain.push_str(&atempo_chain(item.speed));

@@ -139,6 +139,14 @@ export interface EngineClient {
   addTrack(kind: "video" | "audio"): Promise<StateSnapshot>;
   /** Delete a sequence (never the last one; switches away if active). */
   removeSequence(sequenceId: Id): Promise<StateSnapshot>;
+  /** Correct one transcribed word (empty = back to the original). */
+  setWordText(transcriptId: Id, index: number, text: string): Promise<StateSnapshot>;
+  /** Replace every whole-word occurrence in a transcript. */
+  replaceWords(
+    transcriptId: Id,
+    from: string,
+    to: string,
+  ): Promise<{ replaced: number; snapshot: StateSnapshot }>;
   setSequenceProps(
     sequenceId: Id,
     width: number,

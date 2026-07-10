@@ -278,3 +278,50 @@ fn proxy_generates_light_h264_and_preview_prefers_it() {
     let r2 = resolve_top_video(&p2, seq, 1 * SEC).unwrap();
     assert_eq!(r2.asset_path, src.to_string_lossy(), "broken proxy → original");
 }
+
+/// afftdn drops the noise floor: a noise-only region gets much quieter while
+/// the voice-band tone survives.
+#[test]
+fn denoise_wav_lowers_noise_floor() {
+    let Some(dir) = demo_dir() else { return };
+    let noisy = dir.join("noisy_v2.wav");
+    if !noisy.exists() {
+        // 2 s: 300 Hz tone + white noise, then 1 s of noise only
+        let st = std::process::Command::new(ue_media::ffmpeg_bin())
+            .args([
+                "-y", "-v", "error",
+                "-f", "lavfi", "-i", "sine=frequency=300:duration=3",
+                "-f", "lavfi", "-i", "anoisesrc=colour=white:amplitude=0.1:duration=3",
+                "-filter_complex",
+                "[0:a]volume='if(lt(t,2),1,0)':eval=frame[s];[s][1:a]amix=inputs=2:normalize=0,aformat=channel_layouts=stereo",
+                "-ar", "48000", "-c:a", "pcm_s16le",
+            ])
+            .arg(&noisy)
+            .status()
+            .unwrap();
+        assert!(st.success());
+    }
+    let out = ue_media::denoise::denoise_wav(&noisy).unwrap();
+    let rms_tail = |p: &Path| -> f64 {
+        let o = std::process::Command::new(ue_media::ffmpeg_bin())
+            .args(["-v", "error", "-ss", "2.3", "-i"])
+            .arg(p)
+            .args(["-t", "0.6", "-f", "s16le", "-ac", "1", "-"])
+            .output()
+            .unwrap();
+        let samples: Vec<i16> = o
+            .stdout
+            .chunks_exact(2)
+            .map(|b| i16::from_le_bytes([b[0], b[1]]))
+            .collect();
+        let sq: f64 = samples.iter().map(|s| (*s as f64 / 32768.0).powi(2)).sum();
+        (sq / samples.len().max(1) as f64).sqrt()
+    };
+    let before = rms_tail(&noisy);
+    let after = rms_tail(&out);
+    assert!(before > 0.02, "the fixture really is noisy: {before}");
+    assert!(
+        after < before * 0.35,
+        "noise floor drops ≥ ~9 dB: before {before}, after {after}"
+    );
+}

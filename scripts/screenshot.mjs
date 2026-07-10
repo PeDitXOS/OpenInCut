@@ -198,5 +198,30 @@ if ((await kindSelect.count()) === 0)
   throw new Error("the generator type selector is missing");
 await shot("13-generator-rectangle");
 
+// 14. Text editing: rename a word inline + document mode delete
+await page.getByRole("button", { name: /Text/ }).click();
+await page.waitForTimeout(250);
+// rename: double-click a word, type the correction, Enter
+const txtPanel = page.locator("aside").first();
+await txtPanel.getByText("devlog", { exact: true }).dblclick();
+await page.keyboard.press("Meta+a");
+await page.keyboard.type("devblog");
+await page.keyboard.press("Enter");
+await page.waitForTimeout(250);
+if ((await txtPanel.getByText("devblog", { exact: true }).count()) === 0)
+  throw new Error("the inline word rename did not apply");
+// document mode: select a word and delete it from the video
+await page.getByRole("button", { name: "Document" }).click();
+await page.waitForTimeout(250);
+if ((await txtPanel.getByText("collisions", { exact: true }).count()) === 0)
+  throw new Error("document mode shows no tokens");
+await txtPanel.getByText("collisions", { exact: true }).click();
+await page.keyboard.press("Backspace");
+await page.waitForTimeout(350);
+if ((await txtPanel.getByText("collisions", { exact: true }).count()) !== 0)
+  throw new Error("Backspace in document mode did not remove the word from the video");
+await shot("14-text-document-editing");
+await page.getByRole("button", { name: /Media/ }).click();
+
 await browser.close();
 console.log(`\nScreenshots in ${outDir}`);

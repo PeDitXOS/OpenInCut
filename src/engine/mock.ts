@@ -348,12 +348,75 @@ export class MockEngine implements EngineClient {
     });
   }
 
-  async moveRange(): Promise<StateSnapshot> {
-    throw new Error("Moving text requires the desktop app (npx tauri dev)");
+  /** Splits any clip crossing `t` on every unlocked track. */
+  private carveAt(t: number) {
+    for (const track of this.sequence.tracks) {
+      if (track.locked) continue;
+      const idx = track.clips.findIndex((c) => c.start < t && t < c.start + c.duration);
+      if (idx < 0) continue;
+      const c = track.clips[idx];
+      const left = structuredClone(c);
+      const right = structuredClone(c);
+      right.id = newId("clip");
+      left.duration = t - c.start;
+      right.start = t;
+      right.duration = c.start + c.duration - t;
+      if (c.payload.type === "media") {
+        const cut = c.payload.src_in + Math.round((t - c.start) * c.speed);
+        (left.payload as { src_out: number }).src_out = cut;
+        (right.payload as { src_in: number }).src_in = cut;
+      }
+      track.clips.splice(idx, 1, left, right);
+    }
   }
 
-  async cutRanges(): Promise<StateSnapshot> {
-    throw new Error("Text-based editing requires the desktop app (npx tauri dev)");
+  async moveRange(
+    _sequenceId: Id,
+    fromUs: number,
+    toUs: number,
+    destUs: number,
+  ): Promise<StateSnapshot> {
+    return this.transaction("Move range", () => {
+      if (destUs >= fromUs && destUs <= toUs) throw new Error("destination inside the range");
+      const len = toUs - fromUs;
+      for (const t of [fromUs, toUs, destUs]) this.carveAt(t);
+      for (const track of this.sequence.tracks) {
+        if (track.locked) continue;
+        const moved = track.clips.filter((c) => c.start >= fromUs && c.start + c.duration <= toUs);
+        track.clips = track.clips.filter((c) => !moved.includes(c));
+        // close the gap
+        for (const c of track.clips) if (c.start >= toUs) c.start -= len;
+        // open at the destination (already shifted if it was after the range)
+        const dest = destUs > toUs ? destUs - len : destUs;
+        for (const c of track.clips) if (c.start >= dest) c.start += len;
+        for (const c of moved) c.start = dest + (c.start - fromUs);
+        track.clips.push(...moved);
+        track.clips.sort((a, b) => a.start - b.start);
+      }
+    });
+  }
+
+  async cutRanges(
+    _sequenceId: Id,
+    ranges: [number, number][],
+    ripple: boolean,
+  ): Promise<StateSnapshot> {
+    return this.transaction(`Cut ${ranges.length} range(s)`, () => {
+      const sorted = [...ranges].sort((a, b) => b[0] - a[0]); // right to left
+      for (const [a, b] of sorted) {
+        this.carveAt(a);
+        this.carveAt(b);
+        for (const track of this.sequence.tracks) {
+          if (track.locked) continue;
+          track.clips = track.clips.filter(
+            (c) => !(c.start >= a && c.start + c.duration <= b),
+          );
+          if (ripple) {
+            for (const c of track.clips) if (c.start >= b) c.start -= b - a;
+          }
+        }
+      }
+    });
   }
 
   async addAvatarClip(): Promise<StateSnapshot> {
@@ -596,6 +659,31 @@ export class MockEngine implements EngineClient {
       }
       throw new Error("generator clip not found");
     });
+  }
+  async setWordText(transcriptId: Id, index: number, text: string): Promise<StateSnapshot> {
+    return this.transaction("Correct word", () => {
+      const doc = this.project.transcripts.find((t) => t.id === transcriptId);
+      if (!doc) throw new Error("transcript not found");
+      doc.words[index].display = text.trim() ? text.trim() : null;
+    });
+  }
+  async replaceWords(
+    transcriptId: Id,
+    from: string,
+    to: string,
+  ): Promise<{ replaced: number; snapshot: StateSnapshot }> {
+    let replaced = 0;
+    const snapshot = await this.transaction("Replace words", () => {
+      const doc = this.project.transcripts.find((t) => t.id === transcriptId);
+      if (!doc) throw new Error("transcript not found");
+      for (const w of doc.words) {
+        if ((w.display ?? w.text).trim().toLowerCase() === from.trim().toLowerCase()) {
+          w.display = to.trim() ? to.trim() : null;
+          replaced += 1;
+        }
+      }
+    });
+    return { replaced, snapshot };
   }
   async setSequenceProps(
     sequenceId: Id,

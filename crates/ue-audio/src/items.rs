@@ -25,6 +25,8 @@ pub struct ItemSpec {
     pub gain_curve: Option<KeyframeCurve>,
     /// Pan -1..1 (static; evaluated at t=0).
     pub pan: f64,
+    /// Use the denoised conform variant when available.
+    pub denoise: bool,
     pub fade_in_us: i64,
     pub fade_out_us: i64,
 }
@@ -63,6 +65,7 @@ pub fn collect_specs(project: &Project, sequence_id: Id) -> Vec<ItemSpec> {
                 gain_db: gain_const + track.volume_db as f64,
                 gain_curve,
                 pan: clip.audio.pan.eval(0).clamp(-1.0, 1.0),
+                denoise: clip.audio.denoise,
                 fade_in_us: clip.audio.fade_in_us,
                 fade_out_us: clip.audio.fade_out_us,
             });
@@ -88,6 +91,14 @@ pub fn load_items(
         let Some(path) = conform_path(asset) else {
             skipped.push(spec.asset_id);
             continue;
+        };
+        // denoised sibling if requested and already rendered (falls back to
+        // the plain conform until the background job finishes)
+        let path = if spec.denoise {
+            let denoised = path.with_extension("denoise.wav");
+            if denoised.exists() { denoised } else { path }
+        } else {
+            path
         };
         match WavMap::open(Path::new(&path)) {
             Ok(wav) => items.push(MixItem {

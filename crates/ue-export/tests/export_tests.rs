@@ -1370,9 +1370,9 @@ fn word_mode_subtitles_burn_per_word() {
         language: "es".into(),
         model: "t".into(),
         words: vec![
-            Word { text: "ONE".into(), start_us: 300_000, end_us: 800_000, confidence: 1.0, rejected: false },
-            Word { text: "TWO".into(), start_us: 1_500_000, end_us: 2_000_000, confidence: 1.0, rejected: false },
-            Word { text: "IGNORED".into(), start_us: 2_300_000, end_us: 2_600_000, confidence: 1.0, rejected: true },
+            Word { text: "ONE".into(), start_us: 300_000, end_us: 800_000, confidence: 1.0, rejected: false, display: None },
+            Word { text: "TWO".into(), start_us: 1_500_000, end_us: 2_000_000, confidence: 1.0, rejected: false, display: None },
+            Word { text: "IGNORED".into(), start_us: 2_300_000, end_us: 2_600_000, confidence: 1.0, rejected: true, display: None },
         ],
         segments: vec![],
         global_avg_volume: 0.0,
@@ -1448,8 +1448,8 @@ fn karaoke_mode_highlights_words_progressively() {
         language: "es".into(),
         model: "t".into(),
         words: vec![
-            Word { text: "ONE".into(), start_us: 300_000, end_us: 800_000, confidence: 1.0, rejected: false },
-            Word { text: "TWO".into(), start_us: 1_500_000, end_us: 2_000_000, confidence: 1.0, rejected: false },
+            Word { text: "ONE".into(), start_us: 300_000, end_us: 800_000, confidence: 1.0, rejected: false, display: None },
+            Word { text: "TWO".into(), start_us: 1_500_000, end_us: 2_000_000, confidence: 1.0, rejected: false, display: None },
         ],
         segments: vec![ue_core::model::Segment {
             text: "ONE TWO".into(),
@@ -1555,6 +1555,7 @@ fn continuous_speech_chunks_into_multiple_captions() {
             end_us: i * 200_000 + 180_000,
             confidence: 1.0,
             rejected: false,
+            display: None,
         })
         .collect();
     let doc_id = Id::new();
@@ -1609,4 +1610,109 @@ fn continuous_speech_chunks_into_multiple_captions() {
     let n = fc.matches("drawtext").count();
     assert!(n >= 3, "20 continuous words must yield several captions, got {n}");
     assert!(!fc.contains("todo junto"), "the giant segment text is not used");
+}
+
+/// denoise=true inserts the afftdn filter into the clip's audio chain.
+#[test]
+fn denoise_flag_inserts_afftdn() {
+    let Some(dir) = media_dir() else { return };
+    let (mut store, seq_id) = simple_store(dir);
+    let seq = store.project.sequences.iter_mut().find(|s| s.id == seq_id).unwrap();
+    let clip = seq
+        .tracks
+        .iter_mut()
+        .find(|t| t.kind == TrackKind::Video)
+        .and_then(|t| t.clips.first_mut())
+        .unwrap();
+    clip.audio.denoise = true;
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-denoise.mp4");
+    let plan = ue_export::graph::build_ffmpeg_args(
+        &store.project,
+        seq_id,
+        dir,
+        &out,
+        &ExportSettings::default(),
+    )
+    .unwrap();
+    let fc = plan.args.iter().find(|a| a.contains("amix")).unwrap();
+    assert!(fc.contains("afftdn"), "denoise filter present: {fc}");
+}
+
+/// Word corrections ("godo" → "godot") show up in the caption drawtexts.
+#[test]
+fn corrected_words_appear_in_captions() {
+    let Some(dir) = media_dir() else { return };
+    let (mut store, seq_id) = simple_store(dir);
+    let vtrack = store
+        .project
+        .sequence(seq_id)
+        .unwrap()
+        .tracks
+        .iter()
+        .find(|t| t.kind == TrackKind::Video)
+        .unwrap();
+    let aid = match &vtrack.clips[0].payload {
+        ClipPayload::Media { asset_id, .. } => *asset_id,
+        _ => panic!(),
+    };
+    let doc_id = Id::new();
+    store.project.transcripts.push(TranscriptDoc {
+        id: doc_id,
+        asset_id: aid,
+        language: "es".into(),
+        model: "t".into(),
+        words: vec![
+            Word { text: "uso".into(), start_us: 100_000, end_us: 400_000, confidence: 1.0, rejected: false, display: None },
+            Word { text: "godo".into(), start_us: 450_000, end_us: 800_000, confidence: 1.0, rejected: false, display: None },
+        ],
+        segments: vec![],
+        global_avg_volume: 0.0,
+    });
+    // correct via the action (undoable), like the command does
+    store
+        .dispatch(
+            "Correct word",
+            vec![ue_core::Action::SetWordText {
+                transcript_id: doc_id,
+                index: 1,
+                display: Some("godot".into()),
+            }],
+        )
+        .unwrap();
+    let seq = store.project.sequence_mut(seq_id).unwrap();
+    seq.tracks.push(Track::new(TrackKind::Video, "V2"));
+    let v2 = seq.tracks.last().unwrap().id;
+    let subs = Clip {
+        id: Id::new(),
+        payload: ClipPayload::Subtitles {
+            transcript_id: doc_id,
+            style: TextStyle::default(),
+            mode: SubtitleMode::Phrase,
+        },
+        start: 0,
+        duration: 2 * SEC,
+        speed: 1.0,
+        effects: vec![],
+        transform: Default::default(),
+        audio: Default::default(),
+        transition_in: None,
+        label_color: None,
+        group: None,
+    };
+    store.insert_clip(v2, subs, InsertMode::Strict).unwrap();
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-corrected.mp4");
+    let plan = ue_export::graph::build_ffmpeg_args(
+        &store.project,
+        seq_id,
+        dir,
+        &out,
+        &ExportSettings::default(),
+    )
+    .unwrap();
+    let fc = plan.args.iter().find(|a| a.contains("drawtext")).unwrap();
+    assert!(fc.contains("uso godot"), "corrected label burned: {fc}");
+    // undo restores the original (first undo = the subs clip insert)
+    store.undo().unwrap();
+    store.undo().unwrap();
+    assert_eq!(store.project.transcripts[0].words[1].label(), "godo");
 }

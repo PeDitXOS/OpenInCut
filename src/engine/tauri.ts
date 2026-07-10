@@ -245,6 +245,16 @@ export class TauriEngine implements EngineClient {
   removeSequence(sequenceId: Id): Promise<StateSnapshot> {
     return invoke("remove_sequence", { sequenceId });
   }
+  setWordText(transcriptId: Id, index: number, text: string): Promise<StateSnapshot> {
+    return invoke("set_word_text", { transcriptId, index, text });
+  }
+  replaceWords(
+    transcriptId: Id,
+    from: string,
+    to: string,
+  ): Promise<{ replaced: number; snapshot: StateSnapshot }> {
+    return invoke("replace_words", { transcriptId, from, to });
+  }
   setSequenceProps(
     sequenceId: Id,
     width: number,

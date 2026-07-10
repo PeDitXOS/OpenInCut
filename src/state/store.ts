@@ -116,6 +116,8 @@ export interface UiState {
   toggleTrack: (trackId: Id, prop: "muted" | "solo" | "locked") => Promise<void>;
   addTrack: (kind: "video" | "audio") => Promise<void>;
   removeSequence: (sequenceId: Id) => Promise<void>;
+  setWordText: (transcriptId: Id, index: number, text: string) => Promise<void>;
+  replaceWords: (transcriptId: Id, from: string, to: string) => Promise<void>;
   setSequenceProps: (
     sequenceId: Id,
     width: number,
@@ -545,6 +547,16 @@ export const useStore = create<UiState>((set, get) => {
     addTrack: (kind) => run("Add track", () => engine.addTrack(kind)),
     removeSequence: (sequenceId) =>
       run("Delete sequence", () => engine.removeSequence(sequenceId)),
+    setWordText: (transcriptId, index, text) =>
+      run("Correct word", () => engine.setWordText(transcriptId, index, text)),
+    replaceWords: async (transcriptId, from, to) => {
+      try {
+        const r = await engine.replaceWords(transcriptId, from, to);
+        applySnapshot(r.snapshot, `Replaced ${r.replaced} occurrence(s)`);
+      } catch (e) {
+        set({ lastActionLabel: `⚠ ${e instanceof Error ? e.message : String(e)}` });
+      }
+    },
     setSequenceProps: (sequenceId, width, height, fpsNum, fpsDen) =>
       run("Sequence settings", () =>
         engine.setSequenceProps(sequenceId, width, height, fpsNum, fpsDen),

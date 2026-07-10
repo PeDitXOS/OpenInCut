@@ -534,15 +534,49 @@ fn redo(state: State<AppState>) -> Res<StateSnapshot> {
 }
 
 #[tauri::command]
-fn set_clip_audio(state: State<AppState>, clip_id: String, audio: AudioProps) -> Res<StateSnapshot> {
+fn set_clip_audio(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    clip_id: String,
+    audio: AudioProps,
+) -> Res<StateSnapshot> {
     let mut store = state.store.lock().unwrap();
     let id = parse_id(&clip_id)?;
+    let wants_denoise = audio.denoise;
     store
         .dispatch(
             "Edit audio",
             vec![ue_core::Action::SetClipAudio { clip_id: id, audio }],
         )
         .map_err(|e| e.to_string())?;
+    // denoise turned on: render the conform's denoised variant in the
+    // background; the mixer picks it up on the state-changed resync
+    if wants_denoise {
+        if let Some(conform) = store
+            .project
+            .clip(id)
+            .and_then(|c| match &c.payload {
+                ue_core::model::ClipPayload::Media { asset_id, .. } => Some(*asset_id),
+                _ => None,
+            })
+            .and_then(|aid| store.project.asset(aid))
+            .and_then(|a| a.audio_conform.clone())
+        {
+            let conform = PathBuf::from(conform);
+            if !ue_media::denoise::denoised_path(&conform).exists() {
+                let app = app.clone();
+                std::thread::spawn(move || match ue_media::denoise::denoise_wav(&conform) {
+                    Ok(_) => {
+                        // bump the version so sync_player rebuilds the items
+                        let state = app.state::<AppState>();
+                        state.store.lock().unwrap().version += 1;
+                        let _ = app.emit("state-changed", ());
+                    }
+                    Err(e) => eprintln!("[denoise] {conform:?}: {e}"),
+                });
+            }
+        }
+    }
     Ok(snapshot(&store))
 }
 
@@ -1245,6 +1279,73 @@ fn set_sequence_props(
         )
         .map_err(|e| e.to_string())?;
     Ok(snapshot(&store))
+}
+
+/// Correct one transcribed word ("godo" → "godot"): same audio, new label.
+/// Empty text reverts to the original. Undoable.
+#[tauri::command]
+fn set_word_text(
+    state: State<AppState>,
+    transcript_id: String,
+    index: usize,
+    text: String,
+) -> Res<StateSnapshot> {
+    let mut store = state.store.lock().unwrap();
+    let id = parse_id(&transcript_id)?;
+    let display = if text.trim().is_empty() { None } else { Some(text.trim().to_string()) };
+    store
+        .dispatch(
+            "Correct word",
+            vec![ue_core::Action::SetWordText { transcript_id: id, index, display }],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(snapshot(&store))
+}
+
+/// Replace every whole-word occurrence (case-insensitive, against the shown
+/// label) in a transcript. One undo entry. Returns the count.
+#[tauri::command]
+fn replace_words(
+    state: State<AppState>,
+    transcript_id: String,
+    from: String,
+    to: String,
+) -> Res<serde_json::Value> {
+    let mut store = state.store.lock().unwrap();
+    let id = parse_id(&transcript_id)?;
+    let needle = from.trim().to_lowercase();
+    if needle.is_empty() {
+        return Err("nothing to search".into());
+    }
+    let doc = store
+        .project
+        .transcripts
+        .iter()
+        .find(|t| t.id == id)
+        .ok_or("transcript not found")?;
+    let matches: Vec<usize> = doc
+        .words
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| w.label().trim().trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase() == needle
+            || w.label().trim().to_lowercase() == needle)
+        .map(|(i, _)| i)
+        .collect();
+    if matches.is_empty() {
+        return Ok(serde_json::json!({ "replaced": 0, "snapshot": snapshot(&store) }));
+    }
+    let display = if to.trim().is_empty() { None } else { Some(to.trim().to_string()) };
+    let actions: Vec<ue_core::Action> = matches
+        .iter()
+        .map(|i| ue_core::Action::SetWordText {
+            transcript_id: id,
+            index: *i,
+            display: display.clone(),
+        })
+        .collect();
+    let n = actions.len();
+    store.dispatch("Replace words", actions).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "replaced": n, "snapshot": snapshot(&store) }))
 }
 
 #[tauri::command]
@@ -2121,6 +2222,8 @@ pub fn run() {
             set_active_sequence,
             remove_sequence,
             set_sequence_props,
+            set_word_text,
+            replace_words,
             add_avatar_clip,
             export_video,
             cancel_export,

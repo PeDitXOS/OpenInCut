@@ -52,6 +52,8 @@ pub enum Action {
     SetClipGroup { clip_id: Id, group: Option<Id> },
     AddSequence { sequence: Sequence },
     SetSequenceProps { sequence_id: Id, resolution: (u32, u32), fps: (u32, u32) },
+    /// Correct a transcribed word's display text (None = back to the original).
+    SetWordText { transcript_id: Id, index: usize, display: Option<String> },
     RemoveSequence { sequence_id: Id },
     SetActiveSequence { sequence_id: Id },
 }
@@ -414,6 +416,21 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
             let id = sequence.id;
             project.sequences.push(sequence);
             Ok(Action::RemoveSequence { sequence_id: id })
+        }
+
+        Action::SetWordText { transcript_id, index, display } => {
+            let doc = project
+                .transcripts
+                .iter_mut()
+                .find(|t| t.id == transcript_id)
+                .ok_or_else(|| UeError::NotFound(format!("transcript {transcript_id}")))?;
+            let word = doc
+                .words
+                .get_mut(index)
+                .ok_or_else(|| UeError::NotFound(format!("word {index}")))?;
+            let display = display.filter(|d| !d.trim().is_empty() && *d != word.text);
+            let old = std::mem::replace(&mut word.display, display);
+            Ok(Action::SetWordText { transcript_id, index, display: old })
         }
 
         Action::SetSequenceProps { sequence_id, resolution, fps } => {
