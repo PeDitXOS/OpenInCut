@@ -1528,3 +1528,85 @@ fn system_fonts_enumerate_and_resolve() {
     // a nonexistent family falls to None (and drawtext will use the default)
     assert!(ue_export::graph::resolve_font_family("NoSuchFontFamily9999").is_none());
 }
+
+/// Continuous speech must be chunked into caption-sized phrases: one giant
+/// Whisper segment can NOT become one giant drawtext (the reported bug).
+#[test]
+fn continuous_speech_chunks_into_multiple_captions() {
+    let Some(dir) = media_dir() else { return };
+    let (mut store, seq_id) = simple_store(dir); // 4s clip
+    let vtrack = store
+        .project
+        .sequence(seq_id)
+        .unwrap()
+        .tracks
+        .iter()
+        .find(|t| t.kind == TrackKind::Video)
+        .unwrap();
+    let aid = match &vtrack.clips[0].payload {
+        ClipPayload::Media { asset_id, .. } => *asset_id,
+        _ => panic!(),
+    };
+    // 20 words with no pauses inside ONE segment spanning the whole clip
+    let words: Vec<Word> = (0..20)
+        .map(|i| Word {
+            text: format!("palabra{i:02}"),
+            start_us: i * 200_000,
+            end_us: i * 200_000 + 180_000,
+            confidence: 1.0,
+            rejected: false,
+        })
+        .collect();
+    let doc_id = Id::new();
+    store.project.transcripts.push(TranscriptDoc {
+        id: doc_id,
+        asset_id: aid,
+        language: "es".into(),
+        model: "t".into(),
+        words,
+        segments: vec![ue_core::model::Segment {
+            text: "todo junto".into(),
+            start_us: 0,
+            end_us: 4 * SEC,
+            word_range: (0, 20),
+            emotion: None,
+            volume_rms: 0.0,
+        }],
+        global_avg_volume: 0.0,
+    });
+    let seq = store.project.sequence_mut(seq_id).unwrap();
+    seq.tracks.push(Track::new(TrackKind::Video, "V2"));
+    let v2 = seq.tracks.last().unwrap().id;
+    let subs = Clip {
+        id: Id::new(),
+        payload: ClipPayload::Subtitles {
+            transcript_id: doc_id,
+            style: TextStyle { size: 60.0, y_offset: 380.0, ..Default::default() },
+            mode: SubtitleMode::Phrase,
+        },
+        start: 0,
+        duration: 4 * SEC,
+        speed: 1.0,
+        effects: vec![],
+        transform: Default::default(),
+        audio: Default::default(),
+        transition_in: None,
+        label_color: None,
+        group: None,
+    };
+    store.insert_clip(v2, subs, InsertMode::Strict).unwrap();
+
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-chunked-subs.mp4");
+    let plan = ue_export::graph::build_ffmpeg_args(
+        &store.project,
+        seq_id,
+        dir,
+        &out,
+        &ExportSettings::default(),
+    )
+    .unwrap();
+    let fc = plan.args.iter().find(|a| a.contains("drawtext")).unwrap();
+    let n = fc.matches("drawtext").count();
+    assert!(n >= 3, "20 continuous words must yield several captions, got {n}");
+    assert!(!fc.contains("todo junto"), "the giant segment text is not used");
+}

@@ -127,7 +127,13 @@ function drawOverlays(
   texts: Clip[],
   subtitles: {
     content: string;
-    style: { size: number; color: string; y_offset: number; highlight_color?: string | null };
+    style: {
+      size: number;
+      color: string;
+      y_offset: number;
+      font?: string;
+      highlight_color?: string | null;
+    };
     spans?: { text: string; active: boolean }[];
   }[] = [],
 ) {
@@ -149,7 +155,8 @@ function drawOverlays(
   for (const sub of subtitles) {
     const size = (sub.style.size / 1080) * h;
     const y = h / 2 + (sub.style.y_offset / 1080) * h;
-    ctx.font = `600 ${Math.round(size)}px "Inter", sans-serif`;
+    const family = sub.style.font && sub.style.font !== "sans-serif" ? `"${sub.style.font}", ` : "";
+    ctx.font = `600 ${Math.round(size)}px ${family}"Inter", sans-serif`;
     ctx.shadowColor = "rgba(0,0,0,0.85)";
     ctx.shadowBlur = 8;
     if (sub.spans?.length) {

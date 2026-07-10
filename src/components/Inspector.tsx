@@ -860,6 +860,7 @@ function TextPanel({ clip }: { clip: Clip }) {
 
 function SubtitlesPanel({ clip }: { clip: Clip }) {
   const setSubtitlesProps = useStore((s) => s.setSubtitlesProps);
+  const subFonts = useStore((s) => s.fonts);
   if (clip.payload.type !== "subtitles") return null;
   const { style, mode } = clip.payload;
 
@@ -883,6 +884,35 @@ function SubtitlesPanel({ clip }: { clip: Clip }) {
           <option value="karaoke">Karaoke (highlighted word)</option>
         </select>
       </Row>
+      <Row label="Font">
+        <select
+          className="focus-ring min-w-0 flex-1 cursor-pointer rounded-md border border-line bg-bg2 px-2 py-1 text-[12px] text-ink"
+          value={style.font}
+          onChange={(e) =>
+            void setSubtitlesProps(clip.id, { ...style, font: e.target.value }, mode)
+          }
+          style={{ fontFamily: style.font }}
+        >
+          <option value="sans-serif">Default</option>
+          {subFonts.map(([family]) => (
+            <option key={family} value={family} style={{ fontFamily: family }}>
+              {family}
+            </option>
+          ))}
+        </select>
+      </Row>
+      {mode === "karaoke" && (
+        <Row label="Highlight">
+          <input
+            type="color"
+            className="h-6 w-10 cursor-pointer rounded border border-line bg-transparent"
+            value={style.highlight_color ?? "#FFB224"}
+            onChange={(e) =>
+              void setSubtitlesProps(clip.id, { ...style, highlight_color: e.target.value }, mode)
+            }
+          />
+        </Row>
+      )}
       <Row label="Size">
         <Slider
           value={style.size}

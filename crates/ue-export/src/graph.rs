@@ -426,9 +426,72 @@ fn build_audio_only_args(
     Ok(FfmpegPlan { args, duration_us })
 }
 
+/// Caption-sized max line length for a canvas: Whisper segments can span
+/// MINUTES of continuous speech; captions must be chunked to fit the frame.
+fn caption_max_chars(out_w: u32, font_px: f64) -> usize {
+    ((out_w as f64 * 0.86) / (font_px * 0.52)).round().clamp(12.0, 64.0) as usize
+}
+
+/// Pause longer than this starts a new caption.
+const CAPTION_GAP_US: i64 = 900_000;
+/// No caption stays on screen longer than this.
+const CAPTION_MAX_DUR_US: i64 = 6_000_000;
+/// A caption lingers this long after its last word (until the next one).
+const CAPTION_LINGER_US: i64 = 600_000;
+
+/// Build caption phrases straight from the WORDS (Whisper's own segment
+/// grouping can span minutes of continuous speech). New caption on: line
+/// full, pause > CAPTION_GAP_US, or duration > CAPTION_MAX_DUR_US. Windows
+/// are contiguous up to a small linger. Also used to slice karaoke lines.
+fn caption_phrases(
+    doc: &ue_core::model::TranscriptDoc,
+    max_chars: usize,
+) -> Vec<(String, i64, i64)> {
+    let words: Vec<&ue_core::model::Word> =
+        doc.words.iter().filter(|w| !w.rejected).collect();
+    if words.is_empty() {
+        // old/wordless transcripts: fall back to the segments as-is
+        return doc.segments.iter().map(|s| (s.text.clone(), s.start_us, s.end_us)).collect();
+    }
+    let mut cuts: Vec<usize> = vec![0];
+    let mut chars = 0usize;
+    let mut chunk_start = words[0].start_us;
+    for (i, w) in words.iter().enumerate() {
+        if i == 0 {
+            chars = w.text.len();
+            continue;
+        }
+        let gap = w.start_us - words[i - 1].end_us;
+        let too_long = chars + 1 + w.text.len() > max_chars;
+        let too_slow = w.end_us - chunk_start > CAPTION_MAX_DUR_US;
+        if too_long || gap > CAPTION_GAP_US || too_slow {
+            cuts.push(i);
+            chars = w.text.len();
+            chunk_start = w.start_us;
+        } else {
+            chars += 1 + w.text.len();
+        }
+    }
+    cuts.push(words.len());
+    let mut out = Vec::with_capacity(cuts.len() - 1);
+    for c in cuts.windows(2) {
+        let group = &words[c[0]..c[1]];
+        let text = group.iter().map(|w| w.text.as_str()).collect::<Vec<_>>().join(" ");
+        let start = group[0].start_us;
+        let natural_end = group.last().unwrap().end_us + CAPTION_LINGER_US;
+        let end = match words.get(c[1]) {
+            Some(next) => natural_end.min(next.start_us),
+            None => natural_end,
+        };
+        out.push((text, start, end.max(start + 1)));
+    }
+    out
+}
+
 /// Karaoke: per segment, each word in a dim color for the whole phrase and
 /// in a highlighted color from when it is spoken until the end of the segment.
 /// None if there is no measurable fontfile (the caller falls back to word mode).
+#[allow(clippy::too_many_arguments)]
 fn karaoke_overlays(
     seq: &ue_core::model::Sequence,
     doc: &ue_core::model::TranscriptDoc,
@@ -436,6 +499,7 @@ fn karaoke_overlays(
     style: &ue_core::model::TextStyle,
     fallback_font: &str,
     scale: f64,
+    out_w: u32,
 ) -> Option<Vec<String>> {
     let font_part = font_part_for(style, fallback_font);
     let font_path = font_part.strip_prefix("fontfile=")?.to_string();
@@ -453,22 +517,25 @@ fn karaoke_overlays(
     );
     let space_w = measure_text_px(&font_path, " ", px)?;
 
+    // karaoke lines = the same word-driven caption phrases as phrase mode
+    let phrases = caption_phrases(doc, caption_max_chars(out_w, px));
+
     let mut out = vec![];
-    for seg in &doc.segments {
+    for (_text, ph_start, ph_end) in &phrases {
         let words: Vec<&ue_core::model::Word> = doc
             .words
             .iter()
-            .filter(|w| !w.rejected && w.start_us >= seg.start_us && w.start_us < seg.end_us)
+            .filter(|w| !w.rejected && w.start_us >= *ph_start && w.start_us < *ph_end)
             .collect();
         if words.is_empty() {
             continue;
         }
-        // segment window on the timeline, clamped to the clip
-        let Some(seg_tl) = asset_time_to_timeline(seq, doc.asset_id, seg.start_us) else {
+        // phrase window on the timeline, clamped to the clip
+        let Some(seg_tl) = asset_time_to_timeline(seq, doc.asset_id, *ph_start) else {
             continue;
         };
         let seg_from = seg_tl.max(clip.start);
-        let seg_to = (seg_tl + (seg.end_us - seg.start_us)).min(clip.end());
+        let seg_to = (seg_tl + (ph_end - ph_start)).min(clip.end());
         if seg_to <= seg_from {
             continue;
         }
@@ -507,6 +574,7 @@ fn build_text_overlays(
     project: &Project,
     seq: &ue_core::model::Sequence,
     out_h: u32,
+    out_w: u32,
 ) -> Option<String> {
     use ue_core::model::{ClipPayload, TrackKind};
     let scale = out_h as f64 / 1080.0;
@@ -542,28 +610,30 @@ fn build_text_overlays(
                     // (progressive fill); needs font metrics
                     if *mode == SubtitleMode::Karaoke {
                         if let Some(chains) =
-                            karaoke_overlays(seq, doc, clip, style, &font_part, scale)
+                            karaoke_overlays(seq, doc, clip, style, &font_part, scale, out_w)
                         {
                             parts.extend(chains);
                             continue;
                         }
                         // no metrics → falls back to word mode
                     }
-                    // phrase mode: one line per segment; word mode:
-                    // one big word at a time (shorts style)
-                    let items: Vec<(&str, i64, i64)> = match mode {
-                        SubtitleMode::Phrase => doc
-                            .segments
-                            .iter()
-                            .map(|s| (s.text.as_str(), s.start_us, s.end_us))
-                            .collect(),
+                    // phrase mode: caption-sized chunks per segment (a
+                    // segment can span minutes of continuous speech);
+                    // word mode: one big word at a time (shorts style)
+                    let owned_items: Vec<(String, i64, i64)> = match mode {
+                        SubtitleMode::Phrase => {
+                            let px = (style.size as f64) * scale;
+                            caption_phrases(doc, caption_max_chars(out_w, px))
+                        }
                         SubtitleMode::Word | SubtitleMode::Karaoke => doc
                             .words
                             .iter()
                             .filter(|w| !w.rejected)
-                            .map(|w| (w.text.as_str(), w.start_us, w.end_us))
+                            .map(|w| (w.text.clone(), w.start_us, w.end_us))
                             .collect(),
                     };
+                    let items: Vec<(&str, i64, i64)> =
+                        owned_items.iter().map(|(t, a, b)| (t.as_str(), *a, *b)).collect();
                     let word_scale = match mode {
                         SubtitleMode::Phrase => 1.0,
                         _ => 1.6, // single words larger
@@ -997,7 +1067,7 @@ pub fn build_ffmpeg_args(
     current = after_avatars;
 
     // burn titles and subtitles onto the combined video
-    let text_chain = build_text_overlays(project, seq, out_h);
+    let text_chain = build_text_overlays(project, seq, out_h, out_w);
     match text_chain {
         Some(chain) => fc.push(format!("[{current}]{chain}[vout]")),
         None => fc.push(format!("[{current}]null[vout]")),
