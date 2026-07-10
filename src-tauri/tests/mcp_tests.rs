@@ -95,7 +95,11 @@ fn summary_and_timeline_reflect_project() {
     let resp = rpc(&state, "tools/call", json!({ "name": "get_project_summary", "arguments": {} }));
     let summary = tool_json(&resp);
     assert_eq!(summary["assets"], 1);
-    assert_eq!(summary["sequence"]["duration_us"], 10 * SEC);
+    let seqs = summary["sequences"].as_array().unwrap();
+    assert_eq!(seqs.len(), 1);
+    assert_eq!(seqs[0]["duration_us"], 10 * SEC);
+    assert_eq!(seqs[0]["active"], true);
+    assert!(seqs[0]["sequence_id"].is_string(), "ids are addressable");
 
     let resp = rpc(&state, "tools/call", json!({ "name": "get_timeline", "arguments": {} }));
     let timeline = tool_json(&resp);
@@ -106,6 +110,448 @@ fn summary_and_timeline_reflect_project() {
         .map(|t| t["clips"].as_array().unwrap().len())
         .sum::<usize>();
     assert_eq!(clips, 1);
+}
+
+/// The whole point of the server: an agent must be able to do everything a
+/// human can. This is the contract; adding a UI feature without an MCP tool
+/// breaks it on purpose.
+#[test]
+fn tools_cover_the_whole_editor_and_are_documented() {
+    let state = AppState::new_default();
+    let tools = rpc(&state, "tools/list", json!({}));
+    let list = tools.pointer("/result/tools").unwrap().as_array().unwrap();
+    let names: Vec<&str> = list.iter().map(|t| t["name"].as_str().unwrap()).collect();
+
+    for expected in [
+        // read
+        "get_project_summary", "get_timeline", "get_media_pool", "get_transcript", "get_catalog",
+        // media
+        "import_media", "transcribe_asset",
+        // timeline
+        "add_clip", "add_text_clip", "add_generator_clip", "add_subtitles_clip",
+        "split_clip", "delete_clips", "move_clip", "trim_clip", "unlink_clip",
+        "cut_ranges", "move_range",
+        // clip properties
+        "set_clip_properties", "set_clip_content",
+        // tracks / sequences
+        "add_track", "remove_track", "set_track_prop",
+        "set_sequence_props", "set_active_sequence", "remove_sequence", "generate_vertical",
+        // ai
+        "remove_silences", "replace_words", "set_word_text",
+        "save_avatar_config", "generate_avatar_video",
+        // project / render / history
+        "new_project", "open_project", "save_project",
+        "export_video", "debug_render_frame", "debug_playback_frame", "playback",
+        "undo", "redo",
+    ] {
+        assert!(names.contains(&expected), "missing MCP tool: {expected}");
+    }
+
+    // documentation is part of the contract: an agent only sees these strings
+    for t in list {
+        let name = t["name"].as_str().unwrap();
+        let desc = t["description"].as_str().unwrap_or("");
+        assert!(desc.len() > 40, "{name}: description too thin to act on");
+        assert_eq!(
+            t.pointer("/inputSchema/additionalProperties").unwrap(),
+            false,
+            "{name}: typos in arguments must fail loudly"
+        );
+        assert!(t.pointer("/annotations/readOnlyHint").is_some(), "{name}: no annotations");
+        // every declared argument carries a description
+        if let Some(props) = t.pointer("/inputSchema/properties").and_then(|p| p.as_object()) {
+            for (arg, schema) in props {
+                assert!(
+                    schema.get("description").is_some() || schema.get("enum").is_some(),
+                    "{name}.{arg}: undocumented argument"
+                );
+            }
+        }
+    }
+
+    // read-only tools must never be flagged destructive, and vice versa
+    let by_name = |n: &str| list.iter().find(|t| t["name"] == n).unwrap();
+    assert_eq!(by_name("get_timeline")["annotations"]["readOnlyHint"], true);
+    assert_eq!(by_name("split_clip")["annotations"]["readOnlyHint"], false);
+    assert_eq!(by_name("split_clip")["annotations"]["destructiveHint"], false, "undoable");
+    assert_eq!(by_name("open_project")["annotations"]["destructiveHint"], true);
+    assert_eq!(by_name("export_video")["annotations"]["destructiveHint"], true);
+}
+
+/// `initialize` hands the agent the map: units, history semantics, the flow.
+#[test]
+fn initialize_instructions_state_the_invariants() {
+    let state = AppState::new_default();
+    let init = rpc(&state, "initialize", json!({}));
+    let inst = init.pointer("/result/instructions").unwrap().as_str().unwrap();
+    assert!(inst.contains("MICROSECONDS"), "units must be unmissable");
+    assert!(inst.contains("undo"), "history semantics");
+    assert!(inst.contains("transcribe_asset"), "flow references real tool names");
+}
+
+/// A patch touches only the keys it names, understands keyframe curves, and
+/// several properties in one call collapse into ONE undo entry.
+#[test]
+fn set_clip_properties_patches_and_is_one_undo() {
+    let (state, clip_id) = state_with_clip();
+
+    let resp = rpc(
+        &state,
+        "tools/call",
+        json!({ "name": "set_clip_properties", "arguments": {
+            "clip_id": clip_id.to_string(),
+            "transform": {
+                "position_x": 120.0,
+                "opacity": { "keys": [
+                    { "t": 0, "value": 0.0, "interp": { "kind": "linear" } },
+                    { "t": 1000000, "value": 1.0, "interp": { "kind": "linear" } }
+                ]}
+            },
+            "audio": { "gain_db": -6.0, "muted": true },
+            "speed": 2.0
+        }}),
+    );
+    assert!(resp.pointer("/result/isError").is_none(), "{resp}");
+
+    {
+        let store = state.store.lock().unwrap();
+        let clip = store.project.clip(clip_id).unwrap();
+        assert_eq!(clip.transform.position.0.eval(0), 120.0, "position_x written");
+        assert_eq!(clip.transform.position.1.eval(0), 0.0, "position_y untouched");
+        assert_eq!(clip.transform.scale.0.eval(0), 1.0, "scale untouched by the patch");
+        assert_eq!(clip.transform.opacity.eval(500_000), 0.5, "opacity is an animated curve");
+        assert_eq!(clip.audio.gain_db.eval(0), -6.0);
+        assert!(clip.audio.muted);
+        assert!(!clip.audio.denoise, "denoise untouched");
+        assert_eq!(clip.speed, 2.0);
+        assert_eq!(clip.duration, 5 * SEC, "2x speed halves the clip");
+    }
+
+    // ONE undo reverts the whole call
+    rpc(&state, "tools/call", json!({ "name": "undo", "arguments": {} }));
+    let store = state.store.lock().unwrap();
+    let clip = store.project.clip(clip_id).unwrap();
+    assert_eq!(clip.transform.position.0.eval(0), 0.0, "one undo reverted everything");
+    assert_eq!(clip.speed, 1.0);
+    assert_eq!(clip.duration, 10 * SEC);
+    assert!(!clip.audio.muted);
+}
+
+/// Typos must fail loudly instead of silently doing nothing.
+#[test]
+fn unknown_patch_fields_and_bad_ids_are_rejected() {
+    let (state, clip_id) = state_with_clip();
+
+    let bad_field = rpc(
+        &state,
+        "tools/call",
+        json!({ "name": "set_clip_properties", "arguments": {
+            "clip_id": clip_id.to_string(), "transform": { "positionX": 10 }
+        }}),
+    );
+    assert_eq!(bad_field.pointer("/result/isError").unwrap(), true);
+    let msg = bad_field.pointer("/result/content/0/text").unwrap().as_str().unwrap();
+    assert!(msg.contains("positionX"), "the message names the offending field: {msg}");
+
+    // nothing to change is an error, not a silent no-op
+    let empty = rpc(
+        &state,
+        "tools/call",
+        json!({ "name": "set_clip_properties", "arguments": { "clip_id": clip_id.to_string() } }),
+    );
+    assert_eq!(empty.pointer("/result/isError").unwrap(), true);
+
+    // an effect that does not exist in the registry
+    let bad_effect = rpc(
+        &state,
+        "tools/call",
+        json!({ "name": "set_clip_properties", "arguments": {
+            "clip_id": clip_id.to_string(),
+            "effects": [{ "effect_id": "core.does_not_exist" }]
+        }}),
+    );
+    assert_eq!(bad_effect.pointer("/result/isError").unwrap(), true);
+
+    // an unknown tool name
+    let unknown = rpc(&state, "tools/call", json!({ "name": "nope", "arguments": {} }));
+    assert_eq!(unknown.pointer("/result/isError").unwrap(), true);
+}
+
+/// Text clips: content and a partial style patch, in one call.
+#[test]
+fn set_clip_content_edits_text_and_style() {
+    let state = AppState::new_default();
+    let resp = rpc(
+        &state,
+        "tools/call",
+        json!({ "name": "add_text_clip", "arguments": { "content": "hola", "at_us": 0 } }),
+    );
+    let clip_id: Id = tool_json(&resp)["clip_id"].as_str().unwrap().parse().unwrap();
+
+    let resp = rpc(
+        &state,
+        "tools/call",
+        json!({ "name": "set_clip_content", "arguments": {
+            "clip_id": clip_id.to_string(),
+            "text": "adiós",
+            "style": { "size": 72.0, "color": "#ff0000" }
+        }}),
+    );
+    assert!(resp.pointer("/result/isError").is_none(), "{resp}");
+
+    let store = state.store.lock().unwrap();
+    match &store.project.clip(clip_id).unwrap().payload {
+        ClipPayload::Text { content, style } => {
+            assert_eq!(content, "adiós");
+            assert_eq!(style.size, 72.0);
+            assert_eq!(style.color, "#ff0000");
+            assert_eq!(style.align, TextAlign::Center, "untouched keys keep their value");
+        }
+        other => panic!("expected a text clip, got {other:?}"),
+    }
+}
+
+/// Tracks: create, rename, set volume, and refuse to delete the last one.
+#[test]
+fn track_tools_round_trip() {
+    let state = AppState::new_default();
+    let resp = rpc(&state, "tools/call", json!({ "name": "add_track", "arguments": { "kind": "video" } }));
+    let track_id = tool_json(&resp)["track_id"].as_str().unwrap().to_string();
+
+    let resp = rpc(
+        &state,
+        "tools/call",
+        json!({ "name": "set_track_prop", "arguments": { "track_id": track_id, "name": "B-roll" } }),
+    );
+    assert!(resp.pointer("/result/isError").is_none(), "{resp}");
+
+    // exactly one property per call
+    let two = rpc(
+        &state,
+        "tools/call",
+        json!({ "name": "set_track_prop", "arguments": {
+            "track_id": track_id, "muted": true, "locked": true
+        }}),
+    );
+    assert_eq!(two.pointer("/result/isError").unwrap(), true);
+
+    let store = state.store.lock().unwrap();
+    let seq = store.project.sequence(store.project.active_sequence).unwrap();
+    assert!(seq.tracks.iter().any(|t| t.name == "B-roll"));
+    let video_tracks: Vec<Id> =
+        seq.tracks.iter().filter(|t| t.kind == TrackKind::Video).map(|t| t.id).collect();
+    drop(store);
+
+    // removing them all fails on the last one
+    for (i, id) in video_tracks.iter().enumerate() {
+        let resp = rpc(
+            &state,
+            "tools/call",
+            json!({ "name": "remove_track", "arguments": { "track_id": id.to_string() } }),
+        );
+        let last = i + 1 == video_tracks.len();
+        assert_eq!(
+            resp.pointer("/result/isError").is_some(),
+            last,
+            "only the last video track is protected"
+        );
+    }
+}
+
+/// cut_ranges works across tracks and reports what it removed.
+#[test]
+fn cut_ranges_ripples_all_tracks() {
+    let (state, clip_id) = state_with_clip();
+    // a second clip, on the audio track, spanning the same time
+    {
+        let mut store = state.store.lock().unwrap();
+        let aid = store.project.assets[0].id;
+        let at = store
+            .project
+            .sequence(store.project.active_sequence)
+            .unwrap()
+            .tracks
+            .iter()
+            .find(|t| t.kind == TrackKind::Audio)
+            .unwrap()
+            .id;
+        store.insert_clip(at, Clip::new_media(aid, 0, 10 * SEC, 0), InsertMode::Strict).unwrap();
+    }
+
+    let resp = rpc(
+        &state,
+        "tools/call",
+        json!({ "name": "cut_ranges", "arguments": { "ranges": [[2 * SEC, 4 * SEC]] } }),
+    );
+    let out = tool_json(&resp);
+    assert_eq!(out["cut"], 1);
+    assert_eq!(out["removed_us"], 2 * SEC);
+
+    let store = state.store.lock().unwrap();
+    let seq = store.project.sequence(store.project.active_sequence).unwrap();
+    assert_eq!(seq.duration_us(), 8 * SEC, "both tracks rippled");
+    // the cut splices each track's clip, so ids are re-minted (ReplaceClips)
+    assert!(store.project.clip(clip_id).is_none(), "the original clip was spliced");
+    for track in &seq.tracks {
+        // what was left and right of the cut, now butted together
+        assert_eq!(track.clips.len(), 2, "each track kept both halves");
+        assert_eq!(track.clips[0].end(), track.clips[1].start, "the gap was closed");
+        assert_eq!(track.clips.iter().map(|c| c.duration).sum::<i64>(), 8 * SEC);
+    }
+
+    // an empty range list is an error, not a no-op
+    drop(store);
+    let empty = rpc(&state, "tools/call", json!({ "name": "cut_ranges", "arguments": { "ranges": [] } }));
+    assert_eq!(empty.pointer("/result/isError").unwrap(), true);
+}
+
+/// The whole agentic loop against REAL ffmpeg: import a file, put it on the
+/// timeline, animate it, cut a hole in it and render the result. If this
+/// passes, an agent can edit a video with nothing but MCP calls.
+#[test]
+fn agentic_workflow_import_edit_export() {
+    let ffmpeg = ue_media::ffmpeg_bin();
+    if std::process::Command::new(&ffmpeg)
+        .arg("-version")
+        .output()
+        .map(|o| !o.status.success())
+        .unwrap_or(true)
+    {
+        eprintln!("NOTE: no ffmpeg; test skipped");
+        return;
+    }
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-mcp-agentic");
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("src.mp4");
+    if !src.exists() {
+        let st = std::process::Command::new(&ffmpeg)
+            .args(["-y", "-v", "error", "-f", "lavfi", "-i", "testsrc=duration=6:size=320x180:rate=30"])
+            .args(["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"])
+            .arg(&src)
+            .status()
+            .unwrap();
+        assert!(st.success());
+    }
+
+    let state = AppState::new_default();
+    let call = |name: &str, arguments: Value| -> Value {
+        let resp = rpc(&state, "tools/call", json!({ "name": name, "arguments": arguments }));
+        assert!(
+            resp.pointer("/result/isError").is_none(),
+            "{name} failed: {}",
+            resp.pointer("/result/content/0/text").unwrap_or(&Value::Null)
+        );
+        tool_json(&resp)
+    };
+
+    // 1. import (no AppHandle → no background conform, which is fine here)
+    let imported = call("import_media", json!({ "paths": [src.to_string_lossy()] }));
+    assert_eq!(imported["imported"], 1);
+    let asset_id = imported["assets"][0]["asset_id"].as_str().unwrap().to_string();
+    assert_eq!(imported["assets"][0]["duration_us"], 6 * SEC);
+
+    // importing the same content again is idempotent
+    let again = call("import_media", json!({ "paths": [src.to_string_lossy()] }));
+    assert_eq!(again["assets"][0]["asset_id"], asset_id, "same content → same asset");
+    assert_eq!(state.store.lock().unwrap().project.assets.len(), 1, "no duplicate asset");
+
+    // 2. put it on the timeline
+    let clip_id = call("add_clip", json!({ "asset_id": asset_id, "at_us": 0 }))["clip_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // 3. animate the opacity and push it right
+    call(
+        "set_clip_properties",
+        json!({ "clip_id": clip_id, "transform": {
+            "position_x": 40.0,
+            "opacity": { "keys": [
+                { "t": 0, "value": 0.2, "interp": { "kind": "linear" } },
+                { "t": 2000000, "value": 1.0, "interp": { "kind": "linear" } }
+            ]}
+        }}),
+    );
+
+    // 4. cut a hole out of the middle, rippling
+    let cut = call("cut_ranges", json!({ "ranges": [[2 * SEC, 3 * SEC]] }));
+    assert_eq!(cut["removed_us"], SEC);
+
+    // 5. the timeline agrees
+    let timeline = call("get_timeline", json!({}));
+    let clips: Vec<&Value> = timeline["tracks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|t| t["clips"].as_array().unwrap())
+        .collect();
+    assert_eq!(clips.len(), 2, "split around the hole");
+
+    // 6. render it for real
+    let out = dir.join("out.mp4");
+    let _ = std::fs::remove_file(&out);
+    let exported = call("export_video", json!({ "path": out.to_string_lossy(), "crf": 30 }));
+    assert_eq!(exported["pieces"], 0, "whole timeline");
+    assert!(out.exists(), "the export wrote a file");
+    let probed = ue_media::import_file(&out).expect("the export is a valid video");
+    let dur = probed.probe.duration_us;
+    assert!(
+        (4_500_000..=5_500_000).contains(&dur),
+        "6 s minus the 1 s hole ≈ 5 s, got {dur}"
+    );
+
+    // 7. multi-piece export: two chunks concatenated into one file
+    let pieces = dir.join("pieces.mp4");
+    let _ = std::fs::remove_file(&pieces);
+    let exported = call(
+        "export_video",
+        json!({ "path": pieces.to_string_lossy(), "crf": 30,
+                "ranges": [[0, SEC], [3 * SEC, 4 * SEC]] }),
+    );
+    assert_eq!(exported["pieces"], 2);
+    let dur = ue_media::import_file(&pieces).unwrap().probe.duration_us;
+    assert!((1_600_000..=2_400_000).contains(&dur), "two 1 s pieces ≈ 2 s, got {dur}");
+
+    // 8. and the whole session is undoable, one call at a time
+    let duration = || {
+        let store = state.store.lock().unwrap();
+        store.project.sequence(store.project.active_sequence).unwrap().duration_us()
+    };
+    assert_eq!(duration(), 5 * SEC);
+    call("undo", json!({})); // the cut
+    assert_eq!(duration(), 6 * SEC, "undo restored the cut");
+}
+
+/// The server is loopback-only AND token-gated: no header, a wrong token, or
+/// an empty session token must never authorize.
+#[test]
+fn only_the_exact_bearer_token_authorizes() {
+    use ue_tauri_lib::mcp::is_authorized;
+    assert!(is_authorized(Some("Bearer s3cret"), "s3cret"));
+    assert!(is_authorized(Some("  Bearer s3cret  "), "s3cret"), "surrounding space tolerated");
+
+    assert!(!is_authorized(None, "s3cret"), "no header");
+    assert!(!is_authorized(Some(""), "s3cret"));
+    assert!(!is_authorized(Some("Bearer"), "s3cret"));
+    assert!(!is_authorized(Some("Bearer wrong"), "s3cret"));
+    assert!(!is_authorized(Some("bearer s3cret"), "s3cret"), "scheme is case-sensitive");
+    assert!(!is_authorized(Some("Bearer s3cret extra"), "s3cret"));
+    assert!(!is_authorized(Some("Basic s3cret"), "s3cret"));
+    // a server that failed to mint a token must not accept "Bearer "
+    assert!(!is_authorized(Some("Bearer "), ""));
+    assert!(!is_authorized(Some("Bearer"), ""));
+}
+
+/// The catalog is what an agent reads before naming an effect or a generator.
+#[test]
+fn catalog_lists_effects_generators_and_modes() {
+    let state = AppState::new_default();
+    let cat = tool_json(&rpc(&state, "tools/call", json!({ "name": "get_catalog", "arguments": {} })));
+    let effects = cat["effects"].as_array().or_else(|| cat["effects"]["effects"].as_array());
+    assert!(effects.is_some_and(|e| !e.is_empty()), "effects catalog: {}", cat["effects"]);
+    assert!(!cat["generators"].is_null());
+    assert_eq!(cat["subtitle_modes"][0], "phrase");
+    assert!(cat["transitions"].as_array().unwrap().contains(&json!("core.crossfade")));
 }
 
 #[test]

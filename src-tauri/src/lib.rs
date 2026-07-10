@@ -522,20 +522,25 @@ fn save_text_template(
 }
 
 /// Breaks a clip's video↔audio link (its whole group, 1 undo).
-#[tauri::command]
-fn unlink_clip(state: State<AppState>, clip_id: String) -> Res<StateSnapshot> {
+pub(crate) fn unlink_clip_impl(state: &AppState, clip_id: Id) -> Res<usize> {
     let mut store = state.store.lock().unwrap();
-    let id = parse_id(&clip_id)?;
-    let members = ue_core::ops::linked_ids(&store.project, id);
+    let members = ue_core::ops::linked_ids(&store.project, clip_id);
     if members.len() < 2 {
         return Err("the clip is not linked".into());
     }
+    let n = members.len();
     let actions = members
         .into_iter()
         .map(|clip_id| ue_core::Action::SetClipGroup { clip_id, group: None })
         .collect();
     store.dispatch("Unlink clips", actions).map_err(|e| e.to_string())?;
-    Ok(snapshot(&store))
+    Ok(n)
+}
+
+#[tauri::command]
+fn unlink_clip(state: State<AppState>, clip_id: String) -> Res<StateSnapshot> {
+    unlink_clip_impl(&state, parse_id(&clip_id)?)?;
+    Ok(snapshot(&state.store.lock().unwrap()))
 }
 
 #[tauri::command]
@@ -594,6 +599,75 @@ fn redo(state: State<AppState>) -> Res<StateSnapshot> {
     Ok(snapshot(&store))
 }
 
+/// Renders the denoised variant of a clip's conformed audio in the background
+/// (the mixer picks it up on the next `state-changed` resync). No-op when the
+/// clip is not media, the conform is missing, or the variant already exists.
+///
+/// Callers that batch several actions into ONE undo entry dispatch first and
+/// then call this: it never touches the history.
+pub(crate) fn spawn_denoise_job(app: &tauri::AppHandle, state: &AppState, clip_id: Id) {
+    let Some(conform) = ({
+        let store = state.store.lock().unwrap();
+        store
+            .project
+            .clip(clip_id)
+            .and_then(|c| match &c.payload {
+                ue_core::model::ClipPayload::Media { asset_id, .. } => Some(*asset_id),
+                _ => None,
+            })
+            .and_then(|aid| store.project.asset(aid))
+            .and_then(|a| a.audio_conform.clone())
+    }) else {
+        return;
+    };
+    let conform = PathBuf::from(conform);
+    if ue_media::denoise::denoised_path(&conform).exists() {
+        return;
+    }
+    // self-contained: the app provisions its own denoiser venv under its data
+    // dir on first use (a system python3/python is required)
+    let env_dir = state
+        .models_dir
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|m| m.parent().map(|d| d.join("denoiser")));
+    let app = app.clone();
+    std::thread::spawn(move || {
+        match ue_media::denoise::denoise_wav(&conform, env_dir.as_deref(), true) {
+            Ok(_) => {
+                // bump the version so sync_player rebuilds the items
+                let state = app.state::<AppState>();
+                state.store.lock().unwrap().version += 1;
+                let _ = app.emit("state-changed", ());
+            }
+            Err(e) => eprintln!("[denoise] {conform:?}: {e}"),
+        }
+    });
+}
+
+/// Writes a clip's audio props and, when denoise is on, renders the denoised
+/// conform variant in the background. `app` is `None` for headless callers,
+/// which then only get the denoise on export.
+pub(crate) fn set_clip_audio_impl(
+    app: Option<&tauri::AppHandle>,
+    state: &AppState,
+    id: Id,
+    audio: AudioProps,
+) -> Res<()> {
+    let wants_denoise = audio.denoise;
+    state
+        .store
+        .lock()
+        .unwrap()
+        .dispatch_coalesced("Edit audio", vec![ue_core::Action::SetClipAudio { clip_id: id, audio }])
+        .map_err(|e| e.to_string())?;
+    if let (true, Some(app)) = (wants_denoise, app) {
+        spawn_denoise_job(app, state, id);
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn set_clip_audio(
     app: tauri::AppHandle,
@@ -601,56 +675,8 @@ fn set_clip_audio(
     clip_id: String,
     audio: AudioProps,
 ) -> Res<StateSnapshot> {
-    let mut store = state.store.lock().unwrap();
-    let id = parse_id(&clip_id)?;
-    let wants_denoise = audio.denoise;
-    store
-        .dispatch_coalesced(
-            "Edit audio",
-            vec![ue_core::Action::SetClipAudio { clip_id: id, audio }],
-        )
-        .map_err(|e| e.to_string())?;
-    // denoise turned on: render the conform's denoised variant in the
-    // background; the mixer picks it up on the state-changed resync
-    if wants_denoise {
-        if let Some(conform) = store
-            .project
-            .clip(id)
-            .and_then(|c| match &c.payload {
-                ue_core::model::ClipPayload::Media { asset_id, .. } => Some(*asset_id),
-                _ => None,
-            })
-            .and_then(|aid| store.project.asset(aid))
-            .and_then(|a| a.audio_conform.clone())
-        {
-            let conform = PathBuf::from(conform);
-            if !ue_media::denoise::denoised_path(&conform).exists() {
-                let app = app.clone();
-                // self-contained: the app provisions its own denoiser venv
-                // under its data dir on first use (system python3 required)
-                let env_dir = state
-                    .models_dir
-                    .lock()
-                    .unwrap()
-                    .as_ref()
-                    .and_then(|m| m.parent().map(|d| d.join("denoiser")));
-                std::thread::spawn(move || match ue_media::denoise::denoise_wav(
-                    &conform,
-                    env_dir.as_deref(),
-                    true,
-                ) {
-                    Ok(_) => {
-                        // bump the version so sync_player rebuilds the items
-                        let state = app.state::<AppState>();
-                        state.store.lock().unwrap().version += 1;
-                        let _ = app.emit("state-changed", ());
-                    }
-                    Err(e) => eprintln!("[denoise] {conform:?}: {e}"),
-                });
-            }
-        }
-    }
-    Ok(snapshot(&store))
+    set_clip_audio_impl(Some(&app), &state, parse_id(&clip_id)?, audio)?;
+    Ok(snapshot(&state.store.lock().unwrap()))
 }
 
 #[tauri::command]
@@ -673,42 +699,59 @@ fn set_clip_transform(
 /// Imports files into the pool (probe + hash). Does not enter the history (PLAN §6.10).
 /// The audio conform runs in the background; when done it emits
 /// `state-changed` so the UI refreshes.
+///
+/// Returns the asset id of every path (existing id when the content was
+/// already imported: importing twice is idempotent, keyed by content hash).
+/// `app` is `None` in tests and headless callers: the conform/proxy jobs are
+/// then skipped, so `audio_conform` stays empty until the app imports it.
+pub(crate) fn import_media_impl(
+    app: Option<&tauri::AppHandle>,
+    state: &AppState,
+    paths: &[String],
+) -> Res<Vec<Id>> {
+    let cache_dir = state.cache_dir.lock().unwrap().clone();
+    let mut store = state.store.lock().unwrap();
+    let mut errors: Vec<String> = vec![];
+    let mut ids: Vec<Id> = vec![];
+    for p in paths {
+        match ue_media::import_file(Path::new(p)) {
+            Ok(asset) => {
+                // re-import of the same content → don't duplicate
+                match store.project.assets.iter().find(|a| a.content_hash == asset.content_hash) {
+                    Some(existing) => ids.push(existing.id),
+                    None => {
+                        if let (Some(app), Some(cache)) = (app, &cache_dir) {
+                            if asset.probe.audio_channels > 0 {
+                                spawn_conform_job(app, &asset, cache);
+                            }
+                            spawn_proxy_job(app, &asset, cache);
+                        }
+                        ids.push(asset.id);
+                        store.project.assets.push(asset);
+                    }
+                }
+            }
+            Err(e) => errors.push(format!("{p}: {e}")),
+        }
+    }
+    if !ids.is_empty() {
+        store.version += 1;
+        store.dirty = true;
+    }
+    if ids.is_empty() && !errors.is_empty() {
+        return Err(errors.join("\n"));
+    }
+    Ok(ids)
+}
+
 #[tauri::command]
 fn import_media(
     app: tauri::AppHandle,
     state: State<AppState>,
     paths: Vec<String>,
 ) -> Res<StateSnapshot> {
-    let cache_dir = state.cache_dir.lock().unwrap().clone();
-    let mut store = state.store.lock().unwrap();
-    let mut errors: Vec<String> = vec![];
-    let mut imported = 0usize;
-    for p in &paths {
-        match ue_media::import_file(Path::new(p)) {
-            Ok(asset) => {
-                // re-import of the same content → don't duplicate
-                if !store.project.assets.iter().any(|a| a.content_hash == asset.content_hash) {
-                    if let Some(cache) = &cache_dir {
-                        if asset.probe.audio_channels > 0 {
-                            spawn_conform_job(&app, &asset, cache);
-                        }
-                        spawn_proxy_job(&app, &asset, cache);
-                    }
-                    store.project.assets.push(asset);
-                }
-                imported += 1;
-            }
-            Err(e) => errors.push(format!("{p}: {e}")),
-        }
-    }
-    if imported > 0 {
-        store.version += 1;
-        store.dirty = true;
-    }
-    if imported == 0 && !errors.is_empty() {
-        return Err(errors.join("\n"));
-    }
-    Ok(snapshot(&store))
+    import_media_impl(Some(&app), &state, &paths)?;
+    Ok(snapshot(&state.store.lock().unwrap()))
 }
 
 fn spawn_conform_job(app: &tauri::AppHandle, asset: &ue_core::model::MediaAsset, cache: &Path) {
@@ -1464,10 +1507,9 @@ fn set_active_sequence(state: State<AppState>, sequence_id: String) -> Res<State
 }
 
 /// Creates an auto-subtitles clip over a transcribed media clip.
-#[tauri::command]
-fn add_subtitles_clip(state: State<AppState>, clip_id: String) -> Res<StateSnapshot> {
+/// Returns the id of the new subtitles clip.
+pub(crate) fn add_subtitles_clip_impl(state: &AppState, id: Id) -> Res<Id> {
     use ue_core::model::{ClipPayload, SubtitleMode, TextStyle};
-    let id = parse_id(&clip_id)?;
     let mut store = state.store.lock().unwrap();
     let media = store.project.clip(id).ok_or("clip not found")?.clone();
     let ClipPayload::Media { asset_id, .. } = media.payload else {
@@ -1496,8 +1538,15 @@ fn add_subtitles_clip(state: State<AppState>, clip_id: String) -> Res<StateSnaps
         label_color: None,
         group: None,
     };
+    let clip_id = clip.id;
     store.insert_clip(track_id, clip, InsertMode::Strict).map_err(|e| e.to_string())?;
-    Ok(snapshot(&store))
+    Ok(clip_id)
+}
+
+#[tauri::command]
+fn add_subtitles_clip(state: State<AppState>, clip_id: String) -> Res<StateSnapshot> {
+    add_subtitles_clip_impl(&state, parse_id(&clip_id)?)?;
+    Ok(snapshot(&state.store.lock().unwrap()))
 }
 
 /// Creates an Avatar clip over a transcribed media clip, from a config.json
@@ -1511,20 +1560,13 @@ fn list_avatar_configs(state: State<AppState>) -> Vec<ue_core::model::AvatarConf
 }
 
 /// Create or update an avatar setup (undoable, persisted with the project).
-#[tauri::command]
-fn save_avatar_config(
-    state: State<AppState>,
-    config: serde_json::Value,
-) -> Res<(String, StateSnapshot)> {
+/// A draft with a missing or empty `id` gets a fresh one. Returns the id.
+pub(crate) fn save_avatar_config_impl(state: &AppState, config: serde_json::Value) -> Res<Id> {
     // a brand-new draft arrives with id:"" — mint one before deserializing
     let mut config = config;
-    let fresh = config
-        .get("id")
-        .and_then(|v| v.as_str())
-        .map(|s| s.is_empty())
-        .unwrap_or(true);
+    let fresh = config.get("id").and_then(|v| v.as_str()).map(|s| s.is_empty()).unwrap_or(true);
     if fresh {
-        config["id"] = serde_json::json!(ue_core::model::Id::new().to_string());
+        config["id"] = serde_json::json!(Id::new().to_string());
     }
     let mut config: ue_core::model::AvatarConfig =
         serde_json::from_value(config).map_err(|e| format!("invalid avatar setup: {e}"))?;
@@ -1535,14 +1577,25 @@ fn save_avatar_config(
         return Err("every expression needs a name".into());
     }
     if config.id.is_nil() {
-        config.id = ue_core::model::Id::new();
+        config.id = Id::new();
     }
     let id = config.id;
-    let mut store = state.store.lock().unwrap();
-    store
+    state
+        .store
+        .lock()
+        .unwrap()
         .dispatch("Save avatar", vec![ue_core::Action::UpsertAvatarConfig { config }])
         .map_err(|e| e.to_string())?;
-    Ok((id.to_string(), snapshot(&store)))
+    Ok(id)
+}
+
+#[tauri::command]
+fn save_avatar_config(
+    state: State<AppState>,
+    config: serde_json::Value,
+) -> Res<(String, StateSnapshot)> {
+    let id = save_avatar_config_impl(&state, config)?;
+    Ok((id.to_string(), snapshot(&state.store.lock().unwrap())))
 }
 
 #[tauri::command]
@@ -1689,27 +1742,26 @@ fn import_avatar_config(state: State<AppState>, path: String) -> Res<(String, St
     Ok((id.to_string(), snapshot(&store)))
 }
 
-/// Generates the avatar video in the BACKGROUND and imports it as media.
-/// Steps: classify each transcript segment's emotion (LLM if configured, the
-/// offline heuristic otherwise) → render with ffmpeg → import the asset.
-/// Emits "avatar-progress" ({stage, progress, message}) and "state-changed".
-#[tauri::command]
-fn generate_avatar_video(
-    app: tauri::AppHandle,
-    state: State<AppState>,
-    config_id: String,
-    driver_asset: String,
-) -> Res<()> {
-    let cfg_id = parse_id(&config_id)?;
-    let asset_id = parse_id(&driver_asset)?;
-
+/// Renders the avatar video on the CALLING thread and imports it as media.
+/// Steps: measure per-segment volume → classify each segment's emotion (LLM if
+/// configured, offline heuristic otherwise) → render with ffmpeg → import.
+/// Returns the id of the generated media asset.
+///
+/// The driver is the VOICE: only the asset's transcript and conformed audio
+/// matter, never its video.
+pub(crate) fn avatar_generate_blocking(
+    state: &AppState,
+    config_id: Id,
+    driver_asset: Id,
+    emit: &dyn Fn(&str, f64, String),
+) -> Res<Id> {
     let (config, mut doc, conform, seq_size, seq_fps, cache_dir) = {
         let store = state.store.lock().unwrap();
         let config = store
             .project
             .avatars
             .iter()
-            .find(|c| c.id == cfg_id)
+            .find(|c| c.id == config_id)
             .ok_or("avatar setup not found")?
             .clone();
         if config.expressions.is_empty() {
@@ -1719,10 +1771,10 @@ fn generate_avatar_video(
             .project
             .transcripts
             .iter()
-            .find(|t| t.asset_id == asset_id)
-            .ok_or("transcribe the clip first (Whisper)")?
+            .find(|t| t.asset_id == driver_asset)
+            .ok_or("transcribe the driver asset first (transcribe_asset)")?
             .clone();
-        let asset = store.project.asset(asset_id).ok_or("asset not found")?;
+        let asset = store.project.asset(driver_asset).ok_or("asset not found")?;
         let conform = asset.audio_conform.clone();
         let seq = store
             .project
@@ -1738,125 +1790,107 @@ fn generate_avatar_video(
         )
     };
 
-    let emit = {
-        let app = app.clone();
-        move |stage: &str, progress: f64, message: String| {
+    emit("analyzing", 0.05, "Measuring volume per segment…".into());
+    if let Some(c) = &conform {
+        if let Ok(wav) = ue_audio::wav::WavMap::open(Path::new(c)) {
+            ue_ai::emotion::measure_volumes(&mut doc, &wav);
+        }
+    }
+
+    // classify each segment: LLM when configured, heuristic otherwise
+    let described: Vec<(String, String)> = config
+        .expressions
+        .iter()
+        .map(|e| (e.name.clone(), e.description.clone()))
+        .collect();
+    let labels: Vec<String> = described.iter().map(|(n, _)| n.clone()).collect();
+    let api_key = if config.api_key.is_empty() {
+        std::env::var("OPENAI_API_KEY").unwrap_or_default()
+    } else {
+        config.api_key.clone()
+    };
+    let api_base = if config.api_base.is_empty() {
+        "https://api.openai.com/v1".to_string()
+    } else {
+        config.api_base.clone()
+    };
+    let use_api = !config.model.is_empty() && !api_key.is_empty();
+    let total = doc.segments.len().max(1);
+    let avg = doc.global_avg_volume;
+    let segs: Vec<(String, f64, f64)> = doc
+        .segments
+        .iter()
+        .map(|s| (s.text.clone(), s.volume_rms, (s.end_us - s.start_us) as f64 / 1e6))
+        .collect();
+    for (i, seg) in doc.segments.iter_mut().enumerate() {
+        emit(
+            "classifying",
+            0.05 + 0.55 * (i as f64 / total as f64),
+            format!("Emotion {}/{}", i + 1, total),
+        );
+        let (text, vol, secs) = &segs[i];
+        let emotion = if use_api {
+            ue_ai::emotion::classify_via_api_described(
+                &api_base,
+                &api_key,
+                &config.model,
+                text,
+                &described,
+            )
+        } else {
+            None
+        };
+        seg.emotion = Some(emotion.unwrap_or_else(|| {
+            let wps = text.split_whitespace().count() as f64 / secs.max(0.1);
+            ue_ai::emotion::classify_heuristic(*vol, avg, wps, &labels)
+        }));
+    }
+
+    emit("rendering", 0.65, "Rendering the avatar video…".into());
+    let out = cache_dir.join(format!("avatar_{}_{}.mov", config.id, driver_asset));
+    let duration = doc.segments.last().map(|s| s.end_us).unwrap_or(0).max(1_000_000);
+    ue_export::avatar_gen::generate(&config, &doc, duration, seq_size, seq_fps, &out, |_p| {})
+        .map_err(|e| e.to_string())?;
+
+    emit("importing", 0.95, "Adding it to Media…".into());
+    let asset = ue_media::import_file(&out).map_err(|e| format!("could not import: {e}"))?;
+    let mut store = state.store.lock().unwrap();
+    let asset_id = match store.project.assets.iter().find(|a| a.content_hash == asset.content_hash)
+    {
+        Some(existing) => existing.id,
+        None => {
+            let id = asset.id;
+            store.project.assets.push(asset);
+            id
+        }
+    };
+    store.version += 1;
+    store.dirty = true;
+    emit("done", 1.0, "Avatar ready in Media".into());
+    Ok(asset_id)
+}
+
+/// Generates the avatar video in the BACKGROUND and imports it as media.
+/// Emits "avatar-progress" ({stage, progress, message}) and "state-changed".
+#[tauri::command]
+fn generate_avatar_video(
+    app: tauri::AppHandle,
+    config_id: String,
+    driver_asset: String,
+) -> Res<()> {
+    let cfg_id = parse_id(&config_id)?;
+    let asset_id = parse_id(&driver_asset)?;
+    std::thread::spawn(move || {
+        let emit = |stage: &str, progress: f64, message: String| {
             let _ = app.emit(
                 "avatar-progress",
                 serde_json::json!({ "stage": stage, "progress": progress, "message": message }),
             );
-        }
-    };
-
-    std::thread::spawn(move || {
-        let mut run = || -> Result<PathBuf, String> {
-            emit("analyzing", 0.05, "Measuring volume per segment…".into());
-            if let Some(c) = &conform {
-                if let Ok(wav) = ue_audio::wav::WavMap::open(Path::new(c)) {
-                    ue_ai::emotion::measure_volumes(&mut doc, &wav);
-                }
-            }
-
-            // classify each segment: LLM when configured, heuristic otherwise
-            let described: Vec<(String, String)> = config
-                .expressions
-                .iter()
-                .map(|e| (e.name.clone(), e.description.clone()))
-                .collect();
-            let labels: Vec<String> = described.iter().map(|(n, _)| n.clone()).collect();
-            let api_key = if config.api_key.is_empty() {
-                std::env::var("OPENAI_API_KEY").unwrap_or_default()
-            } else {
-                config.api_key.clone()
-            };
-            let api_base = if config.api_base.is_empty() {
-                "https://api.openai.com/v1".to_string()
-            } else {
-                config.api_base.clone()
-            };
-            let use_api = !config.model.is_empty() && !api_key.is_empty();
-            let total = doc.segments.len().max(1);
-            let avg = doc.global_avg_volume;
-            let segs: Vec<(String, f64, f64)> = doc
-                .segments
-                .iter()
-                .map(|s| {
-                    (
-                        s.text.clone(),
-                        s.volume_rms,
-                        (s.end_us - s.start_us) as f64 / 1e6,
-                    )
-                })
-                .collect();
-            for (i, seg) in doc.segments.iter_mut().enumerate() {
-                emit(
-                    "classifying",
-                    0.05 + 0.55 * (i as f64 / total as f64),
-                    format!("Emotion {}/{}", i + 1, total),
-                );
-                let (text, vol, secs) = &segs[i];
-                let emotion = if use_api {
-                    ue_ai::emotion::classify_via_api_described(
-                        &api_base,
-                        &api_key,
-                        &config.model,
-                        text,
-                        &described,
-                    )
-                } else {
-                    None
-                };
-                seg.emotion = Some(emotion.unwrap_or_else(|| {
-                    let wps = text.split_whitespace().count() as f64 / secs.max(0.1);
-                    ue_ai::emotion::classify_heuristic(*vol, avg, wps, &labels)
-                }));
-            }
-
-            emit("rendering", 0.65, "Rendering the avatar video…".into());
-            let out = cache_dir.join(format!("avatar_{}_{}.mov", config.id, asset_id));
-            let duration = doc
-                .segments
-                .last()
-                .map(|s| s.end_us)
-                .unwrap_or(0)
-                .max(1_000_000);
-            ue_export::avatar_gen::generate(
-                &config,
-                &doc,
-                duration,
-                seq_size,
-                seq_fps,
-                &out,
-                |_p| {},
-            )
-            .map_err(|e| e.to_string())?;
-            Ok(out)
         };
-
-        match run() {
-            Ok(path) => {
-                emit("importing", 0.95, "Adding it to Media…".into());
-                let state = app.state::<AppState>();
-                match ue_media::import_file(&path) {
-                    Ok(asset) => {
-                        {
-                            let mut store = state.store.lock().unwrap();
-                            if !store
-                                .project
-                                .assets
-                                .iter()
-                                .any(|a| a.content_hash == asset.content_hash)
-                            {
-                                store.project.assets.push(asset);
-                            }
-                            store.version += 1;
-                            store.dirty = true;
-                        }
-                        let _ = app.emit("state-changed", ());
-                        emit("done", 1.0, "Avatar ready in Media".into());
-                    }
-                    Err(e) => emit("error", 1.0, format!("Could not import: {e}")),
-                }
+        let state = app.state::<AppState>();
+        match avatar_generate_blocking(&state, cfg_id, asset_id, &emit) {
+            Ok(_) => {
+                let _ = app.emit("state-changed", ());
             }
             Err(e) => {
                 dlog("avatar", &format!("generation failed: {e}"));
@@ -1948,6 +1982,59 @@ fn add_avatar_clip(state: State<AppState>, clip_id: String, config_path: String)
     Ok(snapshot(&store))
 }
 
+/// Everything Whisper needs, read under one lock: (conform wav, models dir,
+/// model name, language). Fails early with an actionable message.
+fn transcribe_plan(
+    state: &AppState,
+    id: Id,
+    model: Option<String>,
+) -> Res<(PathBuf, PathBuf, String, Option<String>)> {
+    let store = state.store.lock().unwrap();
+    let asset = store.project.asset(id).ok_or("asset not found")?;
+    if asset.probe.audio_channels == 0 {
+        return Err("the file has no audio".into());
+    }
+    let conform = asset
+        .audio_conform
+        .clone()
+        .ok_or("the audio is still being prepared (conform); try again in a few seconds")?;
+    let models = state.models_dir.lock().unwrap().clone().ok_or("no models folder")?;
+    let model_name = model.unwrap_or_else(|| store.project.settings.whisper_model.clone());
+    let lang = store.project.settings.whisper_language.clone();
+    let lang = (lang != "auto").then_some(lang);
+    Ok((PathBuf::from(conform), models, model_name, lang))
+}
+
+/// Stores a finished transcript on the asset (replacing any previous one).
+fn transcribe_commit(state: &AppState, asset_id: Id, doc: ue_core::model::TranscriptDoc) -> Id {
+    let mut store = state.store.lock().unwrap();
+    let doc_id = doc.id;
+    store.project.transcripts.retain(|t| t.asset_id != asset_id);
+    store.project.transcripts.push(doc);
+    if let Some(a) = store.project.assets.iter_mut().find(|a| a.id == asset_id) {
+        a.transcript = Some(doc_id);
+    }
+    store.version += 1;
+    store.dirty = true;
+    doc_id
+}
+
+/// Transcribes on the CALLING thread and returns (transcript_id, words).
+/// Used by the MCP server, where an agent wants the result, not an event.
+/// Downloads the ggml model on first use, so the first call can take minutes.
+pub(crate) fn transcribe_blocking(
+    state: &AppState,
+    asset_id: Id,
+    model: Option<String>,
+) -> Res<(Id, usize)> {
+    let (conform, models_dir, model_name, lang) = transcribe_plan(state, asset_id, model)?;
+    let doc = ue_whisper::ensure_model(&models_dir, &model_name)
+        .and_then(|m| ue_whisper::transcribe(&conform, &m, lang.as_deref(), asset_id))
+        .map_err(|e| e.to_string())?;
+    let words = doc.words.len();
+    Ok((transcribe_commit(state, asset_id, doc), words))
+}
+
 /// Transcribes an asset with Whisper (word-level) in the background.
 /// Downloads the ggml model if needed. Emits state-changed when done.
 #[tauri::command]
@@ -1958,48 +2045,14 @@ fn transcribe_asset(
     model: Option<String>,
 ) -> Res<()> {
     let id = parse_id(&asset_id)?;
-    let (conform, models_dir) = {
-        let store = state.store.lock().unwrap();
-        let asset = store.project.asset(id).ok_or("asset not found")?;
-        if asset.probe.audio_channels == 0 {
-            return Err("the file has no audio".into());
-        }
-        let conform = asset
-            .audio_conform
-            .clone()
-            .ok_or("the audio is still being prepared (conform); try again in a few seconds")?;
-        let models = state
-            .models_dir
-            .lock()
-            .unwrap()
-            .clone()
-            .ok_or("no models folder")?;
-        (PathBuf::from(conform), models)
-    };
-    let (settings_model, settings_lang) = {
-        let store = state.store.lock().unwrap();
-        (
-            store.project.settings.whisper_model.clone(),
-            store.project.settings.whisper_language.clone(),
-        )
-    };
-    let model_name = model.unwrap_or(settings_model);
-    let lang: Option<String> = (settings_lang != "auto").then_some(settings_lang);
+    let (conform, models_dir, model_name, lang) = transcribe_plan(&state, id, model)?;
     std::thread::spawn(move || {
         let result = ue_whisper::ensure_model(&models_dir, &model_name)
             .and_then(|m| ue_whisper::transcribe(&conform, &m, lang.as_deref(), id));
         let state = app.state::<AppState>();
         match result {
             Ok(doc) => {
-                let mut store = state.store.lock().unwrap();
-                let doc_id = doc.id;
-                store.project.transcripts.retain(|t| t.asset_id != id);
-                store.project.transcripts.push(doc);
-                if let Some(a) = store.project.assets.iter_mut().find(|a| a.id == id) {
-                    a.transcript = Some(doc_id);
-                }
-                store.version += 1;
-                store.dirty = true;
+                transcribe_commit(&state, id, doc);
             }
             Err(e) => eprintln!("[whisper] {conform:?}: {e}"),
         }
@@ -2136,16 +2189,27 @@ fn ensure_free_video_track(
     Ok(track_id)
 }
 
-/// Adds a text (title) clip on the top video track.
-#[tauri::command]
-fn add_text_clip(state: State<AppState>, content: String, at_us: TimeUs) -> Res<StateSnapshot> {
+/// Adds a text (title) clip on the top video track. Returns its clip id.
+pub(crate) fn add_text_clip_impl(
+    state: &AppState,
+    content: &str,
+    at_us: TimeUs,
+    duration_us: TimeUs,
+) -> Res<Id> {
     let mut store = state.store.lock().unwrap();
-    let duration = 4_000_000;
+    let duration = duration_us.max(1);
     let start = at_us.max(0);
     let track_id = ensure_free_video_track(&mut store, start, duration)?;
-    let clip = Clip::new_text(&content, start, duration);
+    let clip = Clip::new_text(content, start, duration);
+    let clip_id = clip.id;
     store.insert_clip(track_id, clip, InsertMode::Strict).map_err(|e| e.to_string())?;
-    Ok(snapshot(&store))
+    Ok(clip_id)
+}
+
+#[tauri::command]
+fn add_text_clip(state: State<AppState>, content: String, at_us: TimeUs) -> Res<StateSnapshot> {
+    add_text_clip_impl(&state, &content, at_us, 4_000_000)?;
+    Ok(snapshot(&state.store.lock().unwrap()))
 }
 
 /// Catalog of generators (core manifests) for the UI.
@@ -2155,23 +2219,34 @@ fn get_generators() -> serde_json::Value {
 }
 
 /// Adds a generator clip (rectangle, gradient, …) at the playhead, in a free
-/// video track (created if needed).
+/// video track (created if needed). Returns its clip id.
+pub(crate) fn add_generator_clip_impl(
+    state: &AppState,
+    generator_id: &str,
+    at_us: TimeUs,
+    duration_us: TimeUs,
+) -> Res<Id> {
+    if ue_render::find_generator(&ue_render::core_generators(), generator_id).is_none() {
+        return Err(format!("unknown generator: {generator_id}"));
+    }
+    let mut store = state.store.lock().unwrap();
+    let duration = duration_us.max(1);
+    let start = at_us.max(0);
+    let track_id = ensure_free_video_track(&mut store, start, duration)?;
+    let clip = Clip::new_generator(generator_id, start, duration);
+    let clip_id = clip.id;
+    store.insert_clip(track_id, clip, InsertMode::Strict).map_err(|e| e.to_string())?;
+    Ok(clip_id)
+}
+
 #[tauri::command]
 fn add_generator_clip(
     state: State<AppState>,
     generator_id: String,
     at_us: TimeUs,
 ) -> Res<StateSnapshot> {
-    if ue_render::find_generator(&ue_render::core_generators(), &generator_id).is_none() {
-        return Err(format!("unknown generator: {generator_id}"));
-    }
-    let mut store = state.store.lock().unwrap();
-    let duration = 4_000_000;
-    let start = at_us.max(0);
-    let track_id = ensure_free_video_track(&mut store, start, duration)?;
-    let clip = Clip::new_generator(&generator_id, start, duration);
-    store.insert_clip(track_id, clip, InsertMode::Strict).map_err(|e| e.to_string())?;
-    Ok(snapshot(&store))
+    add_generator_clip_impl(&state, &generator_id, at_us, 4_000_000)?;
+    Ok(snapshot(&state.store.lock().unwrap()))
 }
 
 /// Edits a generator's parameters (undoable).
@@ -2225,34 +2300,31 @@ fn set_track_prop(
     value: bool,
 ) -> Res<StateSnapshot> {
     use ue_core::action::TrackProp;
-    let mut store = state.store.lock().unwrap();
-    let id = parse_id(&track_id)?;
     let prop = match prop.as_str() {
         "muted" => TrackProp::Muted(value),
         "solo" => TrackProp::Solo(value),
         "locked" => TrackProp::Locked(value),
         other => return Err(format!("unknown property: {other}")),
     };
-    store
-        .dispatch("Track", vec![ue_core::Action::SetTrackProp { track_id: id, prop }])
-        .map_err(|e| e.to_string())?;
-    Ok(snapshot(&store))
+    set_track_prop_impl(&state, parse_id(&track_id)?, prop)?;
+    Ok(snapshot(&state.store.lock().unwrap()))
 }
 
 /// Adds a track at the end of its group (video on top, audio below). Undoable.
-#[tauri::command]
-fn add_track(state: State<AppState>, kind: String) -> Res<StateSnapshot> {
+/// Returns the new track id.
+pub(crate) fn add_track_impl(state: &AppState, kind: &str) -> Res<Id> {
     let mut store = state.store.lock().unwrap();
     let seq_id = store.project.active_sequence;
-    let kind = match kind.as_str() {
+    let kind = match kind {
         "video" => TrackKind::Video,
         "audio" => TrackKind::Audio,
-        other => return Err(format!("unknown track kind: {other}")),
+        other => return Err(format!("unknown track kind: {other} (use video|audio)")),
     };
     let seq = store.project.sequence(seq_id).ok_or("no sequence")?;
     let n = seq.tracks.iter().filter(|t| t.kind == kind).count();
     let prefix = if kind == TrackKind::Video { "V" } else { "A" };
     let track = ue_core::model::Track::new(kind, &format!("{prefix}{}", n + 1));
+    let track_id = track.id;
     // video: at the end of the vec (drawn on top); audio: also at the end
     let index = seq.tracks.len();
     store
@@ -2261,14 +2333,18 @@ fn add_track(state: State<AppState>, kind: String) -> Res<StateSnapshot> {
             vec![ue_core::Action::AddTrack { sequence_id: seq_id, index, track }],
         )
         .map_err(|e| e.to_string())?;
-    Ok(snapshot(&store))
+    Ok(track_id)
+}
+
+#[tauri::command]
+fn add_track(state: State<AppState>, kind: String) -> Res<StateSnapshot> {
+    add_track_impl(&state, &kind)?;
+    Ok(snapshot(&state.store.lock().unwrap()))
 }
 
 /// Removes a track (any clips it held go with it; 1 undo restores it).
-#[tauri::command]
-fn remove_track(state: State<AppState>, track_id: String) -> Res<StateSnapshot> {
+pub(crate) fn remove_track_impl(state: &AppState, id: Id) -> Res<()> {
     let mut store = state.store.lock().unwrap();
-    let id = parse_id(&track_id)?;
     let seq_id = store.project.active_sequence;
     let seq = store.project.sequence(seq_id).ok_or("no sequence")?;
     // don't leave the sequence without tracks of a kind
@@ -2279,7 +2355,39 @@ fn remove_track(state: State<AppState>, track_id: String) -> Res<StateSnapshot> 
     store
         .dispatch("Delete track", vec![ue_core::Action::RemoveTrack { track_id: id }])
         .map_err(|e| e.to_string())?;
-    Ok(snapshot(&store))
+    Ok(())
+}
+
+#[tauri::command]
+fn remove_track(state: State<AppState>, track_id: String) -> Res<StateSnapshot> {
+    remove_track_impl(&state, parse_id(&track_id)?)?;
+    Ok(snapshot(&state.store.lock().unwrap()))
+}
+
+/// Sets one track property (name / muted / solo / locked / volume_db).
+/// Clamps the volume to the mixer's range; validates the name.
+pub(crate) fn set_track_prop_impl(
+    state: &AppState,
+    track_id: Id,
+    prop: ue_core::action::TrackProp,
+) -> Res<()> {
+    use ue_core::action::TrackProp;
+    let mut store = state.store.lock().unwrap();
+    let (label, prop) = match prop {
+        TrackProp::Name(n) => {
+            let n = n.trim().to_string();
+            if n.is_empty() || n.len() > 24 {
+                return Err("invalid track name (1..24 chars)".into());
+            }
+            ("Rename track", TrackProp::Name(n))
+        }
+        TrackProp::VolumeDb(db) => ("Track volume", TrackProp::VolumeDb(db.clamp(-60.0, 12.0))),
+        other => ("Track", other),
+    };
+    store
+        .dispatch(label, vec![ue_core::Action::SetTrackProp { track_id, prop }])
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Renames a track (undoable).
@@ -2471,7 +2579,7 @@ fn discard_recovery(app: tauri::AppHandle, state: State<AppState>) -> Res<()> {
         let _ = std::fs::remove_file(auto);
     }
     // the orphan autosave too, in case it was just saved with a name
-    if let Some(d) = app.path().app_data_dir().ok() {
+    if let Ok(d) = app.path().app_data_dir() {
         let _ = std::fs::remove_file(d.join("recovery.uep.autosave"));
     }
     Ok(())
@@ -2515,8 +2623,9 @@ fn recover_project(
     Ok(snapshot(&store))
 }
 
-#[tauri::command]
-fn save_project(state: State<AppState>, path: Option<String>) -> Res<String> {
+/// Saves the project to `path` (or to the path it was opened from).
+/// Paths under the .uep folder are relativized so the project is portable.
+pub(crate) fn save_project_impl(state: &AppState, path: Option<String>) -> Res<String> {
     let mut store = state.store.lock().unwrap();
     let mut stored_path = state.path.lock().unwrap();
     let target = match path.map(PathBuf::from).or_else(|| stored_path.clone()) {
@@ -2538,12 +2647,18 @@ fn save_project(state: State<AppState>, path: Option<String>) -> Res<String> {
 }
 
 #[tauri::command]
-fn open_project(
-    app: tauri::AppHandle,
-    state: State<AppState>,
-    path: String,
-) -> Res<StateSnapshot> {
-    let json = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+fn save_project(state: State<AppState>, path: Option<String>) -> Res<String> {
+    save_project_impl(&state, path)
+}
+
+/// Opens a .uep, resolving relative paths and re-deriving the local caches.
+/// DESTRUCTIVE: replaces the in-memory project and clears the history.
+pub(crate) fn open_project_impl(
+    app: Option<&tauri::AppHandle>,
+    state: &AppState,
+    path: &str,
+) -> Res<()> {
+    let json = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     let mut project = Project::from_json(&json).map_err(|e| e.to_string())?;
     let issues = ue_core::validate::validate(&project);
     if !issues.is_empty() {
@@ -2551,7 +2666,7 @@ fn open_project(
     }
     // resolve relative paths against the .uep folder and mark offline;
     // re-derive local caches by hash and relaunch conform if missing
-    let dir = Path::new(&path).parent().map(|d| d.to_path_buf());
+    let dir = Path::new(path).parent().map(|d| d.to_path_buf());
     resolve_project_paths(&mut project, dir.as_deref());
     let cache_dir = state.cache_dir.lock().unwrap().clone();
     for asset in &mut project.assets {
@@ -2560,20 +2675,34 @@ fn open_project(
             if conform.exists() {
                 asset.audio_conform = Some(conform.to_string_lossy().into_owned());
             } else if !asset.offline && asset.probe.audio_channels > 0 {
-                spawn_conform_job(&app, asset, cache);
+                if let Some(app) = app {
+                    spawn_conform_job(app, asset, cache);
+                }
             }
             let proxy = cache.join(format!("{}.proxy.mp4", asset.content_hash));
             if proxy.exists() {
                 asset.proxy = Some(proxy.to_string_lossy().into_owned());
             } else if !asset.offline {
-                spawn_proxy_job(&app, asset, cache);
+                if let Some(app) = app {
+                    spawn_proxy_job(app, asset, cache);
+                }
             }
         }
     }
     let mut store = state.store.lock().unwrap();
     *store = ProjectStore::new(project);
     *state.path.lock().unwrap() = Some(PathBuf::from(path));
-    Ok(snapshot(&store))
+    Ok(())
+}
+
+#[tauri::command]
+fn open_project(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    path: String,
+) -> Res<StateSnapshot> {
+    open_project_impl(Some(&app), &state, &path)?;
+    Ok(snapshot(&state.store.lock().unwrap()))
 }
 
 /// Relinks an offline media: new path, re-probe and conform.
@@ -2612,12 +2741,18 @@ fn relink_asset(
     Ok(snapshot(&store))
 }
 
+/// Replaces the in-memory project with an empty one. DESTRUCTIVE: unsaved
+/// changes and the whole undo history are lost.
+pub(crate) fn new_project_impl(state: &AppState, name: &str) {
+    let mut store = state.store.lock().unwrap();
+    *store = ProjectStore::new(Project::new(name));
+    *state.path.lock().unwrap() = None;
+}
+
 #[tauri::command]
 fn new_project(state: State<AppState>, name: String) -> Res<StateSnapshot> {
-    let mut store = state.store.lock().unwrap();
-    *store = ProjectStore::new(Project::new(&name));
-    *state.path.lock().unwrap() = None;
-    Ok(snapshot(&store))
+    new_project_impl(&state, &name);
+    Ok(snapshot(&state.store.lock().unwrap()))
 }
 
 pub fn run() {

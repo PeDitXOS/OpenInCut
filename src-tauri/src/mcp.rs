@@ -1,218 +1,700 @@
-//! Embedded MCP server (PLAN §7.A, v0).
+//! Embedded MCP server: the full agentic surface of the editor.
 //!
 //! Direct implementation of the MCP protocol (JSON-RPC 2.0 over streamable
-//! HTTP, application/json response) on 127.0.0.1:4599/mcp, no SDK:
-//! initialize, tools/list and tools/call. Loopback only. The dispatcher
-//! (`handle_rpc`) is a pure function over AppState → testable without HTTP.
+//! HTTP, `application/json` response) on 127.0.0.1:4599/mcp, no SDK:
+//! `initialize`, `tools/list` and `tools/call`. Loopback only, Bearer token.
+//! The dispatcher (`handle_rpc`) is a pure function over `AppState` →
+//! testable without HTTP (see `tests/mcp_tests.rs`).
 //!
-//! Connecting from Claude Code:
-//!   claude mcp add --transport http ubereditor http://127.0.0.1:4599/mcp
+//! Connecting from Claude Code (the token is shown in the app's MCP pill):
+//!   claude mcp add --transport http ubereditor http://127.0.0.1:4599/mcp \
+//!     --header "Authorization: Bearer <token>"
+//!
+//! # Design rules for the tools
+//!
+//! 1. **One tool call = one undo entry.** Tools that change several things
+//!    (`set_clip_properties`) batch their actions into a single `dispatch`, so
+//!    a single `undo` reverts the whole call. Never `dispatch` twice.
+//! 2. **Every mutation goes through `ProjectStore::dispatch`**, which validates
+//!    the project invariants and rolls back atomically on failure. A tool can
+//!    therefore never leave the project in a broken state.
+//! 3. **Times are always µs (i64) on the timeline**, never seconds or frames.
+//! 4. **Errors are tool errors, not protocol errors**: `isError: true` with a
+//!    human-readable message the agent can act on.
+//! 5. **The MCP path reuses the UI's implementation** (`crate::*_impl`) so an
+//!    agent and a human hit the exact same code — the preview/export parity
+//!    rule applies to agents too.
 
 use std::sync::atomic::Ordering;
 
 use serde_json::{json, Value};
-use ue_core::model::TransitionRef;
+use ue_core::model::{
+    AudioProps, Id, SubtitleMode, TextStyle, TransitionRef, Transform2D,
+};
 use ue_core::ops::InsertMode;
 
 use crate::AppState;
 
 pub const MCP_PORT: u16 = 4599;
 
+/// Read by the agent right after `initialize`: the map of the territory.
+const INSTRUCTIONS: &str = "\
+UberEditor — a video editor you can drive end to end.
+
+MODEL
+  Project → sequences → tracks (video/audio) → clips. A clip's payload is
+  Media | Text | Subtitles | Generator | Avatar. Transcripts live on the
+  project and are referenced by asset id.
+
+UNITS
+  Every time is an INTEGER of MICROSECONDS (µs) on the TIMELINE, never
+  seconds and never frames. 1 s = 1_000_000. Fractional values are rejected.
+  Ids are ULID strings; get them from get_timeline / get_media_pool.
+
+HISTORY
+  Every mutating tool is one undo entry: `undo` reverts exactly one tool call.
+  A call that would break a project invariant fails and changes nothing.
+
+TYPICAL FLOW
+  1. get_project_summary            — what is open, what is in it
+  2. get_media_pool / get_timeline  — ids to work with
+  3. import_media                   — bring files in (conform runs in background)
+  4. transcribe_asset               — needed by subtitles, silences, avatar
+  5. edit: split_clip, delete_clips, move_clip, trim_clip, cut_ranges,
+     set_clip_properties, add_text_clip, add_subtitles_clip, remove_silences
+  6. export_video                   — one file, optionally several `ranges`
+  7. save_project
+
+GOTCHAS
+  • After import_media the audio conform runs in the BACKGROUND. Tools that
+    need audio (transcribe_asset, remove_silences, generate_avatar_video) fail
+    with 'audio is still being prepared' until it lands. Retry after a moment.
+  • transcribe_asset and generate_avatar_video BLOCK for minutes and download
+    models on first use.
+  • remove_silences/cut_ranges/move_range act on ALL tracks at once.
+  • The preview and the export share the same ffmpeg chain: what you render
+    with debug_render_frame is what export_video writes.";
+
 // ---------------------------------------------------------------------------
-// Tools
+// Tool definitions
 // ---------------------------------------------------------------------------
 
-fn tool_defs() -> Value {
-    json!([
-        {
-            "name": "get_project_summary",
-            "description": "Summary of the open project: name, duration, tracks, clips, media and save status.",
-            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+/// How a tool behaves, for MCP clients that surface it (and for the agent's
+/// own planning): read-only tools are free to call, destructive ones are not.
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    /// Reads state, changes nothing.
+    Read,
+    /// Mutates the project; one `undo` reverts it.
+    Edit,
+    /// Cannot be undone with `undo` (writes files, replaces the project…).
+    Destructive,
+}
+
+fn tool(name: &str, description: &str, props: Value, required: &[&str], kind: Kind) -> Value {
+    json!({
+        "name": name,
+        "description": description,
+        "inputSchema": {
+            "type": "object",
+            "properties": props,
+            "required": required,
+            "additionalProperties": false
         },
-        {
-            "name": "get_timeline",
-            "description": "Complete timeline of the active sequence: tracks with their clips (ids, times in µs, payloads, effects, transitions).",
-            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
-        },
-        {
-            "name": "get_media_pool",
-            "description": "Imported media: id, path, kind, duration and technical metadata.",
-            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
-        },
-        {
-            "name": "get_effects_catalog",
-            "description": "Catalog of available effects (core + user packs) with their parameters.",
-            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
-        },
-        {
-            "name": "split_clip",
-            "description": "Splits a clip at the given timeline time (µs). Returns the resulting ids.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "clip_id": { "type": "string" },
-                    "t_us": { "type": "integer", "description": "timeline time in microseconds" }
-                },
-                "required": ["clip_id", "t_us"]
-            }
-        },
-        {
-            "name": "delete_clips",
-            "description": "Deletes clips by id. With ripple=true it closes the gaps.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "ids": { "type": "array", "items": { "type": "string" } },
-                    "ripple": { "type": "boolean", "default": false }
-                },
-                "required": ["ids"]
-            }
-        },
-        {
-            "name": "add_clip",
-            "description": "Adds a clip of a media from the pool to the timeline (at at_us or at the end of the compatible track).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "asset_id": { "type": "string" },
-                    "at_us": { "type": "integer", "default": 0 }
-                },
-                "required": ["asset_id"]
-            }
-        },
-        {
-            "name": "set_clip_transition",
-            "description": "Sets (or removes, with duration_us=0) a cross fade in on a clip.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "clip_id": { "type": "string" },
-                    "duration_us": { "type": "integer", "description": "0 = remove transition" }
-                },
-                "required": ["clip_id", "duration_us"]
-            }
-        },
-        {
-            "name": "get_transcript",
-            "description": "Word-level transcript of an asset (words with timestamps in µs and phrases). Empty if not transcribed yet.",
-            "inputSchema": {
-                "type": "object",
-                "properties": { "asset_id": { "type": "string" } },
-                "required": ["asset_id"]
-            }
-        },
-        {
-            "name": "remove_silences",
-            "description": "Detects a clip's silences and cuts them (mode=delete) or speeds them up 4x (mode=speedup); all tracks, 1 undo. Optional detection parameters.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "clip_id": { "type": "string" },
-                    "mode": { "type": "string", "enum": ["delete", "speedup", "split"] },
-                    "threshold_db": { "type": "number", "description": "dBFS threshold (def -38)" },
-                    "min_silence_ms": { "type": "integer", "description": "minimum silence in ms (def 400)" },
-                    "pad_ms": { "type": "integer", "description": "margin around speech in ms (def 150)" }
-                },
-                "required": ["clip_id"]
-            }
-        },
-        {
-            "name": "export_video",
-            "description": "Render the active sequence to a file. Optionally pass `ranges`: a list of [start_us, end_us] pieces of the timeline that are concatenated in order (render several chunks in one file). Blocking; returns the output path.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "absolute output path (.mp4/.m4a/.gif)" },
-                    "ranges": {
-                        "type": "array",
-                        "items": {
-                            "type": "array",
-                            "items": { "type": "integer" },
-                            "minItems": 2,
-                            "maxItems": 2
-                        },
-                        "description": "[[start_us, end_us], …] pieces, concatenated in order"
-                    },
-                    "max_height": { "type": "integer" },
-                    "crf": { "type": "integer" },
-                    "loudnorm": { "type": "boolean" },
-                    "format": { "type": "string", "enum": ["mp4", "m4a", "gif"] }
-                },
-                "required": ["path"]
-            }
-        },
-        {
-            "name": "playback",
-            "description": "Drive the real player for debugging: action play (from_us), pause, or position.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "action": { "type": "string", "enum": ["play", "pause", "position"] },
-                    "from_us": { "type": "integer" }
-                },
-                "required": ["action"]
-            }
-        },
-        {
-            "name": "debug_render_frame",
-            "description": "Render the paused-preview frame at t_us through the exact production path, write it to a temp JPEG and return {path, bytes}. For visual debugging.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "t_us": { "type": "integer" },
-                    "max_width": { "type": "integer" }
-                },
-                "required": ["t_us"]
-            }
-        },
-        {
-            "name": "debug_playback_frame",
-            "description": "Dump the CURRENT playback-stream frame buffer to a temp JPEG and return {path, bytes} (0 = empty buffer).",
-            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
-        },
-        {
-            "name": "replace_words",
-            "description": "Fix transcription errors: replaces every whole-word occurrence in a transcript (case-insensitive) with a corrected label. The audio timing is untouched; captions show the correction. Undoable.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "transcript_id": { "type": "string" },
-                    "from": { "type": "string" },
-                    "to": { "type": "string" }
-                },
-                "required": ["transcript_id", "from", "to"]
-            }
-        },
-        {
-            "name": "move_range",
-            "description": "Moves the timeline range [from_us, to_us) to dest_us (reorders material on all tracks; 1 undo). Useful for reordering phrases.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "from_us": { "type": "integer" },
-                    "to_us": { "type": "integer" },
-                    "dest_us": { "type": "integer" }
-                },
-                "required": ["from_us", "to_us", "dest_us"]
-            }
-        },
-        {
-            "name": "generate_vertical",
-            "description": "Generates a vertical 1080x1920 sequence (blurred background + centered video) from the active sequence and activates it. Undoable.",
-            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
-        },
-        {
-            "name": "undo",
-            "description": "Undoes the last edit.",
-            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
-        },
-        {
-            "name": "redo",
-            "description": "Redoes the last undone edit.",
-            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        "annotations": {
+            "readOnlyHint": kind == Kind::Read,
+            "destructiveHint": kind == Kind::Destructive,
+            "idempotentHint": kind == Kind::Read,
         }
+    })
+}
+
+fn int(desc: &str) -> Value {
+    json!({ "type": "integer", "description": desc })
+}
+fn str_(desc: &str) -> Value {
+    json!({ "type": "string", "description": desc })
+}
+fn bool_(desc: &str) -> Value {
+    json!({ "type": "boolean", "description": desc })
+}
+fn num(desc: &str) -> Value {
+    json!({ "type": "number", "description": desc })
+}
+
+/// A number, or a keyframe curve. Mirrors `ue_core::keyframe::Param`.
+fn param(desc: &str) -> Value {
+    json!({
+        "description": format!("{desc} — a plain number, or an animated curve \
+            {{\"keys\":[{{\"t\":<µs from the clip start>,\"value\":<n>,\
+            \"interp\":{{\"kind\":\"linear\"|\"hold\"|\"smooth\"}}}}, …]}}. \
+            Curve keys must be sorted by t (duplicates collapse to the last)."),
+        "anyOf": [
+            { "type": "number" },
+            { "type": "object", "properties": { "keys": { "type": "array" } }, "required": ["keys"] }
+        ]
+    })
+}
+
+fn tool_defs() -> Value {
+    let clip_id = str_("clip id (from get_timeline)");
+
+    json!([
+        // ---------------------------------------------------------------- read
+        tool(
+            "get_project_summary",
+            "START HERE. Name and save path of the open project, its sequences \
+             (id, resolution, fps, duration, tracks), how many assets and \
+             transcripts it has, the avatar setups, and the undo history. \
+             Cheap; call it whenever you need to re-orient.",
+            json!({}), &[], Kind::Read,
+        ),
+        tool(
+            "get_timeline",
+            "The full sequence as JSON: every track with every clip (id, start, \
+             duration, speed, payload, transform, audio, effects, transition). \
+             This is where clip ids come from. Defaults to the active sequence.",
+            json!({ "sequence_id": str_("defaults to the active sequence") }),
+            &[], Kind::Read,
+        ),
+        tool(
+            "get_media_pool",
+            "Imported media: id, path, kind (video/audio/image), duration, probe \
+             metadata, and whether the audio conform / proxy / transcript are \
+             ready. An asset with `audio_conform: null` is not ready for \
+             transcribe_asset or remove_silences yet.",
+            json!({}), &[], Kind::Read,
+        ),
+        tool(
+            "get_transcript",
+            "Word-level transcript of an asset: words with µs timestamps, \
+             confidence, `rejected`, and `display` (the corrected spelling used \
+             by captions), plus the segments with their emotion and volume. \
+             Errors if the asset was never transcribed.",
+            json!({ "asset_id": str_("asset id (from get_media_pool)") }),
+            &["asset_id"], Kind::Read,
+        ),
+        tool(
+            "get_catalog",
+            "Everything you can reference by id: video effects and their \
+             parameters, generators (solid, gradient…), installed font families, \
+             the avatar setups saved in the project, subtitle modes and \
+             transition ids. Read this before set_clip_properties or \
+             add_generator_clip.",
+            json!({}), &[], Kind::Read,
+        ),
+
+        // --------------------------------------------------------------- media
+        tool(
+            "import_media",
+            "Imports files into the media pool and returns their asset ids. \
+             Importing the same content twice is idempotent (matched by content \
+             hash) and returns the existing id. Does NOT put anything on the \
+             timeline — call add_clip next. The audio conform and the proxy are \
+             built in the BACKGROUND, so transcribe_asset / remove_silences may \
+             need a few seconds before they work. Not undoable.",
+            json!({ "paths": {
+                "type": "array", "items": { "type": "string" },
+                "description": "absolute paths to video/audio/image files"
+            }}),
+            &["paths"], Kind::Destructive,
+        ),
+        tool(
+            "transcribe_asset",
+            "Transcribes an asset's audio with Whisper, word by word, and stores \
+             the transcript on the project. Required by add_subtitles_clip, \
+             replace_words and generate_avatar_video. BLOCKS until done (minutes \
+             for a long file) and downloads the ggml model on first use. \
+             Re-transcribing replaces the previous transcript. Not undoable.",
+            json!({
+                "asset_id": str_("asset id; must have audio and a ready conform"),
+                "model": str_("ggml model name, e.g. 'base', 'small', 'medium' (default: the project setting)"),
+            }),
+            &["asset_id"], Kind::Destructive,
+        ),
+
+        // ------------------------------------------------------------ timeline
+        tool(
+            "add_clip",
+            "Puts a media asset on the timeline and returns the new clip id. \
+             Picks a compatible unlocked track (audio assets → audio track) \
+             unless `track_id` says otherwise. If `at_us` is occupied, the clip \
+             lands after the last clip of that track instead of overlapping.",
+            json!({
+                "asset_id": str_("asset id (from get_media_pool)"),
+                "at_us": int("timeline position in µs (default 0)"),
+                "track_id": str_("force a specific track (default: first compatible unlocked one)"),
+            }),
+            &["asset_id"], Kind::Edit,
+        ),
+        tool(
+            "add_text_clip",
+            "Adds a title (text) clip on a free video track, creating one if \
+             needed. Returns the clip id. Style it afterwards with \
+             set_clip_content.",
+            json!({
+                "content": str_("the text to show"),
+                "at_us": int("timeline position in µs (default 0)"),
+                "duration_us": int("length in µs (default 4_000_000 = 4 s)"),
+            }),
+            &["content"], Kind::Edit,
+        ),
+        tool(
+            "add_generator_clip",
+            "Adds a synthetic clip (solid colour, gradient…) on a free video \
+             track. See get_catalog → generators for the ids and their params. \
+             Returns the clip id.",
+            json!({
+                "generator_id": str_("e.g. 'core.solid', 'core.gradient'"),
+                "at_us": int("timeline position in µs (default 0)"),
+                "duration_us": int("length in µs (default 4_000_000 = 4 s)"),
+            }),
+            &["generator_id"], Kind::Edit,
+        ),
+        tool(
+            "add_subtitles_clip",
+            "Adds an auto-subtitles clip spanning a transcribed media clip. The \
+             captions are built from the WORD timestamps (phrases are chunked by \
+             gaps and length), so they follow any later cut. The media clip's \
+             asset must be transcribed first. Returns the subtitles clip id; \
+             restyle it with set_clip_content.",
+            json!({ "clip_id": str_("id of a MEDIA clip whose asset has a transcript") }),
+            &["clip_id"], Kind::Edit,
+        ),
+        tool(
+            "split_clip",
+            "Cuts a clip in two at a timeline time. Keyframes and effects are \
+             split with it. Returns the two resulting clip ids.",
+            json!({ "clip_id": clip_id.clone(), "t_us": int("timeline time in µs, strictly inside the clip") }),
+            &["clip_id", "t_us"], Kind::Edit,
+        ),
+        tool(
+            "delete_clips",
+            "Deletes clips by id. With `ripple: true` the following clips slide \
+             left to close the gap (on those tracks).",
+            json!({
+                "ids": { "type": "array", "items": { "type": "string" }, "description": "clip ids" },
+                "ripple": bool_("close the gap afterwards (default false)"),
+            }),
+            &["ids"], Kind::Edit,
+        ),
+        tool(
+            "move_clip",
+            "Moves a clip to another track and/or timeline position. Fails on \
+             collision unless `overwrite` is true, in which case whatever it \
+             lands on is trimmed away.",
+            json!({
+                "clip_id": clip_id.clone(),
+                "to_track": str_("destination track id (may be the current one)"),
+                "to_start_us": int("new start on the timeline, in µs"),
+                "overwrite": bool_("trim whatever is underneath (default false)"),
+            }),
+            &["clip_id", "to_track", "to_start_us"], Kind::Edit,
+        ),
+        tool(
+            "trim_clip",
+            "Drags one edge of a clip. `left: true` moves the in point (the \
+             start), `left: false` the out point (the end). Media clips consume \
+             source material accordingly; you cannot trim past the source.",
+            json!({
+                "clip_id": clip_id.clone(),
+                "left": bool_("true = the clip's start edge, false = its end edge"),
+                "new_edge_us": int("the new timeline position of that edge, in µs"),
+            }),
+            &["clip_id", "left", "new_edge_us"], Kind::Edit,
+        ),
+        tool(
+            "unlink_clip",
+            "Breaks the video↔audio link of a clip's group, so the two halves \
+             can be edited separately. One undo re-links them.",
+            json!({ "clip_id": clip_id.clone() }),
+            &["clip_id"], Kind::Edit,
+        ),
+        tool(
+            "cut_ranges",
+            "Deletes one or more timeline ranges across ALL tracks at once, \
+             closing the gaps by default (ripple). The workhorse for 'remove \
+             these sentences': take the word timestamps from get_transcript, \
+             pass the ranges here. One undo entry for the whole call.",
+            json!({
+                "ranges": {
+                    "type": "array",
+                    "items": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
+                    "description": "[[start_us, end_us], …]; overlapping ranges are merged"
+                },
+                "ripple": bool_("close the gaps (default true)"),
+                "sequence_id": str_("defaults to the active sequence"),
+            }),
+            &["ranges"], Kind::Edit,
+        ),
+        tool(
+            "move_range",
+            "Lifts the timeline range [from_us, to_us) out (across all tracks) \
+             and re-inserts it at dest_us, closing the hole it left. Use it to \
+             reorder sentences. One undo entry.",
+            json!({
+                "from_us": int("range start, µs"),
+                "to_us": int("range end (exclusive), µs"),
+                "dest_us": int("where to re-insert it, in the timeline AFTER the range was lifted"),
+                "sequence_id": str_("defaults to the active sequence"),
+            }),
+            &["from_us", "to_us", "dest_us"], Kind::Edit,
+        ),
+
+        // ------------------------------------------------------ clip properties
+        tool(
+            "set_clip_properties",
+            "Edits any combination of a clip's transform, audio, effects, \
+             transition and speed in ONE undoable call. Omitted fields are left \
+             alone; `transform` and `audio` are PATCHES (only the keys you send \
+             change), while `effects` REPLACES the whole list. Every numeric \
+             field also accepts a keyframe curve — that is how you animate.",
+            json!({
+                "clip_id": clip_id.clone(),
+                "transform": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "description": "Partial patch of the 2D transform. Position is in \
+                        pixels of the sequence canvas from its centre; scale is a \
+                        multiplier (1 = fit); rotation is degrees; opacity 0..1; \
+                        crop is a 0..1 fraction of each edge.",
+                    "properties": {
+                        "position_x": param("horizontal offset in px"),
+                        "position_y": param("vertical offset in px"),
+                        "scale_x": param("horizontal scale, 1 = original"),
+                        "scale_y": param("vertical scale, 1 = original"),
+                        "rotation": param("degrees, clockwise"),
+                        "opacity": param("0 = transparent, 1 = opaque"),
+                        "crop_left": param("fraction 0..1 cropped from the left"),
+                        "crop_top": param("fraction 0..1 cropped from the top"),
+                        "crop_right": param("fraction 0..1 cropped from the right"),
+                        "crop_bottom": param("fraction 0..1 cropped from the bottom"),
+                        "flip_h": bool_("mirror horizontally"),
+                        "flip_v": bool_("mirror vertically"),
+                    }
+                },
+                "audio": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "description": "Partial patch of the clip's audio.",
+                    "properties": {
+                        "gain_db": param("volume in dB, 0 = unchanged"),
+                        "pan": param("-1 = left, 0 = centre, 1 = right"),
+                        "fade_in_us": int("fade-in length in µs"),
+                        "fade_out_us": int("fade-out length in µs"),
+                        "muted": bool_("silence this clip"),
+                        "denoise": bool_("neural background-noise removal (DNS64); the \
+                            denoised audio renders in the background for playback and \
+                            is applied again on export"),
+                    }
+                },
+                "effects": {
+                    "type": "array",
+                    "description": "REPLACES the clip's effect chain, in order. Ids and \
+                        parameter names come from get_catalog → effects. Numeric params \
+                        accept keyframe curves; colours are '#rrggbb' in `color_params`.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "effect_id": { "type": "string" },
+                            "enabled": { "type": "boolean" },
+                            "params": { "type": "object" },
+                            "color_params": { "type": "object" }
+                        },
+                        "required": ["effect_id"]
+                    }
+                },
+                "transition_in": {
+                    "description": "Cross-fade at the start of the clip. `null` removes it.",
+                    "anyOf": [
+                        { "type": "null" },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "effect_id": { "type": "string", "description": "default 'core.crossfade'" },
+                                "duration_us": { "type": "integer", "description": "length in µs" }
+                            },
+                            "required": ["duration_us"]
+                        }
+                    ]
+                },
+                "speed": num("playback rate: 2 = twice as fast (and half as long). \
+                    Pitch is preserved. The clip may not grow past the next clip."),
+            }),
+            &["clip_id"], Kind::Edit,
+        ),
+        tool(
+            "set_clip_content",
+            "Edits what a clip SHOWS, according to its payload: the words and \
+             style of a Text clip, the style and mode of a Subtitles clip, or \
+             the parameters of a Generator clip. `style` is a patch. One undo.",
+            json!({
+                "clip_id": clip_id.clone(),
+                "text": str_("Text clips: the new content"),
+                "style": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "description": "Text/Subtitles clips: partial patch of the style.",
+                    "properties": {
+                        "font": str_("family name or a .ttf path (see get_catalog → fonts)"),
+                        "size": num("size in px at the sequence resolution"),
+                        "color": str_("'#rrggbb'"),
+                        "bg": { "description": "'#rrggbb' box behind the text, or null", "anyOf": [{"type":"null"},{"type":"string"}] },
+                        "stroke_color": { "description": "outline colour, or null", "anyOf": [{"type":"null"},{"type":"string"}] },
+                        "stroke_width": num("outline width in px"),
+                        "highlight_color": { "description": "karaoke highlight colour, or null", "anyOf": [{"type":"null"},{"type":"string"}] },
+                        "x_offset": num("px from the horizontal anchor"),
+                        "y_offset": num("px from the bottom"),
+                        "align": str_("'left' | 'center' | 'right'"),
+                    }
+                },
+                "subtitles_mode": str_("Subtitles clips: 'phrase' (a line at a time), \
+                    'word' (one word at a time) or 'karaoke' (the phrase, current word lit)"),
+                "generator_id": str_("Generator clips: switch the generator"),
+                "generator_params": { "type": "object", "description": "Generator clips: numeric/curve params (replaces them)" },
+                "generator_colors": { "type": "object", "description": "Generator clips: '#rrggbb' params (replaces them)" },
+            }),
+            &["clip_id"], Kind::Edit,
+        ),
+
+        // -------------------------------------------------------------- tracks
+        tool(
+            "add_track",
+            "Adds an empty video or audio track, named V(n)/A(n). Returns its id.",
+            json!({ "kind": str_("'video' or 'audio'") }),
+            &["kind"], Kind::Edit,
+        ),
+        tool(
+            "remove_track",
+            "Deletes a track and every clip on it (one undo restores both). \
+             Refuses to remove the last track of its kind.",
+            json!({ "track_id": str_("track id") }),
+            &["track_id"], Kind::Edit,
+        ),
+        tool(
+            "set_track_prop",
+            "Sets exactly one track property: rename it, mute/solo/lock it, or \
+             set its volume. Send exactly one of the optional fields.",
+            json!({
+                "track_id": str_("track id"),
+                "name": str_("new name, 1..24 chars"),
+                "muted": bool_("silence the track"),
+                "solo": bool_("mute every other track of its kind"),
+                "locked": bool_("refuse edits on this track"),
+                "volume_db": num("track volume in dB, clamped to -60..12"),
+            }),
+            &["track_id"], Kind::Edit,
+        ),
+
+        // ----------------------------------------------------------- sequences
+        tool(
+            "set_sequence_props",
+            "Changes a sequence's resolution and frame rate (e.g. 4K, 60 fps, \
+             portrait). Clips are not moved; the canvas changes underneath them.",
+            json!({
+                "width": int("canvas width in px (≥16)"),
+                "height": int("canvas height in px (≥16)"),
+                "fps_num": int("frame-rate numerator, e.g. 30 or 30000"),
+                "fps_den": int("frame-rate denominator, e.g. 1 or 1001"),
+                "sequence_id": str_("defaults to the active sequence"),
+            }),
+            &["width", "height", "fps_num", "fps_den"], Kind::Edit,
+        ),
+        tool(
+            "set_active_sequence",
+            "Switches which sequence the other tools act on (and what the app \
+             previews).",
+            json!({ "sequence_id": str_("sequence id (from get_project_summary)") }),
+            &["sequence_id"], Kind::Edit,
+        ),
+        tool(
+            "remove_sequence",
+            "Deletes a sequence and everything in it. If it was the active one, \
+             another becomes active. Refuses to delete the last sequence.",
+            json!({ "sequence_id": str_("sequence id") }),
+            &["sequence_id"], Kind::Edit,
+        ),
+        tool(
+            "generate_vertical",
+            "Creates a 1080x1920 vertical version of the active sequence \
+             (blurred background, video centred) and makes it active. Idempotent: \
+             calling it twice switches to the existing vertical twin instead of \
+             stacking another one.",
+            json!({}), &[], Kind::Edit,
+        ),
+
+        // ------------------------------------------------------------------ AI
+        tool(
+            "remove_silences",
+            "Detects the silences inside a media clip (from its conformed audio) \
+             and either cuts them out (`delete`, closing the gaps), speeds them \
+             up 4× (`speedup`), or just cuts at their edges without deleting \
+             anything (`split`). Acts on ALL tracks; one undo entry. Returns how \
+             many silences were found and how many µs were removed.",
+            json!({
+                "clip_id": str_("id of a media clip whose asset has a conformed audio"),
+                "mode": { "type": "string", "enum": ["delete", "speedup", "split"],
+                          "description": "default 'delete'" },
+                "threshold_db": num("silence threshold in dBFS, -80..-10 (default -38)"),
+                "min_silence_ms": int("ignore silences shorter than this, 50..5000 (default 400)"),
+                "pad_ms": int("keep this much speech around each cut, 0..1000 (default 150)"),
+            }),
+            &["clip_id"], Kind::Edit,
+        ),
+        tool(
+            "replace_words",
+            "Fixes a recurring transcription error: every whole-word occurrence \
+             of `from` (case-insensitive) gets `to` as its DISPLAY spelling. \
+             Audio and timings are untouched; captions show the correction. \
+             E.g. 'godo' → 'Godot'. Returns how many words changed.",
+            json!({
+                "transcript_id": str_("transcript id (from get_project_summary or get_transcript)"),
+                "from": str_("the word as Whisper heard it"),
+                "to": str_("the correct spelling; empty string restores the original"),
+            }),
+            &["transcript_id", "from", "to"], Kind::Edit,
+        ),
+        tool(
+            "set_word_text",
+            "Overrides the display spelling of ONE word by index (as returned by \
+             get_transcript). Empty text restores the original.",
+            json!({
+                "transcript_id": str_("transcript id"),
+                "index": int("0-based index into the transcript's `words`"),
+                "text": str_("the corrected spelling; '' restores the original"),
+            }),
+            &["transcript_id", "index", "text"], Kind::Edit,
+        ),
+        tool(
+            "save_avatar_config",
+            "Creates or updates an avatar setup (expressions + emotion-classifier \
+             settings) and returns its id. Pass the `id` of an existing setup to \
+             update it, or omit it to create one. The api_key is kept in the \
+             project but never written to an exported setup.",
+            json!({
+                "config": {
+                    "type": "object",
+                    "description": "{ id?, name, expressions: [{name, path, description}], \
+                        shake_factor?: 0..3, scale?: 0.05..1, model?, api_base?, api_key? }. \
+                        `path` is an image or video per expression; `description` is what the \
+                        LLM matches the speech against; the FIRST expression is the default.",
+                    "properties": { "name": { "type": "string" }, "expressions": { "type": "array" } },
+                    "required": ["name", "expressions"]
+                }
+            }),
+            &["config"], Kind::Edit,
+        ),
+        tool(
+            "generate_avatar_video",
+            "Renders a transparent avatar video driven by an asset's VOICE: each \
+             transcript segment is classified into one of the avatar's \
+             expressions (via the configured LLM, or an offline heuristic) and \
+             the avatar shakes with the speaker's volume. The result is imported \
+             into the media pool; put it on the timeline with add_clip. \
+             The driver's VIDEO is irrelevant — only its transcript and audio. \
+             BLOCKS for minutes. Not undoable (it adds an asset).",
+            json!({
+                "config_id": str_("avatar setup id (get_catalog → avatar_setups)"),
+                "driver_asset": str_("asset id of the VOICE; must be transcribed"),
+            }),
+            &["config_id", "driver_asset"], Kind::Destructive,
+        ),
+
+        // ------------------------------------------------------------- project
+        tool(
+            "new_project",
+            "Throws away the open project (unsaved changes AND the undo history) \
+             and starts an empty one. Save first if it matters.",
+            json!({ "name": str_("project name") }),
+            &["name"], Kind::Destructive,
+        ),
+        tool(
+            "open_project",
+            "Opens a .uep file, replacing the open project and its undo history. \
+             Relative media paths resolve against the .uep's folder; missing \
+             files are flagged `offline`.",
+            json!({ "path": str_("absolute path to a .uep file") }),
+            &["path"], Kind::Destructive,
+        ),
+        tool(
+            "save_project",
+            "Writes the project to disk (atomically) and returns the path. \
+             Without `path` it saves over the file it was opened from. Media \
+             under the project folder is stored relative, so the folder stays \
+             portable.",
+            json!({ "path": str_("absolute .uep path (default: the current one)") }),
+            &[], Kind::Destructive,
+        ),
+
+        // -------------------------------------------------------------- render
+        tool(
+            "export_video",
+            "Renders the active sequence to a file with ffmpeg and returns the \
+             path. BLOCKS until finished. Pass `ranges` to render several chunks \
+             of the timeline concatenated, in order, into ONE file (the 'pieces' \
+             feature); omit it to render everything.",
+            json!({
+                "path": str_("absolute output path; the extension should match `format`"),
+                "ranges": {
+                    "type": "array",
+                    "items": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 },
+                    "description": "[[start_us, end_us], …] pieces, concatenated in the order given"
+                },
+                "format": { "type": "string", "enum": ["mp4", "m4a", "gif"], "description": "default mp4 (m4a = audio only)" },
+                "max_height": int("downscale so the height is at most this (e.g. 1080)"),
+                "crf": int("x264 quality, 10 (best) .. 40 (worst); default 18"),
+                "loudnorm": bool_("normalise loudness to broadcast levels (default false)"),
+            }),
+            &["path"], Kind::Destructive,
+        ),
+        tool(
+            "debug_render_frame",
+            "Renders the PAUSED-preview frame at t_us through the exact chain \
+             the export uses, writes it to a temp JPEG and returns {path, bytes}. \
+             Read the file to SEE what the editor sees. `bytes: 0` or a tiny file \
+             means the frame came out black.",
+            json!({
+                "t_us": int("timeline time in µs"),
+                "max_width": int("render width in px (default 1280)"),
+            }),
+            &["t_us"], Kind::Read,
+        ),
+        tool(
+            "debug_playback_frame",
+            "Dumps the frame currently sitting in the PLAYBACK stream buffer to a \
+             temp JPEG and returns {path, bytes}. `bytes: 0` = the stream produced \
+             nothing (playback is broken or stopped). Playback and paused preview \
+             are different code paths: check both.",
+            json!({}), &[], Kind::Read,
+        ),
+        tool(
+            "playback",
+            "Drives the real player, so you can reproduce what the user sees: \
+             `play` (from from_us), `pause`, or `position` (where it is now).",
+            json!({
+                "action": { "type": "string", "enum": ["play", "pause", "position"] },
+                "from_us": int("play: where to start, in µs (default 0)"),
+            }),
+            &["action"], Kind::Edit,
+        ),
+
+        // ------------------------------------------------------------- history
+        tool(
+            "undo",
+            "Reverts the last edit (exactly one tool call) and returns its label.",
+            json!({}), &[], Kind::Edit,
+        ),
+        tool(
+            "redo",
+            "Re-applies the last undone edit and returns its label.",
+            json!({}), &[], Kind::Edit,
+        ),
     ])
 }
+
+// ---------------------------------------------------------------------------
+// Result helpers
+// ---------------------------------------------------------------------------
 
 fn text_result(v: Value) -> Value {
     json!({ "content": [{ "type": "text", "text": v.to_string() }] })
@@ -222,260 +704,449 @@ fn tool_error(msg: &str) -> Value {
     json!({ "content": [{ "type": "text", "text": msg }], "isError": true })
 }
 
-fn call_tool(state: &AppState, app: Option<&tauri::AppHandle>, name: &str, args: &Value) -> Value {
-    let parse_id = |key: &str| -> Result<ue_core::model::Id, String> {
-        args.get(key)
+/// `Result` → MCP tool result, so every handler can be written with `?`.
+fn finish(r: Result<Value, String>) -> Value {
+    match r {
+        Ok(v) => text_result(v),
+        Err(e) => tool_error(&e),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Argument parsing
+// ---------------------------------------------------------------------------
+
+struct Args<'a>(&'a Value);
+
+impl<'a> Args<'a> {
+    fn id(&self, key: &str) -> Result<Id, String> {
+        self.0
+            .get(key)
             .and_then(|v| v.as_str())
             .ok_or_else(|| format!("missing {key}"))?
             .parse()
             .map_err(|e| format!("invalid {key}: {e}"))
-    };
+    }
+    fn opt_id(&self, key: &str) -> Result<Option<Id>, String> {
+        match self.0.get(key).and_then(|v| v.as_str()) {
+            None => Ok(None),
+            Some(s) => s.parse().map(Some).map_err(|e| format!("invalid {key}: {e}")),
+        }
+    }
+    fn i64(&self, key: &str) -> Result<i64, String> {
+        self.0.get(key).and_then(|v| v.as_i64()).ok_or_else(|| format!("missing {key}"))
+    }
+    fn i64_or(&self, key: &str, default: i64) -> i64 {
+        self.0.get(key).and_then(|v| v.as_i64()).unwrap_or(default)
+    }
+    fn f64(&self, key: &str) -> Option<f64> {
+        self.0.get(key).and_then(|v| v.as_f64())
+    }
+    fn str(&self, key: &str) -> Result<&'a str, String> {
+        self.0.get(key).and_then(|v| v.as_str()).ok_or_else(|| format!("missing {key}"))
+    }
+    fn bool_or(&self, key: &str, default: bool) -> bool {
+        self.0.get(key).and_then(|v| v.as_bool()).unwrap_or(default)
+    }
+    fn get(&self, key: &str) -> Option<&'a Value> {
+        self.0.get(key)
+    }
+    /// [[a, b], …] pairs, dropping the malformed and the empty ones.
+    fn ranges(&self, key: &str) -> Vec<(i64, i64)> {
+        self.0
+            .get(key)
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|p| {
+                        let p = p.as_array()?;
+                        Some((p.first()?.as_i64()?, p.get(1)?.as_i64()?))
+                    })
+                    .filter(|(a, b)| b > a)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
 
+/// The active sequence unless the caller named another one.
+fn target_sequence(state: &AppState, args: &Args) -> Result<Id, String> {
+    let store = state.store.lock().unwrap();
+    match args.opt_id("sequence_id")? {
+        Some(id) if store.project.sequence(id).is_none() => Err(format!("sequence {id} not found")),
+        Some(id) => Ok(id),
+        None => Ok(store.project.active_sequence),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Partial patches (agents send only what changes)
+// ---------------------------------------------------------------------------
+
+/// Deserializes `T` from the current value with the patch's keys overwritten.
+/// `flat` maps a patch key onto a JSON pointer inside the serialized value, so
+/// tuples like `position: [x, y]` can be addressed as `position_x`.
+fn patch<T: serde::Serialize + serde::de::DeserializeOwned>(
+    current: &T,
+    patch: &Value,
+    flat: &[(&str, &str)],
+    what: &str,
+) -> Result<T, String> {
+    let mut base = serde_json::to_value(current).map_err(|e| e.to_string())?;
+    let Some(obj) = patch.as_object() else {
+        return Err(format!("{what} must be an object"));
+    };
+    let flat_keys: std::collections::HashMap<&str, &str> = flat.iter().copied().collect();
+    for (key, value) in obj {
+        match flat_keys.get(key.as_str()) {
+            // e.g. "position_x" → "/position/0"
+            Some(pointer) => {
+                let slot = base
+                    .pointer_mut(pointer)
+                    .ok_or_else(|| format!("{what}: cannot set {key}"))?;
+                *slot = value.clone();
+            }
+            // a plain field of the struct
+            None if base.get(key).is_some() => {
+                base[key] = value.clone();
+            }
+            None => return Err(format!("{what}: unknown field '{key}'")),
+        }
+    }
+    serde_json::from_value(base).map_err(|e| format!("{what}: {e}"))
+}
+
+const TRANSFORM_FLAT: &[(&str, &str)] = &[
+    ("position_x", "/position/0"),
+    ("position_y", "/position/1"),
+    ("scale_x", "/scale/0"),
+    ("scale_y", "/scale/1"),
+    ("crop_left", "/crop/0"),
+    ("crop_top", "/crop/1"),
+    ("crop_right", "/crop/2"),
+    ("crop_bottom", "/crop/3"),
+];
+
+fn patch_transform(current: &Transform2D, p: &Value) -> Result<Transform2D, String> {
+    patch(current, p, TRANSFORM_FLAT, "transform")
+}
+fn patch_audio(current: &AudioProps, p: &Value) -> Result<AudioProps, String> {
+    patch(current, p, &[], "audio")
+}
+fn patch_style(current: &TextStyle, p: &Value) -> Result<TextStyle, String> {
+    patch(current, p, &[], "style")
+}
+
+// ---------------------------------------------------------------------------
+// Tool dispatch
+// ---------------------------------------------------------------------------
+
+fn call_tool(state: &AppState, app: Option<&tauri::AppHandle>, name: &str, raw: &Value) -> Value {
+    let args = Args(raw);
     match name {
-        "get_project_summary" => {
+        // ---------------------------------------------------------------- read
+        "get_project_summary" => finish(get_project_summary(state)),
+        "get_timeline" => finish((|| {
+            let seq_id = target_sequence(state, &args)?;
             let store = state.store.lock().unwrap();
-            let p = &store.project;
-            let seq = p.sequence(p.active_sequence);
-            text_result(json!({
-                "name": p.name,
-                "dirty": store.dirty,
-                "assets": p.assets.len(),
-                "sequence": seq.map(|s| json!({
-                    "name": s.name,
-                    "resolution": s.resolution,
-                    "fps": s.fps,
-                    "duration_us": s.duration_us(),
-                    "tracks": s.tracks.iter().map(|t| json!({
-                        "id": t.id.to_string(),
-                        "name": t.name,
-                        "kind": t.kind,
-                        "clips": t.clips.len(),
-                    })).collect::<Vec<_>>(),
-                })),
-                "undo_history": store.undo_labels(),
-            }))
-        }
-        "get_timeline" => {
+            serde_json::to_value(store.project.sequence(seq_id)).map_err(|e| e.to_string())
+        })()),
+        "get_media_pool" => finish(
+            serde_json::to_value(&state.store.lock().unwrap().project.assets)
+                .map_err(|e| e.to_string()),
+        ),
+        "get_transcript" => finish((|| {
+            let asset_id = args.id("asset_id")?;
             let store = state.store.lock().unwrap();
-            let seq = store.project.sequence(store.project.active_sequence);
-            text_result(serde_json::to_value(seq).unwrap_or(Value::Null))
-        }
-        "get_media_pool" => {
-            let store = state.store.lock().unwrap();
-            text_result(serde_json::to_value(&store.project.assets).unwrap_or(Value::Null))
-        }
-        "get_effects_catalog" => {
-            text_result(ue_render::catalog_json(&state.registry.lock().unwrap()))
-        }
-        "split_clip" => {
-            let clip_id = match parse_id("clip_id") {
-                Ok(v) => v,
-                Err(e) => return tool_error(&e),
-            };
-            let Some(t_us) = args.get("t_us").and_then(|v| v.as_i64()) else {
-                return tool_error("missing t_us");
-            };
-            let mut store = state.store.lock().unwrap();
-            match store.split_clip(clip_id, t_us) {
-                Ok((l, r)) => text_result(json!({ "left": l.to_string(), "right": r.to_string() })),
-                Err(e) => tool_error(&e.to_string()),
-            }
-        }
-        "delete_clips" => {
-            let Some(ids) = args.get("ids").and_then(|v| v.as_array()) else {
-                return tool_error("missing ids");
-            };
-            let parsed: Result<Vec<ue_core::model::Id>, _> = ids
+            let doc = store
+                .project
+                .transcripts
                 .iter()
-                .filter_map(|v| v.as_str())
-                .map(|s| s.parse::<ue_core::model::Id>())
-                .collect();
-            let ripple = args.get("ripple").and_then(|v| v.as_bool()).unwrap_or(false);
-            match parsed {
-                Ok(ids) => {
-                    let mut store = state.store.lock().unwrap();
-                    match store.delete_clips(&ids, ripple) {
-                        Ok(()) => text_result(json!({ "deleted": ids.len() })),
-                        Err(e) => tool_error(&e.to_string()),
-                    }
-                }
-                Err(e) => tool_error(&format!("invalid id: {e}")),
-            }
-        }
-        "add_clip" => {
-            let asset_id = match parse_id("asset_id") {
-                Ok(v) => v,
-                Err(e) => return tool_error(&e),
-            };
-            let at_us = args.get("at_us").and_then(|v| v.as_i64()).unwrap_or(0);
-            match add_clip_inner(state, asset_id, at_us) {
-                Ok(clip_id) => text_result(json!({ "clip_id": clip_id })),
-                Err(e) => tool_error(&e),
-            }
-        }
-        "set_clip_transition" => {
-            let clip_id = match parse_id("clip_id") {
-                Ok(v) => v,
-                Err(e) => return tool_error(&e),
-            };
-            let dur = args.get("duration_us").and_then(|v| v.as_i64()).unwrap_or(0);
-            let transition = (dur > 0).then(|| TransitionRef {
-                effect_id: "core.crossfade".into(),
-                duration: dur,
-                params: Default::default(),
-            });
-            let mut store = state.store.lock().unwrap();
-            match store.dispatch(
-                "[MCP] Edit transition",
-                vec![ue_core::Action::SetClipTransition { clip_id, transition }],
-            ) {
-                Ok(()) => text_result(json!({ "ok": true })),
-                Err(e) => tool_error(&e.to_string()),
-            }
-        }
-        "get_transcript" => {
-            let asset_id = match parse_id("asset_id") {
-                Ok(v) => v,
-                Err(e) => return tool_error(&e),
-            };
-            let store = state.store.lock().unwrap();
-            match store.project.transcripts.iter().find(|t| t.asset_id == asset_id) {
-                Some(doc) => text_result(serde_json::to_value(doc).unwrap_or(Value::Null)),
-                None => tool_error("the asset has no transcript yet (use transcribe in the UI)"),
-            }
-        }
-        "remove_silences" => {
-            let clip_id = match parse_id("clip_id") {
-                Ok(v) => v,
-                Err(e) => return tool_error(&e),
-            };
-            let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("delete").to_string();
-            let mut params = ue_ai::silence::SilenceParams::default();
-            if let Some(db) = args.get("threshold_db").and_then(|v| v.as_f64()) {
-                params.threshold_db = db.clamp(-80.0, -10.0);
-            }
-            if let Some(ms) = args.get("min_silence_ms").and_then(|v| v.as_i64()) {
-                params.min_silence_us = ms.clamp(50, 5000) * 1000;
-            }
-            if let Some(ms) = args.get("pad_ms").and_then(|v| v.as_i64()) {
-                params.pad_pre_us = ms.clamp(0, 1000) * 1000;
-                params.pad_post_us = ms.clamp(0, 1000) * 1000;
-            }
-            match remove_silences_inner(state, clip_id, &mode, &params) {
-                Ok((n, us)) => text_result(json!({ "removed": n, "removed_us": us })),
-                Err(e) => tool_error(&e),
-            }
-        }
-        "export_video" => {
-            let Some(path) = args.get("path").and_then(|v| v.as_str()) else {
-                return tool_error("missing path");
-            };
-            let ranges: Vec<(i64, i64)> = args
-                .get("ranges")
+                .find(|t| t.asset_id == asset_id)
+                .ok_or("the asset has no transcript yet; call transcribe_asset first")?;
+            serde_json::to_value(doc).map_err(|e| e.to_string())
+        })()),
+        "get_catalog" => finish(get_catalog(state)),
+
+        // --------------------------------------------------------------- media
+        "import_media" => finish((|| {
+            let paths: Vec<String> = args
+                .get("paths")
                 .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|p| {
-                            let p = p.as_array()?;
-                            Some((p.first()?.as_i64()?, p.get(1)?.as_i64()?))
-                        })
-                        .filter(|(a, b)| b > a)
-                        .collect()
+                .ok_or("missing paths")?
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect();
+            if paths.is_empty() {
+                return Err("paths is empty".into());
+            }
+            let ids = crate::import_media_impl(app, state, &paths)?;
+            let store = state.store.lock().unwrap();
+            let assets: Vec<Value> = ids
+                .iter()
+                .filter_map(|id| store.project.asset(*id))
+                .map(|a| {
+                    json!({
+                        "asset_id": a.id.to_string(),
+                        "kind": a.kind,
+                        "path": a.path,
+                        "duration_us": a.probe.duration_us,
+                        "has_audio": a.probe.audio_channels > 0,
+                        "audio_ready": a.audio_conform.is_some(),
+                    })
                 })
-                .unwrap_or_default();
-            let format = match args.get("format").and_then(|v| v.as_str()) {
-                None | Some("mp4") => ue_export::ExportFormat::Mp4,
-                Some("m4a") => ue_export::ExportFormat::M4a,
-                Some("gif") => ue_export::ExportFormat::Gif,
-                Some(o) => return tool_error(&format!("unknown format: {o}")),
+                .collect();
+            Ok(json!({ "imported": assets.len(), "assets": assets }))
+        })()),
+        "transcribe_asset" => finish((|| {
+            let asset_id = args.id("asset_id")?;
+            let model = args.get("model").and_then(|v| v.as_str()).map(str::to_string);
+            let (transcript_id, words) = crate::transcribe_blocking(state, asset_id, model)?;
+            Ok(json!({ "transcript_id": transcript_id.to_string(), "words": words }))
+        })()),
+
+        // ------------------------------------------------------------ timeline
+        "add_clip" => finish((|| {
+            let asset_id = args.id("asset_id")?;
+            let track_id = args.opt_id("track_id")?;
+            let at_us = args.i64_or("at_us", 0);
+            let clip_id = add_clip_inner(state, asset_id, at_us, track_id)?;
+            Ok(json!({ "clip_id": clip_id.to_string() }))
+        })()),
+        "add_text_clip" => finish((|| {
+            let content = args.str("content")?;
+            let id = crate::add_text_clip_impl(
+                state,
+                content,
+                args.i64_or("at_us", 0),
+                args.i64_or("duration_us", 4_000_000),
+            )?;
+            Ok(json!({ "clip_id": id.to_string() }))
+        })()),
+        "add_generator_clip" => finish((|| {
+            let gen = args.str("generator_id")?;
+            let id = crate::add_generator_clip_impl(
+                state,
+                gen,
+                args.i64_or("at_us", 0),
+                args.i64_or("duration_us", 4_000_000),
+            )?;
+            Ok(json!({ "clip_id": id.to_string() }))
+        })()),
+        "add_subtitles_clip" => finish((|| {
+            let id = crate::add_subtitles_clip_impl(state, args.id("clip_id")?)?;
+            Ok(json!({ "clip_id": id.to_string() }))
+        })()),
+        "split_clip" => finish((|| {
+            let clip_id = args.id("clip_id")?;
+            let t_us = args.i64("t_us")?;
+            let (l, r) = state
+                .store
+                .lock()
+                .unwrap()
+                .split_clip(clip_id, t_us)
+                .map_err(|e| e.to_string())?;
+            Ok(json!({ "left": l.to_string(), "right": r.to_string() }))
+        })()),
+        "delete_clips" => finish((|| {
+            let ids: Result<Vec<Id>, String> = args
+                .get("ids")
+                .and_then(|v| v.as_array())
+                .ok_or("missing ids")?
+                .iter()
+                .map(|v| {
+                    v.as_str()
+                        .ok_or_else(|| "ids must be strings".to_string())?
+                        .parse::<Id>()
+                        .map_err(|e| format!("invalid clip id: {e}"))
+                })
+                .collect();
+            let ids = ids?;
+            state
+                .store
+                .lock()
+                .unwrap()
+                .delete_clips(&ids, args.bool_or("ripple", false))
+                .map_err(|e| e.to_string())?;
+            Ok(json!({ "deleted": ids.len() }))
+        })()),
+        "move_clip" => finish((|| {
+            let mode = if args.bool_or("overwrite", false) {
+                InsertMode::Overwrite
+            } else {
+                InsertMode::Strict
             };
-            let defaults = ue_export::ExportSettings::default();
-            let settings = ue_export::ExportSettings {
-                format,
-                max_height: args.get("max_height").and_then(|v| v.as_u64()).map(|v| v as u32),
-                crf: args
-                    .get("crf")
-                    .and_then(|v| v.as_u64())
-                    .map(|v| (v as u8).clamp(10, 40))
-                    .unwrap_or(defaults.crf),
-                loudnorm: args.get("loudnorm").and_then(|v| v.as_bool()).unwrap_or(false),
-                ranges,
-                extra_packs: state.user_packs.lock().unwrap().clone(),
-                ..defaults
+            state
+                .store
+                .lock()
+                .unwrap()
+                .move_clip(args.id("clip_id")?, args.id("to_track")?, args.i64("to_start_us")?, mode)
+                .map_err(|e| e.to_string())?;
+            Ok(json!({ "ok": true }))
+        })()),
+        "trim_clip" => finish((|| {
+            let left = args
+                .get("left")
+                .and_then(|v| v.as_bool())
+                .ok_or("missing left (true = start edge)")?;
+            state
+                .store
+                .lock()
+                .unwrap()
+                .trim_clip(args.id("clip_id")?, left, args.i64("new_edge_us")?)
+                .map_err(|e| e.to_string())?;
+            Ok(json!({ "ok": true }))
+        })()),
+        "unlink_clip" => finish((|| {
+            let n = crate::unlink_clip_impl(state, args.id("clip_id")?)?;
+            Ok(json!({ "unlinked": n }))
+        })()),
+        "cut_ranges" => finish((|| {
+            let seq_id = target_sequence(state, &args)?;
+            let ranges = args.ranges("ranges");
+            if ranges.is_empty() {
+                return Err("ranges is empty (each item is [start_us, end_us] with end > start)".into());
+            }
+            let removed: i64 = ranges.iter().map(|(s, e)| e - s).sum();
+            state
+                .store
+                .lock()
+                .unwrap()
+                .cut_ranges(seq_id, &ranges, args.bool_or("ripple", true))
+                .map_err(|e| e.to_string())?;
+            Ok(json!({ "cut": ranges.len(), "removed_us": removed }))
+        })()),
+        "move_range" => finish((|| {
+            let seq_id = target_sequence(state, &args)?;
+            state
+                .store
+                .lock()
+                .unwrap()
+                .move_range(seq_id, args.i64("from_us")?, args.i64("to_us")?, args.i64("dest_us")?)
+                .map_err(|e| e.to_string())?;
+            Ok(json!({ "ok": true }))
+        })()),
+
+        // ------------------------------------------------------ clip properties
+        "set_clip_properties" => finish(set_clip_properties(state, app, &args)),
+        "set_clip_content" => finish(set_clip_content(state, &args)),
+
+        // -------------------------------------------------------------- tracks
+        "add_track" => finish((|| {
+            let id = crate::add_track_impl(state, args.str("kind")?)?;
+            Ok(json!({ "track_id": id.to_string() }))
+        })()),
+        "remove_track" => finish((|| {
+            crate::remove_track_impl(state, args.id("track_id")?)?;
+            Ok(json!({ "ok": true }))
+        })()),
+        "set_track_prop" => finish(set_track_prop(state, &args)),
+
+        // ----------------------------------------------------------- sequences
+        "set_sequence_props" => finish((|| {
+            let sequence_id = target_sequence(state, &args)?;
+            let dim = |k: &str| -> Result<u32, String> {
+                let v = args.i64(k)?;
+                u32::try_from(v).map_err(|_| format!("{k} out of range"))
             };
-            let (project, seq_id, base_dir) = {
-                let store = state.store.lock().unwrap();
-                let base = state
-                    .path
-                    .lock()
-                    .unwrap()
-                    .as_ref()
-                    .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-                (store.project.clone(), store.project.active_sequence, base)
-            };
-            let cancel = state.export_cancel.clone();
-            cancel.store(false, std::sync::atomic::Ordering::SeqCst);
-            match ue_export::export_sequence_with_progress(
-                &project,
-                seq_id,
-                &base_dir,
-                std::path::Path::new(path),
-                &settings,
-                |_| {},
-                &cancel,
-            ) {
-                Ok(()) => text_result(json!({ "path": path })),
-                Err(e) => tool_error(&e.to_string()),
-            }
-        }
-        "playback" => {
-            let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
-            match action {
-                "play" => {
-                    let from = args.get("from_us").and_then(|v| v.as_i64()).unwrap_or(0);
-                    match crate::playback_play_impl(state, app, from) {
-                        Ok(()) => text_result(json!({ "playing": true, "from_us": from })),
-                        Err(e) => tool_error(&e),
-                    }
-                }
-                "pause" => {
-                    crate::stop_frame_service(state);
-                    let guard = state.player.lock().unwrap();
-                    match guard.as_ref() {
-                        Some(p) => text_result(json!({ "paused_at_us": p.pause() })),
-                        None => tool_error("no player"),
-                    }
-                }
-                "position" => {
-                    let guard = state.player.lock().unwrap();
-                    match guard.as_ref() {
-                        Some(p) => text_result(
-                            json!({ "t_us": p.position_us(), "playing": p.is_playing() }),
-                        ),
-                        None => tool_error("no player"),
-                    }
-                }
-                other => tool_error(&format!("unknown action: {other}")),
-            }
-        }
-        "debug_render_frame" => {
-            let t_us = args.get("t_us").and_then(|v| v.as_i64()).unwrap_or(0);
-            let max_width =
-                args.get("max_width").and_then(|v| v.as_i64()).unwrap_or(1280) as u32;
-            match crate::render_frame_impl(state, t_us, max_width) {
-                Ok(bytes) => {
-                    let path = std::env::temp_dir().join("ue_debug_frame.jpg");
-                    let n = bytes.len();
-                    if let Err(e) = std::fs::write(&path, bytes) {
-                        return tool_error(&e.to_string());
-                    }
-                    text_result(json!({ "path": path.display().to_string(), "bytes": n }))
-                }
-                Err(e) => tool_error(&e),
-            }
-        }
-        "debug_playback_frame" => {
+            let (width, height) = (dim("width")?, dim("height")?);
+            let (fps_num, fps_den) = (dim("fps_num")?, dim("fps_den")?);
+            state
+                .store
+                .lock()
+                .unwrap()
+                .dispatch(
+                    "Sequence settings",
+                    vec![ue_core::Action::SetSequenceProps {
+                        sequence_id,
+                        resolution: (width, height),
+                        fps: (fps_num, fps_den),
+                    }],
+                )
+                .map_err(|e| e.to_string())?;
+            Ok(json!({ "ok": true }))
+        })()),
+        "set_active_sequence" => finish((|| {
+            let sequence_id = args.id("sequence_id")?;
+            state
+                .store
+                .lock()
+                .unwrap()
+                .dispatch(
+                    "Change sequence",
+                    vec![ue_core::Action::SetActiveSequence { sequence_id }],
+                )
+                .map_err(|e| e.to_string())?;
+            Ok(json!({ "ok": true }))
+        })()),
+        "remove_sequence" => finish(remove_sequence(state, &args)),
+        "generate_vertical" => finish(
+            crate::generate_vertical_impl(state).map(|id| json!({ "sequence_id": id })),
+        ),
+
+        // ------------------------------------------------------------------ AI
+        "remove_silences" => finish(remove_silences(state, &args)),
+        "replace_words" => finish(replace_words(state, &args)),
+        "set_word_text" => finish((|| {
+            let transcript_id = args.id("transcript_id")?;
+            let index = usize::try_from(args.i64("index")?).map_err(|_| "index must be ≥ 0")?;
+            let text = args.str("text")?.trim();
+            let display = (!text.is_empty()).then(|| text.to_string());
+            state
+                .store
+                .lock()
+                .unwrap()
+                .dispatch(
+                    "Edit word",
+                    vec![ue_core::Action::SetWordText { transcript_id, index, display }],
+                )
+                .map_err(|e| e.to_string())?;
+            Ok(json!({ "ok": true }))
+        })()),
+        "save_avatar_config" => finish((|| {
+            let config = args.get("config").ok_or("missing config")?.clone();
+            let id = crate::save_avatar_config_impl(state, config)?;
+            Ok(json!({ "config_id": id.to_string() }))
+        })()),
+        "generate_avatar_video" => finish((|| {
+            let config_id = args.id("config_id")?;
+            let driver_asset = args.id("driver_asset")?;
+            let asset_id =
+                crate::avatar_generate_blocking(state, config_id, driver_asset, &|stage, p, msg| {
+                    ue_core::dlog("mcp:avatar", &format!("{stage} {p:.0} {msg}"));
+                })?;
+            Ok(json!({ "asset_id": asset_id.to_string() }))
+        })()),
+
+        // ------------------------------------------------------------- project
+        "new_project" => finish((|| {
+            crate::new_project_impl(state, args.str("name")?);
+            Ok(json!({ "ok": true }))
+        })()),
+        "open_project" => finish((|| {
+            crate::open_project_impl(app, state, args.str("path")?)?;
+            Ok(json!({ "ok": true }))
+        })()),
+        "save_project" => finish(
+            crate::save_project_impl(
+                state,
+                args.get("path").and_then(|v| v.as_str()).map(str::to_string),
+            )
+            .map(|p| json!({ "path": p })),
+        ),
+
+        // -------------------------------------------------------------- render
+        "export_video" => finish(export_video(state, &args)),
+        "debug_render_frame" => finish((|| {
+            let t_us = args.i64_or("t_us", 0);
+            let max_width = args.i64_or("max_width", 1280).clamp(64, 3840) as u32;
+            let bytes = crate::render_frame_impl(state, t_us, max_width)?;
+            let path = std::env::temp_dir().join("ue_debug_frame.jpg");
+            let n = bytes.len();
+            std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+            Ok(json!({ "path": path.display().to_string(), "bytes": n }))
+        })()),
+        "debug_playback_frame" => finish((|| {
             let bytes = state
                 .frames
                 .lock()
@@ -485,110 +1156,373 @@ fn call_tool(state: &AppState, app: Option<&tauri::AppHandle>, name: &str, args:
                 .unwrap_or_default();
             let path = std::env::temp_dir().join("ue_debug_stream.jpg");
             let n = bytes.len();
-            let _ = std::fs::write(&path, &bytes);
-            text_result(json!({ "path": path.display().to_string(), "bytes": n }))
-        }
-        "replace_words" => {
-            let transcript_id = match parse_id("transcript_id") {
-                Ok(v) => v,
-                Err(e) => return tool_error(&e),
-            };
-            let (Some(from), Some(to)) = (
-                args.get("from").and_then(|v| v.as_str()),
-                args.get("to").and_then(|v| v.as_str()),
-            ) else {
-                return tool_error("missing from/to");
-            };
-            let needle = from.trim().to_lowercase();
-            let mut store = state.store.lock().unwrap();
-            let Some(doc) = store.project.transcripts.iter().find(|t| t.id == transcript_id)
-            else {
-                return tool_error("transcript not found");
-            };
-            let matches: Vec<usize> = doc
-                .words
-                .iter()
-                .enumerate()
-                .filter(|(_, w)| w.label().trim().to_lowercase() == needle)
-                .map(|(i, _)| i)
-                .collect();
-            let display =
-                if to.trim().is_empty() { None } else { Some(to.trim().to_string()) };
-            let actions: Vec<ue_core::Action> = matches
-                .iter()
-                .map(|i| ue_core::Action::SetWordText {
-                    transcript_id,
-                    index: *i,
-                    display: display.clone(),
-                })
-                .collect();
-            let n = actions.len();
-            if n > 0 {
-                if let Err(e) = store.dispatch("Replace words", actions) {
-                    return tool_error(&e.to_string());
-                }
-            }
-            text_result(json!({ "replaced": n }))
-        }
-        "move_range" => {
-            let get = |k: &str| args.get(k).and_then(|v| v.as_i64());
-            let (Some(f), Some(t), Some(d)) = (get("from_us"), get("to_us"), get("dest_us"))
-            else {
-                return tool_error("missing from_us/to_us/dest_us");
-            };
-            let mut store = state.store.lock().unwrap();
-            let seq_id = store.project.active_sequence;
-            match store.move_range(seq_id, f, t, d) {
-                Ok(()) => text_result(json!({ "ok": true })),
-                Err(e) => tool_error(&e.to_string()),
-            }
-        }
-        "generate_vertical" => match generate_vertical_inner(state) {
-            Ok(id) => text_result(json!({ "sequence_id": id })),
-            Err(e) => tool_error(&e),
-        },
-        "undo" => {
-            let mut store = state.store.lock().unwrap();
-            match store.undo() {
-                Ok(label) => text_result(json!({ "undone": label })),
-                Err(e) => tool_error(&e.to_string()),
-            }
-        }
-        "redo" => {
-            let mut store = state.store.lock().unwrap();
-            match store.redo() {
-                Ok(label) => text_result(json!({ "redone": label })),
-                Err(e) => tool_error(&e.to_string()),
-            }
-        }
-        _ => tool_error(&format!("unknown tool: {name}")),
+            std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+            Ok(json!({ "path": path.display().to_string(), "bytes": n }))
+        })()),
+        "playback" => finish(playback(state, app, &args)),
+
+        // ------------------------------------------------------------- history
+        "undo" => finish(
+            state
+                .store
+                .lock()
+                .unwrap()
+                .undo()
+                .map(|label| json!({ "undone": label }))
+                .map_err(|e| e.to_string()),
+        ),
+        "redo" => finish(
+            state
+                .store
+                .lock()
+                .unwrap()
+                .redo()
+                .map(|label| json!({ "redone": label }))
+                .map_err(|e| e.to_string()),
+        ),
+
+        _ => tool_error(&format!("unknown tool: {name} (call tools/list)")),
     }
 }
 
-fn generate_vertical_inner(state: &AppState) -> Result<String, String> {
-    // same flow as the UI command
-    crate::generate_vertical_impl(state)
+// ---------------------------------------------------------------------------
+// Handlers that need more than a few lines
+// ---------------------------------------------------------------------------
+
+fn get_project_summary(state: &AppState) -> Result<Value, String> {
+    let store = state.store.lock().unwrap();
+    let p = &store.project;
+    let sequences: Vec<Value> = p
+        .sequences
+        .iter()
+        .map(|s| {
+            json!({
+                "sequence_id": s.id.to_string(),
+                "name": s.name,
+                "active": s.id == p.active_sequence,
+                "resolution": s.resolution,
+                "fps": s.fps,
+                "duration_us": s.duration_us(),
+                "tracks": s.tracks.iter().map(|t| json!({
+                    "track_id": t.id.to_string(),
+                    "name": t.name,
+                    "kind": t.kind,
+                    "clips": t.clips.len(),
+                    "muted": t.muted,
+                    "locked": t.locked,
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    Ok(json!({
+        "name": p.name,
+        "path": state.path.lock().unwrap().as_ref().map(|p| p.display().to_string()),
+        "dirty": store.dirty,
+        "assets": p.assets.len(),
+        "sequences": sequences,
+        "transcripts": p.transcripts.iter().map(|t| json!({
+            "transcript_id": t.id.to_string(),
+            "asset_id": t.asset_id.to_string(),
+            "language": t.language,
+            "words": t.words.len(),
+            "segments": t.segments.len(),
+        })).collect::<Vec<_>>(),
+        "avatar_setups": p.avatars.iter().map(|c| json!({
+            "config_id": c.id.to_string(),
+            "name": c.name,
+            "expressions": c.expressions.iter().map(|e| &e.name).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+        "can_undo": store.can_undo(),
+        "can_redo": store.can_redo(),
+        "undo_history": store.undo_labels(),
+    }))
 }
 
-fn remove_silences_inner(
+fn get_catalog(state: &AppState) -> Result<Value, String> {
+    let store = state.store.lock().unwrap();
+    // families only: the raw list has one entry per style/weight file
+    let mut fonts: Vec<String> =
+        ue_export::graph::list_system_fonts().into_iter().map(|(family, _)| family).collect();
+    fonts.sort();
+    fonts.dedup();
+    Ok(json!({
+        "effects": ue_render::catalog_json(&state.registry.lock().unwrap()),
+        "generators": ue_render::generators_catalog_json(&ue_render::core_generators()),
+        "fonts": fonts,
+        "avatar_setups": store.project.avatars.iter().map(|c| json!({
+            "config_id": c.id.to_string(),
+            "name": c.name,
+            "scale": c.scale,
+            "shake_factor": c.shake_factor,
+            "model": c.model,
+            "expressions": c.expressions.iter().map(|e| json!({
+                "name": e.name, "path": e.path, "description": e.description,
+            })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+        "subtitle_modes": ["phrase", "word", "karaoke"],
+        "transitions": ["core.crossfade"],
+    }))
+}
+
+/// Every requested change as ONE undo entry. `transform` and `audio` are
+/// patches over the clip's current values; `effects` replaces the chain.
+fn set_clip_properties(
     state: &AppState,
-    clip_id: ue_core::model::Id,
-    mode: &str,
-    params: &ue_ai::silence::SilenceParams,
-) -> Result<(usize, i64), String> {
+    app: Option<&tauri::AppHandle>,
+    args: &Args,
+) -> Result<Value, String> {
+    let clip_id = args.id("clip_id")?;
+    let mut actions: Vec<ue_core::Action> = vec![];
+    let mut changed: Vec<&str> = vec![];
+    let mut wants_denoise = false;
+
+    {
+        let store = state.store.lock().unwrap();
+        let clip = store.project.clip(clip_id).ok_or("clip not found")?;
+
+        if let Some(p) = args.get("transform") {
+            let transform = patch_transform(&clip.transform, p)?;
+            actions.push(ue_core::Action::SetClipTransform { clip_id, transform });
+            changed.push("transform");
+        }
+        if let Some(p) = args.get("audio") {
+            let audio = patch_audio(&clip.audio, p)?;
+            wants_denoise = audio.denoise && !clip.audio.denoise;
+            actions.push(ue_core::Action::SetClipAudio { clip_id, audio });
+            changed.push("audio");
+        }
+        if let Some(v) = args.get("effects") {
+            let effects: Vec<ue_core::model::EffectInstance> =
+                serde_json::from_value(v.clone()).map_err(|e| format!("effects: {e}"))?;
+            let known = state.registry.lock().unwrap();
+            if let Some(bad) = effects
+                .iter()
+                .find(|e| !known.iter().any(|d| d.id == e.effect_id))
+            {
+                return Err(format!(
+                    "unknown effect '{}' (see get_catalog → effects)",
+                    bad.effect_id
+                ));
+            }
+            actions.push(ue_core::Action::SetClipEffects { clip_id, effects });
+            changed.push("effects");
+        }
+        if let Some(v) = args.get("transition_in") {
+            let transition = if v.is_null() {
+                None
+            } else {
+                let duration = v
+                    .get("duration_us")
+                    .and_then(|d| d.as_i64())
+                    .ok_or("transition_in.duration_us is required")?;
+                if duration <= 0 {
+                    return Err("transition_in.duration_us must be > 0 (send null to remove)".into());
+                }
+                Some(TransitionRef {
+                    effect_id: v
+                        .get("effect_id")
+                        .and_then(|e| e.as_str())
+                        .unwrap_or("core.crossfade")
+                        .to_string(),
+                    duration,
+                    params: Default::default(),
+                })
+            };
+            actions.push(ue_core::Action::SetClipTransition { clip_id, transition });
+            changed.push("transition_in");
+        }
+        if let Some(speed) = args.f64("speed") {
+            if speed <= 0.0 {
+                return Err("speed must be > 0".into());
+            }
+            // ops computes the new duration and validates the room available
+            actions.extend(
+                ue_core::ops::set_clip_speed(&store.project, clip_id, speed)
+                    .map_err(|e| e.to_string())?,
+            );
+            changed.push("speed");
+        }
+    }
+
+    if actions.is_empty() {
+        return Err("nothing to change: pass transform, audio, effects, transition_in or speed".into());
+    }
+    state
+        .store
+        .lock()
+        .unwrap()
+        .dispatch("Set clip properties", actions)
+        .map_err(|e| e.to_string())?;
+
+    // background job, deliberately outside the transaction above
+    if wants_denoise {
+        match app {
+            Some(app) => crate::spawn_denoise_job(app, state, clip_id),
+            None => return Ok(json!({ "changed": changed, "denoise": "export only (no app)" })),
+        }
+    }
+    Ok(json!({ "changed": changed }))
+}
+
+/// Payload-specific edits (text, subtitles, generator) as ONE undo entry.
+fn set_clip_content(state: &AppState, args: &Args) -> Result<Value, String> {
+    use ue_core::model::ClipPayload;
+    let clip_id = args.id("clip_id")?;
+    let store = state.store.lock().unwrap();
+    let clip = store.project.clip(clip_id).ok_or("clip not found")?;
+
+    let action = match &clip.payload {
+        ClipPayload::Text { content, style } => {
+            let content =
+                args.get("text").and_then(|v| v.as_str()).unwrap_or(content).to_string();
+            let style = match args.get("style") {
+                Some(p) => patch_style(style, p)?,
+                None => style.clone(),
+            };
+            ue_core::Action::SetClipText { clip_id, content, style }
+        }
+        ClipPayload::Subtitles { style, mode, .. } => {
+            let style = match args.get("style") {
+                Some(p) => patch_style(style, p)?,
+                None => style.clone(),
+            };
+            let mode = match args.get("subtitles_mode").and_then(|v| v.as_str()) {
+                None => *mode,
+                Some("phrase") => SubtitleMode::Phrase,
+                Some("word") => SubtitleMode::Word,
+                Some("karaoke") => SubtitleMode::Karaoke,
+                Some(o) => return Err(format!("unknown subtitles_mode '{o}' (phrase|word|karaoke)")),
+            };
+            ue_core::Action::SetClipSubtitles { clip_id, style, mode }
+        }
+        ClipPayload::Generator { generator_id, params, color_params } => {
+            let generator_id = args
+                .get("generator_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or(generator_id)
+                .to_string();
+            if ue_render::find_generator(&ue_render::core_generators(), &generator_id).is_none() {
+                return Err(format!("unknown generator '{generator_id}' (see get_catalog)"));
+            }
+            let params = match args.get("generator_params") {
+                Some(v) => serde_json::from_value(v.clone())
+                    .map_err(|e| format!("generator_params: {e}"))?,
+                None => params.clone(),
+            };
+            let color_params = match args.get("generator_colors") {
+                Some(v) => serde_json::from_value(v.clone())
+                    .map_err(|e| format!("generator_colors: {e}"))?,
+                None => color_params.clone(),
+            };
+            ue_core::Action::SetClipGenerator { clip_id, generator_id, params, color_params }
+        }
+        ClipPayload::Media { .. } => {
+            return Err("a media clip has no editable content; use set_clip_properties".into())
+        }
+        ClipPayload::Avatar { .. } => {
+            return Err("an avatar clip has no editable content; regenerate it instead".into())
+        }
+    };
+    drop(store);
+
+    state
+        .store
+        .lock()
+        .unwrap()
+        .dispatch("Set clip content", vec![action])
+        .map_err(|e| e.to_string())?;
+    Ok(json!({ "ok": true }))
+}
+
+fn set_track_prop(state: &AppState, args: &Args) -> Result<Value, String> {
+    use ue_core::action::TrackProp;
+    let track_id = args.id("track_id")?;
+    let mut props: Vec<TrackProp> = vec![];
+    if let Some(v) = args.get("name").and_then(|v| v.as_str()) {
+        props.push(TrackProp::Name(v.to_string()));
+    }
+    if let Some(v) = args.get("muted").and_then(|v| v.as_bool()) {
+        props.push(TrackProp::Muted(v));
+    }
+    if let Some(v) = args.get("solo").and_then(|v| v.as_bool()) {
+        props.push(TrackProp::Solo(v));
+    }
+    if let Some(v) = args.get("locked").and_then(|v| v.as_bool()) {
+        props.push(TrackProp::Locked(v));
+    }
+    if let Some(v) = args.f64("volume_db") {
+        props.push(TrackProp::VolumeDb(v as f32));
+    }
+    match props.len() {
+        0 => Err("pass exactly one of: name, muted, solo, locked, volume_db".into()),
+        1 => {
+            crate::set_track_prop_impl(state, track_id, props.remove(0))?;
+            Ok(json!({ "ok": true }))
+        }
+        _ => Err("pass exactly ONE property per call (they are separate undo entries)".into()),
+    }
+}
+
+fn remove_sequence(state: &AppState, args: &Args) -> Result<Value, String> {
+    let sequence_id = args.id("sequence_id")?;
+    let mut store = state.store.lock().unwrap();
+    if store.project.sequences.len() <= 1 {
+        return Err("cannot delete the last sequence".into());
+    }
+    if store.project.sequence(sequence_id).is_none() {
+        return Err("sequence not found".into());
+    }
+    let mut actions = vec![];
+    // the active sequence cannot be removed: hand the crown over first
+    if store.project.active_sequence == sequence_id {
+        let fallback = store
+            .project
+            .sequences
+            .iter()
+            .find(|s| s.id != sequence_id)
+            .map(|s| s.id)
+            .ok_or("no remaining sequence")?;
+        actions.push(ue_core::Action::SetActiveSequence { sequence_id: fallback });
+    }
+    actions.push(ue_core::Action::RemoveSequence { sequence_id });
+    store.dispatch("Delete sequence", actions).map_err(|e| e.to_string())?;
+    Ok(json!({ "ok": true }))
+}
+
+fn remove_silences(state: &AppState, args: &Args) -> Result<Value, String> {
+    let clip_id = args.id("clip_id")?;
+    let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("delete");
+    if !matches!(mode, "delete" | "speedup" | "split") {
+        return Err(format!("unknown mode '{mode}' (delete|speedup|split)"));
+    }
+    let mut params = ue_ai::silence::SilenceParams::default();
+    if let Some(db) = args.f64("threshold_db") {
+        params.threshold_db = db.clamp(-80.0, -10.0);
+    }
+    if let Some(ms) = args.get("min_silence_ms").and_then(|v| v.as_i64()) {
+        params.min_silence_us = ms.clamp(50, 5000) * 1000;
+    }
+    if let Some(ms) = args.get("pad_ms").and_then(|v| v.as_i64()) {
+        params.pad_pre_us = ms.clamp(0, 1000) * 1000;
+        params.pad_post_us = ms.clamp(0, 1000) * 1000;
+    }
+
     let mut store = state.store.lock().unwrap();
     let clip = store.project.clip(clip_id).ok_or("clip not found")?.clone();
     let ue_core::model::ClipPayload::Media { asset_id, src_in, src_out } = clip.payload else {
         return Err("the clip is not media".into());
     };
     let asset = store.project.asset(asset_id).ok_or("asset not found")?;
-    let conform = asset.audio_conform.clone().ok_or("audio not conformed yet")?;
-    let wav = ue_audio::wav::WavMap::open(std::path::Path::new(&conform))
-        .map_err(|e| e.to_string())?;
+    let conform = asset
+        .audio_conform
+        .clone()
+        .ok_or("the audio is still being prepared (conform); try again in a few seconds")?;
+    let wav =
+        ue_audio::wav::WavMap::open(std::path::Path::new(&conform)).map_err(|e| e.to_string())?;
     let ranges =
-        ue_ai::silence::clip_silences_on_timeline(&wav, clip.start, src_in, src_out, params);
+        ue_ai::silence::clip_silences_on_timeline(&wav, clip.start, src_in, src_out, &params);
     if ranges.is_empty() {
-        return Ok((0, 0));
+        return Ok(json!({ "removed": 0, "removed_us": 0 }));
     }
     let removed_us: i64 = ranges.iter().map(|(s, e)| e - s).sum();
     let seq_id = store.project.active_sequence;
@@ -597,11 +1531,126 @@ fn remove_silences_inner(
         "split" => store.split_ranges(seq_id, &ranges).map_err(|e| e.to_string())?,
         _ => store.cut_ranges(seq_id, &ranges, true).map_err(|e| e.to_string())?,
     }
-    Ok((ranges.len(), removed_us))
+    Ok(json!({ "removed": ranges.len(), "removed_us": removed_us, "mode": mode }))
 }
 
-/// Same as the UI's add_clip command (a small, deliberate duplication).
-fn add_clip_inner(state: &AppState, asset_id: ue_core::model::Id, at_us: i64) -> Result<String, String> {
+fn replace_words(state: &AppState, args: &Args) -> Result<Value, String> {
+    let transcript_id = args.id("transcript_id")?;
+    let from = args.str("from")?;
+    let to = args.str("to")?;
+    let needle = from.trim().to_lowercase();
+    if needle.is_empty() {
+        return Err("`from` is empty".into());
+    }
+    let mut store = state.store.lock().unwrap();
+    let doc = store
+        .project
+        .transcripts
+        .iter()
+        .find(|t| t.id == transcript_id)
+        .ok_or("transcript not found")?;
+    let display = (!to.trim().is_empty()).then(|| to.trim().to_string());
+    let actions: Vec<ue_core::Action> = doc
+        .words
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| w.label().trim().to_lowercase() == needle)
+        .map(|(index, _)| ue_core::Action::SetWordText {
+            transcript_id,
+            index,
+            display: display.clone(),
+        })
+        .collect();
+    let n = actions.len();
+    if n > 0 {
+        store.dispatch("Replace words", actions).map_err(|e| e.to_string())?;
+    }
+    Ok(json!({ "replaced": n }))
+}
+
+fn export_video(state: &AppState, args: &Args) -> Result<Value, String> {
+    let path = args.str("path")?;
+    let format = match args.get("format").and_then(|v| v.as_str()) {
+        None | Some("mp4") => ue_export::ExportFormat::Mp4,
+        Some("m4a") => ue_export::ExportFormat::M4a,
+        Some("gif") => ue_export::ExportFormat::Gif,
+        Some(o) => return Err(format!("unknown format: {o} (mp4|m4a|gif)")),
+    };
+    let defaults = ue_export::ExportSettings::default();
+    let settings = ue_export::ExportSettings {
+        format,
+        max_height: args.get("max_height").and_then(|v| v.as_u64()).map(|v| v as u32),
+        crf: args
+            .get("crf")
+            .and_then(|v| v.as_u64())
+            .map(|v| (v as u8).clamp(10, 40))
+            .unwrap_or(defaults.crf),
+        loudnorm: args.bool_or("loudnorm", false),
+        ranges: args.ranges("ranges"),
+        extra_packs: state.user_packs.lock().unwrap().clone(),
+        ..defaults
+    };
+    let (project, seq_id, base_dir) = {
+        let store = state.store.lock().unwrap();
+        let base = state
+            .path
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        (store.project.clone(), store.project.active_sequence, base)
+    };
+    let cancel = state.export_cancel.clone();
+    cancel.store(false, Ordering::SeqCst);
+    let pieces = settings.ranges.len();
+    ue_export::export_sequence_with_progress(
+        &project,
+        seq_id,
+        &base_dir,
+        std::path::Path::new(path),
+        &settings,
+        |_| {},
+        &cancel,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(json!({ "path": path, "pieces": pieces }))
+}
+
+fn playback(
+    state: &AppState,
+    app: Option<&tauri::AppHandle>,
+    args: &Args,
+) -> Result<Value, String> {
+    match args.str("action")? {
+        "play" => {
+            let from = args.i64_or("from_us", 0);
+            crate::playback_play_impl(state, app, from)?;
+            Ok(json!({ "playing": true, "from_us": from }))
+        }
+        "pause" => {
+            crate::stop_frame_service(state);
+            let guard = state.player.lock().unwrap();
+            let p = guard.as_ref().ok_or("no player")?;
+            Ok(json!({ "paused_at_us": p.pause() }))
+        }
+        "position" => {
+            let guard = state.player.lock().unwrap();
+            let p = guard.as_ref().ok_or("no player")?;
+            Ok(json!({ "t_us": p.position_us(), "playing": p.is_playing() }))
+        }
+        other => Err(format!("unknown action: {other} (play|pause|position)")),
+    }
+}
+
+/// Same placement rules as the UI's add_clip: a compatible unlocked track, and
+/// no overlap (a busy `at_us` pushes the clip to the end of the track).
+fn add_clip_inner(
+    state: &AppState,
+    asset_id: Id,
+    at_us: i64,
+    track_id: Option<Id>,
+) -> Result<Id, String> {
     use ue_core::model::{Clip, MediaKind, TrackKind};
     let mut store = state.store.lock().unwrap();
     let asset = store
@@ -616,11 +1665,21 @@ fn add_clip_inner(state: &AppState, asset_id: ue_core::model::Id, at_us: i64) ->
     let want = if asset.kind == MediaKind::Audio { TrackKind::Audio } else { TrackKind::Video };
     let seq_id = store.project.active_sequence;
     let seq = store.project.sequence(seq_id).ok_or("no active sequence")?;
-    let track = seq
-        .tracks
-        .iter()
-        .find(|t| t.kind == want && !t.locked)
-        .ok_or("no compatible track")?;
+    let track = match track_id {
+        Some(id) => seq
+            .tracks
+            .iter()
+            .find(|t| t.id == id)
+            .ok_or("track not found in the active sequence")?,
+        None => seq
+            .tracks
+            .iter()
+            .find(|t| t.kind == want && !t.locked)
+            .ok_or("no compatible unlocked track; call add_track first")?,
+    };
+    if track.locked {
+        return Err("the track is locked".into());
+    }
     let track_id = track.id;
     let at = at_us.max(0);
     let start = if track.collides(at, duration, None) {
@@ -631,7 +1690,7 @@ fn add_clip_inner(state: &AppState, asset_id: ue_core::model::Id, at_us: i64) ->
     let clip = Clip::new_media(asset.id, 0, duration, start);
     let clip_id = clip.id;
     store.insert_clip(track_id, clip, InsertMode::Strict).map_err(|e| e.to_string())?;
-    Ok(clip_id.to_string())
+    Ok(clip_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -662,7 +1721,7 @@ pub fn handle_rpc(state: &AppState, app: Option<&tauri::AppHandle>, req: &Value)
                     "title": "UberEditor",
                     "version": env!("CARGO_PKG_VERSION"),
                 },
-                "instructions": "UberEditor video editor. Read the state with get_project_summary/get_timeline; edit with split_clip/delete_clips/add_clip. Every edit is undoable (undo)."
+                "instructions": INSTRUCTIONS,
             })
         }
         "ping" => json!({}),
@@ -672,7 +1731,14 @@ pub fn handle_rpc(state: &AppState, app: Option<&tauri::AppHandle>, req: &Value)
             let empty = json!({});
             let args = req.pointer("/params/arguments").unwrap_or(&empty);
             ue_core::dlog("mcp", &format!("tool {name} {args}"));
-            call_tool(state, app, name, args)
+            let out = call_tool(state, app, name, args);
+            if out.get("isError").and_then(|v| v.as_bool()).unwrap_or(false) {
+                ue_core::dlog(
+                    "mcp",
+                    &format!("tool {name} FAILED: {}", out.pointer("/content/0/text").unwrap_or(&Value::Null)),
+                );
+            }
+            out
         }
         _ => {
             return Some(json!({
@@ -683,6 +1749,16 @@ pub fn handle_rpc(state: &AppState, app: Option<&tauri::AppHandle>, req: &Value)
         }
     };
     Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
+}
+
+/// Constant-ish check of the `Authorization` header against the session token.
+/// Split out of `start` so it can be tested without an HTTP server: an empty
+/// or absent header must never authorize, whatever the token is.
+pub fn is_authorized(authorization: Option<&str>, token: &str) -> bool {
+    if token.is_empty() {
+        return false;
+    }
+    authorization.map(str::trim) == Some(format!("Bearer {token}").as_str())
 }
 
 /// Starts the server on a thread. Returns the port if it could listen.
@@ -699,11 +1775,12 @@ pub fn start(app: tauri::AppHandle) -> Option<u16> {
                 }
                 // authentication: Authorization: Bearer <token>
                 let expected = state.mcp_token.lock().unwrap().clone();
-                let authorized = request.headers().iter().any(|h| {
-                    h.field.as_str().as_str().eq_ignore_ascii_case("authorization")
-                        && h.value.as_str().trim() == format!("Bearer {expected}")
-                });
-                if !authorized {
+                let header = request
+                    .headers()
+                    .iter()
+                    .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case("authorization"))
+                    .map(|h| h.value.as_str());
+                if !is_authorized(header, &expected) {
                     let _ = request.respond(
                         tiny_http::Response::from_string(
                             r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"invalid token: use Authorization: Bearer <token> (shown in the app's MCP pill)"}}"#,

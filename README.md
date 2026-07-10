@@ -200,7 +200,11 @@ claude mcp add --transport http ubereditor http://127.0.0.1:4599/mcp \
   --header "Authorization: Bearer <token>"
 ```
 
-14 tools: `get_project_summary`, `get_timeline`, `get_media_pool`, `get_effects_catalog`, `get_transcript`, `add_clip`, `split_clip`, `delete_clips`, `set_clip_transition`, `remove_silences` (with mode and parameters), `move_range`, `generate_vertical`, `undo`, `redo`. Everything an agent does is undoable from the UI.
+**41 tools — everything the UI can do, an agent can do**: import and transcribe media, cut, trim, move and split clips, animate transforms with keyframes, apply effects and transitions, add titles, shapes and subtitles, manage tracks and sequences, remove silences, fix transcription errors, generate the reactive avatar, render (including multi-piece exports), and save the project. Every edit an agent makes is **one** undo entry in the UI, and a call that would break the project fails without changing anything.
+
+There are also three debugging tools (`debug_render_frame`, `debug_playback_frame`, `playback`) that let an agent *see* what the editor is showing, so it can reproduce a visual bug instead of guessing.
+
+📖 **[Full reference: `docs/MCP.md`](docs/MCP.md)** — the five rules (µs everywhere, one call = one undo…), a typical session, every tool, and how to add one.
 
 ---
 
