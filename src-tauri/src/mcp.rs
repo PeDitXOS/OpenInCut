@@ -825,14 +825,6 @@ fn tool_defs() -> Value {
             &["t_us"], Kind::Read,
         ),
         tool(
-            "debug_playback_frame",
-            "Returns the frame currently in the PLAYBACK stream buffer AS AN \
-             IMAGE (errors if the buffer is empty: playback stopped or nothing \
-             decoded yet). Playback and the paused preview are different code \
-             paths — check both when a visual bug only shows in one.",
-            json!({}), &[], Kind::Read,
-        ),
-        tool(
             "playback",
             "Drives the real player, so you can reproduce what the user sees: \
              `play` (from from_us), `pause`, `seek` (move the playhead to from_us \
@@ -1504,20 +1496,6 @@ fn call_tool(state: &AppState, app: Option<&tauri::AppHandle>, name: &str, raw: 
                 ),
                 Ok(bytes) => image_result(&bytes, "ue_debug_frame.jpg", &format!("paused preview @ {:.3}s (includes titles + subtitles, exactly like the export)", t_us as f64 / 1e6)),
                 Err(e) => tool_error(&e),
-            }
-        }
-        "debug_playback_frame" => {
-            let bytes = state
-                .frames
-                .lock()
-                .unwrap()
-                .as_ref()
-                .map(|f| f.latest.lock().unwrap().clone())
-                .unwrap_or_default();
-            if bytes.is_empty() {
-                tool_error("the playback stream buffer is empty: playback is stopped, or nothing has decoded yet (call playback {\"action\":\"play\"})")
-            } else {
-                image_result(&bytes, "ue_debug_stream.jpg", "current playback-stream frame")
             }
         }
         "playback" => finish(playback(state, app, &args)),
@@ -2266,7 +2244,6 @@ fn playback(
             Ok(json!({ "playing": true, "from_us": from }))
         }
         "pause" => {
-            crate::stop_frame_service(state);
             let guard = state.player.lock().unwrap();
             let p = guard.as_ref().ok_or(NO_PLAYER)?;
             Ok(json!({ "paused_at_us": p.pause() }))
@@ -2355,7 +2332,6 @@ fn is_mutation(name: &str) -> bool {
             | "get_job_status"
             | "list_jobs"
             | "debug_render_frame"
-            | "debug_playback_frame"
     )
 }
 

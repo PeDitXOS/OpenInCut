@@ -66,13 +66,8 @@ fn position(style: &TextStyle, out_w: u32, out_h: u32, scale: f64) -> (u32, i64,
     }
 }
 
-struct StyleEntry {
-    name: String,
-    line: String,
-}
-
 /// Declares one ASS style per TextStyle we meet (deduplicated).
-fn style_entry(name: &str, style: &TextStyle, scale: f64) -> StyleEntry {
+fn style_entry(name: &str, style: &TextStyle, scale: f64) -> String {
     let px = ((style.size as f64) * scale).round().max(8.0) as i64;
     // libass resolves the family through fontconfig, which is exactly what
     // gives us the per-glyph fallback drawtext never had
@@ -82,21 +77,23 @@ fn style_entry(name: &str, style: &TextStyle, scale: f64) -> StyleEntry {
         style.font.clone()
     };
     // karaoke: Primary is the colour a syllable turns INTO, Secondary the one
-    // it waits in. For plain text only Primary is ever used.
-    let primary = ass_color(style.highlight_color.as_deref().unwrap_or(&style.color), 1.0);
+    // it waits in. For plain text only Primary is ever used. An unset highlight
+    // falls back to the app accent — the SAME default the drawtext preview and
+    // the play compositor use (falling back to the text colour made the export's
+    // karaoke white-on-white, i.e. invisible, while the preview showed amber).
+    let primary = ass_color(style.highlight_color.as_deref().unwrap_or("#FFB224"), 1.0);
     let secondary = ass_color(&style.color, 0.4);
     let outline = (2.0 * scale).round().max(1.0) as i64;
-    let line = format!(
+    format!(
         "Style: {name},{font},{px},{primary},{secondary},&H00000000,&H00000000,\
          0,0,0,0,100,100,0,0,1,{outline},0,5,10,10,10,1"
-    );
-    StyleEntry { name: name.to_string(), line }
+    )
 }
 
 /// A style whose Primary colour is the plain text colour (no karaoke).
-fn plain_style_entry(name: &str, style: &TextStyle, scale: f64) -> StyleEntry {
+fn plain_style_entry(name: &str, style: &TextStyle, scale: f64) -> String {
     let mut s = style.clone();
-    s.highlight_color = None;
+    s.highlight_color = Some(s.color.clone());
     style_entry(name, &s, scale)
 }
 
@@ -134,7 +131,7 @@ pub fn build_script(
     let scale = out_h as f64 / 1080.0;
     let max_w = out_w as f64 * CAPTION_WIDTH_FRACTION;
 
-    let mut styles: Vec<StyleEntry> = vec![];
+    let mut styles: Vec<String> = vec![];
     let mut events: Vec<String> = vec![];
 
     for track in seq.tracks.iter().filter(|t| t.kind == TrackKind::Video && !t.muted) {
@@ -144,119 +141,117 @@ pub fn build_script(
                 None if crate::graph::text_is_styled_pub(clip) => continue, // its own layer
                 _ => {}
             }
-            match &clip.payload {
-                // TITLES are not here any more: they are rasterised by ue-text
-                // (which reads colour fonts) and composited as image layers, so
-                // an emoji in a title is an emoji and not a .notdef box. libass
-                // still owns SUBTITLES, where its native karaoke pays for itself
-                // and Whisper never emits an emoji anyway.
-                ClipPayload::Subtitles { transcript_id, style, mode, max_words } => {
-                    let Some(doc) = project.transcripts.iter().find(|t| t.id == *transcript_id)
-                    else {
-                        continue;
-                    };
-                    let px = (style.size as f64) * scale;
-                    let font = resolve_font_family(&style.font);
-                    let karaoke = *mode == SubtitleMode::Karaoke;
-                    let name = format!("s{}", styles.len());
-                    styles.push(if karaoke {
-                        style_entry(&name, style, scale)
-                    } else {
-                        plain_style_entry(&name, style, scale)
-                    });
+            // TITLES are not here any more: they are rasterised by ue-text
+            // (which reads colour fonts) and composited as image layers, so
+            // an emoji in a title is an emoji and not a .notdef box. libass
+            // still owns SUBTITLES, where its native karaoke pays for itself
+            // and Whisper never emits an emoji anyway.
+            let ClipPayload::Subtitles { transcript_id, style, mode, max_words } = &clip.payload
+            else {
+                continue;
+            };
+            let Some(doc) = project.transcripts.iter().find(|t| t.id == *transcript_id)
+            else {
+                continue;
+            };
+            let px = (style.size as f64) * scale;
+            let font = resolve_font_family(&style.font);
+            let karaoke = *mode == SubtitleMode::Karaoke;
+            let name = format!("s{}", styles.len());
+            styles.push(if karaoke {
+                style_entry(&name, style, scale)
+            } else {
+                plain_style_entry(&name, style, scale)
+            });
 
-                    // WORD mode keeps its own bigger style
-                    let mut wstyle = style.clone();
-                    if *mode == SubtitleMode::Word {
-                        wstyle.size *= 1.6;
-                    }
-                    let wpx = (wstyle.size as f64) * scale;
-                    let wname = if *mode == SubtitleMode::Word {
-                        let n = format!("w{}", styles.len());
-                        styles.push(plain_style_entry(&n, &wstyle, scale));
-                        n
-                    } else {
-                        name.clone()
-                    };
-                    let (an, x, y) = position(&wstyle, out_w, out_h, scale);
+            // WORD mode keeps its own bigger style
+            let mut wstyle = style.clone();
+            if *mode == SubtitleMode::Word {
+                wstyle.size *= 1.6;
+            }
+            let wname = if *mode == SubtitleMode::Word {
+                let n = format!("w{}", styles.len());
+                styles.push(plain_style_entry(&n, &wstyle, scale));
+                n
+            } else {
+                name.clone()
+            };
+            let (an, x, y) = position(&wstyle, out_w, out_h, scale);
 
-                    match mode {
-                        SubtitleMode::Word => {
-                            for w in doc.words.iter().filter(|w| !w.rejected) {
-                                let Some(tl) =
-                                    crate::graph::asset_time_to_timeline_pub(seq, doc.asset_id, w.start_us)
-                                else {
-                                    continue;
-                                };
-                                let from = tl.max(clip.start);
-                                let to = (tl + (w.end_us - w.start_us)).min(clip.end());
-                                if to <= from {
-                                    continue;
-                                }
-                                events.push(dialogue(
-                                    from, to, &wname, an, x, y,
-                                    &ass_escape(w.label()),
-                                ));
-                            }
+            match mode {
+                SubtitleMode::Word => {
+                    for w in doc.words.iter().filter(|w| !w.rejected) {
+                        let Some(tl) =
+                            crate::graph::asset_time_to_timeline_pub(seq, doc.asset_id, w.start_us)
+                        else {
+                            continue;
+                        };
+                        let from = tl.max(clip.start);
+                        let to = (tl + (w.end_us - w.start_us)).min(clip.end());
+                        if to <= from {
+                            continue;
                         }
-                        SubtitleMode::Phrase | SubtitleMode::Karaoke => {
-                            let phrases =
-                                caption_phrases_pub(doc, caption_max_chars(out_w, px), *max_words);
-                            for (text, ps, pe) in &phrases {
-                                let Some(tl) =
-                                    crate::graph::asset_time_to_timeline_pub(seq, doc.asset_id, *ps)
-                                else {
-                                    continue;
-                                };
-                                let from = tl.max(clip.start);
-                                let to = (tl + (pe - ps)).min(clip.end());
-                                if to <= from {
-                                    continue;
-                                }
-                                let body = if karaoke {
-                                    // \k<centiseconds> per word: libass fades each
-                                    // one from Secondary to Primary as it is spoken
-                                    let words: Vec<&ue_core::model::Word> = doc
-                                        .words
-                                        .iter()
-                                        .filter(|w| !w.rejected && w.start_us >= *ps && w.start_us < *pe)
-                                        .collect();
-                                    if words.is_empty() {
-                                        continue;
-                                    }
-                                    let labels: Vec<&str> = words.iter().map(|w| w.label()).collect();
-                                    let lines = wrap_words(font.as_deref(), &labels, px, max_w);
-                                    let mut out = String::new();
-                                    let mut i = 0usize;
-                                    for (li, line) in lines.iter().enumerate() {
-                                        if li > 0 {
-                                            out.push_str("\\N");
-                                        }
-                                        for w in line {
-                                            let word = words[i];
-                                            // how long this word holds the highlight
-                                            let dur_cs = ((word.end_us - word.start_us).max(1)
-                                                / 10_000)
-                                                .max(1);
-                                            let _ = write!(
-                                                out,
-                                                "{{\\k{dur_cs}}}{} ",
-                                                ass_escape(w)
-                                            );
-                                            i += 1;
-                                        }
-                                    }
-                                    out.trim_end().to_string()
-                                } else {
-                                    let words: Vec<&str> = text.split_whitespace().collect();
-                                    wrapped_text(font.as_deref(), &words, px, max_w)
-                                };
-                                events.push(dialogue(from, to, &name, an, x, y, &body));
-                            }
-                        }
+                        events.push(dialogue(
+                            from, to, &wname, an, x, y,
+                            &ass_escape(w.label()),
+                        ));
                     }
                 }
-                _ => {}
+                SubtitleMode::Phrase | SubtitleMode::Karaoke => {
+                    let phrases =
+                        caption_phrases_pub(doc, caption_max_chars(out_w, px), *max_words);
+                    for (text, ps, pe) in &phrases {
+                        let Some(tl) =
+                            crate::graph::asset_time_to_timeline_pub(seq, doc.asset_id, *ps)
+                        else {
+                            continue;
+                        };
+                        let from = tl.max(clip.start);
+                        let to = (tl + (pe - ps)).min(clip.end());
+                        if to <= from {
+                            continue;
+                        }
+                        let body = if karaoke {
+                            // \k<centiseconds> per word: libass fades each
+                            // one from Secondary to Primary as it is spoken
+                            let words: Vec<&ue_core::model::Word> = doc
+                                .words
+                                .iter()
+                                .filter(|w| !w.rejected && w.start_us >= *ps && w.start_us < *pe)
+                                .collect();
+                            if words.is_empty() {
+                                continue;
+                            }
+                            let labels: Vec<&str> = words.iter().map(|w| w.label()).collect();
+                            let lines = wrap_words(font.as_deref(), &labels, px, max_w);
+                            let mut out = String::new();
+                            let mut i = 0usize;
+                            for (li, line) in lines.iter().enumerate() {
+                                if li > 0 {
+                                    out.push_str("\\N");
+                                }
+                                for w in line {
+                                    let word = words[i];
+                                    // how long this word holds the highlight
+                                    let dur_cs = ((word.end_us - word.start_us).max(1)
+                                        / 10_000)
+                                        .max(1);
+                                    let _ = write!(
+                                        out,
+                                        "{{\\k{dur_cs}}}{} ",
+                                        ass_escape(w)
+                                    );
+                                    i += 1;
+                                }
+                            }
+                            out.trim_end().to_string()
+                        } else {
+                            let words: Vec<&str> = text.split_whitespace().collect();
+                            wrapped_text(font.as_deref(), &words, px, max_w)
+                        };
+                        events.push(dialogue(from, to, &name, an, x, y, &body));
+                    }
+                }
             }
         }
     }
@@ -281,7 +276,7 @@ pub fn build_script(
          BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
     );
     for st in &styles {
-        let _ = writeln!(s, "{}", st.line);
+        let _ = writeln!(s, "{st}");
     }
     let _ = write!(
         s,

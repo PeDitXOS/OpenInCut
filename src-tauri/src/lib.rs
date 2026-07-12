@@ -22,7 +22,6 @@ pub struct AppState {
     pub path: Mutex<Option<PathBuf>>,
     pub cache_dir: Mutex<Option<PathBuf>>,
     pub player: Mutex<Option<Player>>,
-    pub frames: Mutex<Option<FrameService>>,
     pub export_cancel: Arc<AtomicBool>,
     /// Effective registry (core + user packs) and raw user packs.
     pub registry: Mutex<Arc<Vec<ue_render::EffectDef>>>,
@@ -180,7 +179,6 @@ impl AppState {
             path: Mutex::new(None),
             cache_dir: Mutex::new(None),
             player: Mutex::new(None),
-            frames: Mutex::new(None),
             export_cancel: Arc::new(AtomicBool::new(false)),
             registry: Mutex::new(Arc::new(ue_render::core_registry())),
             user_packs: Mutex::new(vec![]),
@@ -210,124 +208,6 @@ pub(crate) fn reload_packs(state: &AppState) -> Vec<String> {
     *state.user_packs.lock().unwrap() = user;
     *state.registry.lock().unwrap() = Arc::new(merged);
     errors
-}
-
-/// Playback frame service: a thread follows the audio clock with a persistent
-/// MJPEG session and publishes the latest decoded frame.
-pub struct FrameService {
-    pub latest: Arc<Mutex<Vec<u8>>>,
-    pub running: Arc<AtomicBool>,
-}
-
-const PLAYBACK_MAX_W: u32 = 960;
-
-/// Stable identity of a playback stream: same clip content + composition ⇒
-/// same key across ticks (unlike the vf string, whose graph labels are
-/// unique per build). Pure and unit-tested.
-pub fn playback_session_key(
-    r: &ue_media::frame::ResolvedFrame,
-    canvas: Option<(u32, u32)>,
-) -> String {
-    format!(
-        "{}|{}|{:?}|{}",
-        r.asset_path,
-        r.speed,
-        canvas,
-        serde_json::to_string(&(&r.effects, &r.transform)).unwrap_or_default(),
-    )
-}
-
-/// Production session-reuse rule (also exercised by the playback tests):
-/// same file, same composition key, and the requested source time reachable
-/// by the running stream (up to 400 ms behind for shuttle-reverse, up to
-/// 1.5 s ahead to let the decoder catch up).
-pub fn should_reuse_session(
-    session: Option<(&Path, i64)>,
-    key_matches: bool,
-    path: &Path,
-    src_t: i64,
-) -> bool {
-    session.is_some_and(|(spath, next_src)| {
-        spath == path
-            && key_matches
-            && src_t >= next_src - 400_000
-            && src_t <= next_src + 1_500_000
-    })
-}
-
-#[allow(dead_code)] // superseded by the webview compositor; kept for reference
-fn frame_service_loop(app: tauri::AppHandle, latest: Arc<Mutex<Vec<u8>>>, running: Arc<AtomicBool>) {
-    // ONE rendering path: playback composites each frame with the SAME
-    // compositor the paused preview uses (render_preview_frame), which is
-    // verified pixel-for-pixel against the export. So paused, playing and the
-    // export all show exactly the same thing — every video layer, images,
-    // generators, titles and subtitles — instead of the old single-top-clip
-    // stream that diverged from all of them. It spawns one ffmpeg per frame, so
-    // playback of a heavy composite is not 60 fps, but it is CORRECT.
-    while running.load(Ordering::SeqCst) {
-        let state = app.state::<AppState>();
-        let (t, playing) = {
-            let guard = state.player.lock().unwrap();
-            match guard.as_ref() {
-                Some(p) => (p.position_us(), p.is_playing()),
-                None => (0, false),
-            }
-        };
-        if !playing {
-            break;
-        }
-        // snapshot everything the compositor needs, then release the lock
-        // before ffmpeg runs (never hold the store across a subprocess)
-        let (project, seq_id, base_dir, packs) = {
-            let store = state.store.lock().unwrap();
-            let base = state
-                .path
-                .lock()
-                .unwrap()
-                .as_ref()
-                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-            (
-                store.project.clone(),
-                store.project.active_sequence,
-                base,
-                state.user_packs.lock().unwrap().clone(),
-            )
-        };
-        match ue_export::preview::render_preview_frame(
-            &project, seq_id, &base_dir, t, PLAYBACK_MAX_W, &packs,
-        ) {
-            Ok(Some(jpeg)) => *latest.lock().unwrap() = jpeg,
-            Ok(None) => latest.lock().unwrap().clear(), // nothing on screen (matches export: black)
-            Err(e) => dlog("frame", &format!("playback compositor @ {:.3}s: {e}", t as f64 / 1e6)),
-        }
-        // the compositor itself paces the loop (each frame is real work); a
-        // small yield keeps it from busy-spinning if a frame is ever cheap
-        std::thread::sleep(Duration::from_millis(8));
-    }
-    running.store(false, Ordering::SeqCst);
-}
-
-#[allow(dead_code)] // kept for the MCP debug frame tool / future reuse
-fn start_frame_service(app: &tauri::AppHandle) {
-    let state = app.state::<AppState>();
-    let mut guard = state.frames.lock().unwrap();
-    if let Some(fs) = guard.as_ref() {
-        if fs.running.load(Ordering::SeqCst) {
-            return; // already running
-        }
-    }
-    let latest = Arc::new(Mutex::new(Vec::new()));
-    let running = Arc::new(AtomicBool::new(true));
-    *guard = Some(FrameService { latest: latest.clone(), running: running.clone() });
-    let app2 = app.clone();
-    std::thread::spawn(move || frame_service_loop(app2, latest, running));
-}
-
-fn stop_frame_service(state: &AppState) {
-    if let Some(fs) = state.frames.lock().unwrap().as_ref() {
-        fs.running.store(false, Ordering::SeqCst);
-    }
 }
 
 /// Autosave path: next to the .uep if it exists, otherwise in app_data.
@@ -882,7 +762,6 @@ fn spawn_proxy_job(app: &tauri::AppHandle, asset: &ue_core::model::MediaAsset, c
                     }
                     store.version += 1;
                 }
-                // the FrameService detects the path change and reopens the session
                 let _ = app.emit("state-changed", ());
             }
             Err(e) => eprintln!("[proxy] {src:?}: {e}"),
@@ -909,32 +788,19 @@ pub fn playback_play_impl(
         let guard = state.player.lock().unwrap();
         guard.as_ref().ok_or("no player")?.play(from_us);
     }
-    // The video preview is composited in the webview now (native <video>/<img>
-    // on a canvas), so the ffmpeg-per-frame service is no longer started for
-    // playback — it only fed the old MJPEG program monitor. Audio playback and
-    // the master clock are unaffected.
+    // The video preview is composited in the webview (native <video>/<img>
+    // on a canvas); the backend only drives audio, the master clock.
     let _ = app;
     Ok(())
 }
 
 #[tauri::command]
 fn playback_pause(state: State<AppState>) -> Res<TimeUs> {
-    stop_frame_service(&state);
     let guard = state.player.lock().unwrap();
     match guard.as_ref() {
         Some(p) => Ok(p.pause()),
         None => Err("no player".into()),
     }
-}
-
-/// Latest frame of the playback stream (empty = no signal yet).
-#[tauri::command]
-fn playback_frame(state: State<AppState>) -> Res<tauri::ipc::Response> {
-    let bytes = match state.frames.lock().unwrap().as_ref() {
-        Some(fs) => fs.latest.lock().unwrap().clone(),
-        None => vec![],
-    };
-    Ok(tauri::ipc::Response::new(bytes))
 }
 
 /// Real audio peaks of the asset (25 bins/s, mono mix), for the timeline
@@ -1992,6 +1858,7 @@ fn tts_slug(text: &str) -> String {
 /// Synthesizes `text`, imports the audio into the pool and (optionally)
 /// drops a clip at `at_us`. Returns the asset id. Shared by the
 /// generate_speech command and the MCP tool.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn speech_generate_blocking(
     app: Option<&tauri::AppHandle>,
     state: &AppState,
@@ -2162,15 +2029,7 @@ fn transcribe_commit(state: &AppState, asset_id: Id, mut doc: ue_core::model::Tr
 /// Transcribes on the CALLING thread and returns (transcript_id, words).
 /// Used by the MCP server, where an agent wants the result, not an event.
 /// Downloads the ggml model on first use, so the first call can take minutes.
-pub(crate) fn transcribe_blocking(
-    state: &AppState,
-    asset_id: Id,
-    model: Option<String>,
-) -> Res<(Id, usize)> {
-    transcribe_blocking_with(state, asset_id, model, |_| {}, &AtomicBool::new(false))
-}
-
-/// Same, reporting real progress and honouring a cancel flag. A job that sat at
+/// Reports real progress and honours a cancel flag: a job that sat at
 /// 0.0 until it finished made "slow" and "hung" indistinguishable, and the only
 /// way out of a long transcription was killing the whole app.
 pub(crate) fn transcribe_blocking_with(
@@ -3056,7 +2915,6 @@ pub fn run() {
             get_audio_peaks,
             ensure_thumbs,
             get_thumb_strip,
-            playback_frame,
             save_project,
             check_recovery,
             recover_project,

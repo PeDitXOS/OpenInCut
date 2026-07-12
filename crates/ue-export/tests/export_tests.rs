@@ -2075,7 +2075,7 @@ fn karaoke_highlights_the_active_word() {
 
 /// BUG 1: a long dense karaoke that used to crash ffmpeg (thousands of
 /// drawtext) now exports a RANGE fine (overlays bounded to the range), and a
-/// FULL export is refused with a clear message instead of a black-box crash.
+/// FULL export (2000 words) works too: the ASS script lives in a file.
 #[test]
 fn karaoke_bounds_to_range_and_guards_the_rest() {
     let Some(dir) = media_dir() else { return };
@@ -2124,14 +2124,15 @@ fn karaoke_bounds_to_range_and_guards_the_rest() {
     assert!(r.is_ok(), "bounded karaoke range must succeed, got: {r:?}");
     assert!(out.exists());
 
-    // the full export is refused with a clear message (not a SIGBUS crash)
+    // the FULL 2000-word export also succeeds now: the script lives in a FILE
+    // (ass=), so the filtergraph no longer grows with the transcript — the old
+    // drawtext path emitted ~4000 filters and crashed ffmpeg, and a size guard
+    // rejected it; both went away when subtitles moved to libass
     let full = ExportSettings::default();
     let out2 = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-karaoke-full.mp4");
     let r2 = export_sequence(&store.project, seq_id, dir, &out2, &full);
-    match r2 {
-        Err(ue_export::ExportError::Ffmpeg(m)) => assert!(m.contains("too large"), "clear guard message: {m}"),
-        other => panic!("expected the size guard to reject the full export, got {other:?}"),
-    }
+    assert!(r2.is_ok(), "full dense karaoke exports via the ASS file, got: {r2:?}");
+    assert!(out2.exists());
 }
 
 

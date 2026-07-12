@@ -1,4 +1,5 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { MEDIA_EXTENSIONS } from "../lib/media";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
@@ -39,13 +40,9 @@ export class TauriEngine implements EngineClient {
   deleteClips(ids: Id[], ripple: boolean): Promise<StateSnapshot> {
     return invoke("delete_clips", { ids, ripple });
   }
-  moveClip(
-    clipId: Id,
-    toTrack: Id,
-    toStartUs: TimeUs,
-    overwrite: boolean,
-  ): Promise<StateSnapshot> {
-    return invoke("move_clip", { clipId, toTrack, toStartUs: us(toStartUs), overwrite });
+  moveClip(clipId: Id, toTrack: Id, toStartUs: TimeUs): Promise<StateSnapshot> {
+    // overwrite-move exists only as an MCP capability; the UI always collision-checks
+    return invoke("move_clip", { clipId, toTrack, toStartUs: us(toStartUs), overwrite: false });
   }
   trimClip(clipId: Id, left: boolean, newEdgeUs: TimeUs): Promise<StateSnapshot> {
     return invoke("trim_clip", { clipId, left, newEdgeUs: us(newEdgeUs) });
@@ -70,11 +67,7 @@ export class TauriEngine implements EngineClient {
       filters: [
         {
           name: "Media",
-          extensions: [
-            "mp4", "mov", "mkv", "webm", "avi", "m4v", "mts", "mpg",
-            "wav", "mp3", "m4a", "aac", "flac", "ogg", "aiff",
-            "png", "jpg", "jpeg", "webp", "bmp", "tiff", "gif",
-          ],
+          extensions: [...MEDIA_EXTENSIONS],
         },
       ],
     });
@@ -198,11 +191,6 @@ export class TauriEngine implements EngineClient {
     return typeof picked === "string" ? picked : null;
   }
 
-  async playbackFrame(): Promise<Uint8Array | null> {
-    const buf = await invoke<ArrayBuffer>("playback_frame");
-    const bytes = new Uint8Array(buf);
-    return bytes.length > 0 ? bytes : null;
-  }
 
   getEffectsCatalog(): Promise<EffectDef[]> {
     return invoke("get_effects_catalog");
@@ -331,9 +319,6 @@ export class TauriEngine implements EngineClient {
     });
   }
 
-  listAvatarConfigs(): Promise<AvatarConfig[]> {
-    return invoke("list_avatar_configs");
-  }
   saveAvatarConfig(config: AvatarConfig): Promise<[Id, StateSnapshot]> {
     return invoke("save_avatar_config", { config });
   }
@@ -413,8 +398,9 @@ export class TauriEngine implements EngineClient {
     return invoke("add_subtitles_clip", { clipId });
   }
 
-  transcribeAsset(assetId: Id, model?: string): Promise<void> {
-    return invoke("transcribe_asset", { assetId, model: model ?? null });
+  transcribeAsset(assetId: Id): Promise<void> {
+    // the whisper model comes from project settings (set_project_settings)
+    return invoke("transcribe_asset", { assetId, model: null });
   }
 
   setClipSpeed(clipId: Id, speed: number): Promise<StateSnapshot> {

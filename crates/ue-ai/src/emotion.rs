@@ -4,8 +4,6 @@
 //! - Classification: offline heuristic by energy/speed, or optionally
 //!   an OpenAI-compatible API (same prompt as the toolkit) via curl.
 
-use std::collections::BTreeMap;
-
 use ue_audio::wav::WavMap;
 use ue_core::model::TranscriptDoc;
 
@@ -128,47 +126,3 @@ pub fn classify_via_api(
     available.iter().find(|k| raw.contains(&k.to_lowercase())).cloned()
 }
 
-/// API classifier config, read from the environment (like the toolkit's .env).
-pub struct ApiConfig {
-    pub base: String,
-    pub key: String,
-    pub model: String,
-}
-
-impl ApiConfig {
-    pub fn from_env() -> Option<ApiConfig> {
-        let key = std::env::var("OPENAI_API_KEY").ok().filter(|k| !k.is_empty())?;
-        Some(ApiConfig {
-            base: std::env::var("OPENAI_API_BASE")
-                .unwrap_or_else(|_| "https://api.openai.com/v1".into()),
-            key,
-            model: std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into()),
-        })
-    }
-}
-
-/// Classifies all segments of a transcript (API if available, otherwise heuristic)
-/// and writes `segments[].emotion`. `avatars` = available emotion→path map.
-pub fn classify_segments(
-    doc: &mut TranscriptDoc,
-    avatars: &BTreeMap<String, String>,
-    api: Option<&ApiConfig>,
-) {
-    let labels: Vec<String> = avatars.keys().cloned().collect();
-    if labels.is_empty() {
-        return;
-    }
-    let avg = doc.global_avg_volume;
-    for i in 0..doc.segments.len() {
-        let seg = &doc.segments[i];
-        let dur_s = ((seg.end_us - seg.start_us) as f64 / 1e6).max(0.2);
-        let words = (seg.word_range.1 - seg.word_range.0) as f64;
-        let from_api = api.and_then(|c| {
-            classify_via_api(&c.base, &c.key, &c.model, &seg.text, &labels)
-        });
-        let emotion = from_api.unwrap_or_else(|| {
-            classify_heuristic(seg.volume_rms, avg, words / dur_s, &labels)
-        });
-        doc.segments[i].emotion = Some(emotion);
-    }
-}

@@ -151,32 +151,6 @@ fn resolve_maps_timeline_to_source_time() {
 }
 
 #[test]
-fn mjpeg_session_reads_sequential_frames() {
-    let dir = require_media!();
-    let mut session =
-        ue_media::stream::MjpegSession::open(&dir.join("video_a.mp4"), 2_000_000, 480, 24, None)
-            .unwrap();
-    assert_eq!(session.next_src_us(), 2_000_000);
-    let mut frames = 0;
-    for _ in 0..12 {
-        let frame = session.next_frame().unwrap().expect("frame available");
-        assert_eq!(&frame[0..2], &[0xFF, 0xD8]);
-        assert_eq!(&frame[frame.len() - 2..], &[0xFF, 0xD9]);
-        frames += 1;
-    }
-    assert_eq!(frames, 12);
-    // 12 frames at 24 fps = 0.5 s advanced from the session start
-    assert_eq!(session.next_src_us(), 2_500_000);
-    // the video lasts 6 s: from 2 s ~4 s * 24 fps ≈ 96 frames remain; exhaust it
-    let mut rest = 0;
-    while session.next_frame().unwrap().is_some() {
-        rest += 1;
-        assert!(rest < 200, "must not be infinite");
-    }
-    assert!((80..=110).contains(&rest), "≈96 frames remained, got {rest}");
-}
-
-#[test]
 fn render_frame_produces_jpegs_for_visual_check() {
     let dir = require_media!();
     let mut project = Project::new("t");
@@ -324,23 +298,4 @@ fn denoise_wav_lowers_noise_floor() {
         after < before * 0.35,
         "noise floor drops ≥ ~9 dB: before {before}, after {after}"
     );
-}
-#[test]
-fn image_stream_yields_continuous_frames() {
-    use std::process::Command;
-    let ffmpeg = ue_media::ffmpeg_bin();
-    if Command::new(&ffmpeg).arg("-version").output().map(|o| !o.status.success()).unwrap_or(true) { return; }
-    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-img-stream");
-    std::fs::create_dir_all(&dir).unwrap();
-    let img = dir.join("still.png");
-    Command::new(&ffmpeg).args(["-y","-v","error","-f","lavfi","-i","color=c=orange:s=640x360","-frames:v","1"]).arg(&img).status().unwrap();
-    assert!(ue_media::is_image_path(&img), "png is an image");
-    // open a session on the still and read many frames — it must NOT end (loop)
-    let mut s = ue_media::stream::MjpegSession::open(&img, 0, 480, 24, None).unwrap();
-    for i in 0..30 {
-        match s.next_frame() {
-            Ok(Some(j)) => assert!(j.len() > 500, "real frame {i}"),
-            other => panic!("image stream ended at frame {i}: {other:?} (would cause a reopen storm)"),
-        }
-    }
 }

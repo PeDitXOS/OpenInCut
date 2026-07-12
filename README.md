@@ -1,5 +1,4 @@
 # UberEditor
-*[Español](README.es.md)*
 
 Cross-platform desktop video editor (Tauri 2 + Rust + React) built for content creators, with AI superpowers: **text-based editing** (word-by-word Whisper), **silences gone with one click**, **automatic verticals**, **emotion-reactive avatar**, **karaoke subtitles**, and an **embedded MCP server** so an agent (Claude, etc.) can edit your project for you.
 
@@ -200,9 +199,9 @@ claude mcp add --transport http ubereditor http://127.0.0.1:4599/mcp \
   --header "Authorization: Bearer <token>"
 ```
 
-**52 tools — everything the UI can do, an agent can do**: import, relink and transcribe media, cut, trim, move and split clips, animate transforms with keyframes, apply effects and transitions, add titles, shapes and subtitles, manage tracks and sequences, remove silences, fix transcription errors, search the transcript, name clips, generate the reactive avatar, render (including multi-piece exports), save the project, and cancel a long job. Every edit an agent makes is **one** undo entry in the UI, and a call that would break the project fails without changing anything.
+**53 tools — everything the UI can do, an agent can do**: import, relink and transcribe media, cut, trim, move and split clips, animate transforms with keyframes, apply effects and transitions, add titles, shapes and subtitles, manage tracks and sequences, remove silences, fix transcription errors, search the transcript, name clips, generate the reactive avatar, render (including multi-piece exports), save the project, and cancel a long job. Every edit an agent makes is **one** undo entry in the UI, and a call that would break the project fails without changing anything.
 
-Slow operations (transcribe, export, avatar) run as **background jobs**: the tool returns a `job_id` immediately and the agent polls `get_job_status`, so a client timeout is never mistaken for a failure. Three debugging tools (`debug_render_frame`, `debug_playback_frame`, `playback`) let an agent *see* what the editor is showing — the paused preview now includes titles and subtitles, composited exactly like the export — so it can verify a frame or reproduce a visual bug instead of guessing.
+Slow operations (transcribe, export, avatar) run as **background jobs**: the tool returns a `job_id` immediately and the agent polls `get_job_status`, so a client timeout is never mistaken for a failure. Two debugging tools (`debug_render_frame`, `playback`) let an agent *see* what the editor is showing — the paused preview now includes titles and subtitles, composited exactly like the export — so it can verify a frame or reproduce a visual bug instead of guessing.
 
 📖 **[Full reference: `docs/MCP.md`](docs/MCP.md)** — the five rules (µs everywhere, one call = one undo…), a typical session, every tool, and how to add one.
 
@@ -234,6 +233,6 @@ npm run screenshot            # visual tests: 13 steps with functional assertion
 | `ue-export` | EDL, ffmpeg graph (multi-layer, transitions, text/karaoke), single-frame preview compositor, avatar-video generation, progress and cancellation |
 | `ue-ai` | Silence detection (hysteresis + padding), emotion classification |
 | `ue-whisper` | whisper-rs (Metal/CUDA), per-word timestamps, model downloads |
-| `src-tauri` | IPC commands, FrameService, MCP server, autosave |
+| `src-tauri` | IPC commands, MCP server, autosave |
 
 Time convention: microseconds (`i64`) throughout the model; rational fps; ULID ids. The frontend mirrors the serde types by hand (`src/engine/types.ts`) and has two interchangeable engines: `TauriEngine` (real IPC) and `MockEngine` (browser demo).

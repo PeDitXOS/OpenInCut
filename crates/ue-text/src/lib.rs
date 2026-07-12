@@ -128,7 +128,6 @@ pub fn render(spec: &TextSpec) -> TextImage {
     // measure the block so it can be centred on the style's y_offset
     let lines: Vec<_> = buf.layout_runs().collect();
     if lines.is_empty() {
-        drop(buf);
         return TextImage { width: w, height: h, rgba };
     }
     let n = lines.len() as f32;

@@ -162,7 +162,3 @@ pub fn restrict_to_ranges(
     out
 }
 
-/// Total output duration of the restricted timeline.
-pub fn ranges_duration(ranges: &[(TimeUs, TimeUs)]) -> TimeUs {
-    ranges.iter().filter(|(a, b)| b > a).map(|(a, b)| b - a).sum()
-}

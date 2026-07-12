@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { activeSequence } from "../engine/types";
+import { MEDIA_EXTENSIONS } from "../lib/media";
 import { frameToUs } from "../lib/time";
 import { engine, useStore } from "../state/store";
 import { Header } from "./Header";
@@ -110,11 +111,7 @@ function usePlayback() {
   }, [playing, engineClock]);
 }
 
-const MEDIA_EXTENSIONS = new Set([
-  "mp4", "mov", "mkv", "webm", "avi", "m4v", "mts", "mpg",
-  "wav", "mp3", "m4a", "aac", "flac", "ogg", "aiff",
-  "png", "jpg", "jpeg", "webp", "bmp", "tiff", "gif",
-]);
+const MEDIA_EXTENSION_SET: ReadonlySet<string> = new Set(MEDIA_EXTENSIONS);
 
 /** Drag & drop of files from the system (desktop only). */
 function useNativeFileDrop() {
@@ -127,7 +124,7 @@ function useNativeFileDrop() {
         if (event.payload.type !== "drop") return;
         const paths = event.payload.paths.filter((p) => {
           const ext = p.split(".").pop()?.toLowerCase() ?? "";
-          return MEDIA_EXTENSIONS.has(ext);
+          return MEDIA_EXTENSION_SET.has(ext);
         });
         if (!paths.length) return;
         void (async () => {

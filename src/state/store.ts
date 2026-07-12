@@ -24,7 +24,6 @@ const mockEngine = isTauri() ? null : new MockEngine(demoProject());
 export const engine: EngineClient = mockEngine ?? new TauriEngine();
 
 export interface UiState {
-  ready: boolean;
   project: Project;
   version: number;
   dirty: boolean;
@@ -195,7 +194,6 @@ export const useStore = create<UiState>((set, get) => {
       canUndo: snap.can_undo,
       canRedo: snap.can_redo,
       lastActionLabel: label,
-      ready: true,
       // a finished transcription shows up in the snapshot
       transcribingIds: st.transcribingIds.filter(
         (id) => !snap.project.transcripts.some((d) => d.asset_id === id),
@@ -214,7 +212,6 @@ export const useStore = create<UiState>((set, get) => {
   };
 
   return {
-    ready: false,
     project: emptyProject,
     version: -1,
     dirty: false,
@@ -388,7 +385,7 @@ export const useStore = create<UiState>((set, get) => {
     },
 
     moveClip: (clipId, toTrackId, toStartUs) =>
-      run("Move clip", () => engine.moveClip(clipId, toTrackId, toStartUs, false)),
+      run("Move clip", () => engine.moveClip(clipId, toTrackId, toStartUs)),
 
     trimClip: (clipId, left, newEdgeUs) =>
       run("Trim clip", () => engine.trimClip(clipId, left, newEdgeUs)),

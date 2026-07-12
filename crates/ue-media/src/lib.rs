@@ -8,7 +8,6 @@ pub mod hashing;
 pub mod denoise;
 pub mod probe;
 pub mod proxy;
-pub mod stream;
 pub mod thumbs;
 
 use std::path::Path;

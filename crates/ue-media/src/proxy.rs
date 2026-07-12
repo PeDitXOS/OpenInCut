@@ -1,6 +1,6 @@
 //! Preview proxies: a light h264 copy (≤960 px wide, short GOP) that the
-//! FrameService and render_frame decode instead of the original. Export
-//! always uses the original file.
+//! webview compositor and render_frame decode instead of the original.
+//! Export always uses the original file.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

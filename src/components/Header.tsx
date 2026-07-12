@@ -29,7 +29,7 @@ async function copyText(text: string): Promise<boolean> {
 }
 
 /** One labelled, copyable value (the connect command, the token, the URL). */
-function CopyRow({ label, value, mono = true }: { label: string; value: string; mono?: boolean }) {
+function CopyRow({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState(false);
   const onCopy = async () => {
     if (await copyText(value)) {
@@ -50,11 +50,7 @@ function CopyRow({ label, value, mono = true }: { label: string; value: string; 
           {copied ? "✓ Copied" : "Copy"}
         </button>
       </div>
-      <div
-        className={`max-h-24 overflow-auto rounded-md border border-line bg-bg0 px-2 py-1.5 text-[11px] text-ink ${
-          mono ? "font-[var(--font-mono)]" : ""
-        } select-all break-all whitespace-pre-wrap`}
-      >
+      <div className="max-h-24 overflow-auto rounded-md border border-line bg-bg0 px-2 py-1.5 font-[var(--font-mono)] text-[11px] text-ink select-all break-all whitespace-pre-wrap">
         {value}
       </div>
     </div>
@@ -127,7 +123,7 @@ function McpPill() {
               </div>
               <p className="mt-3 text-[10px] leading-relaxed text-ink-faint">
                 A new token is generated every time the app starts. Keep it private: anyone
-                with it can edit your project. 54 tools available — see <b>docs/MCP.md</b>.
+                with it can edit your project. 53 tools available — see <b>docs/MCP.md</b>.
               </p>
             </>
           ) : (

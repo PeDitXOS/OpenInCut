@@ -184,11 +184,6 @@ impl Project {
     pub fn track_mut(&mut self, id: Id) -> Option<&mut Track> {
         self.sequences.iter_mut().flat_map(|s| s.tracks.iter_mut()).find(|t| t.id == id)
     }
-
-    /// The sequence that contains the track.
-    pub fn sequence_of_track(&self, track_id: Id) -> Option<&Sequence> {
-        self.sequences.iter().find(|s| s.tracks.iter().any(|t| t.id == track_id))
-    }
 }
 
 // ---------------------------------------------------------------------------

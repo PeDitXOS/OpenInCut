@@ -228,11 +228,6 @@ fn line_y_offset(i: usize, n: usize, px: f64, line_height: f32) -> f64 {
     (i as f64 - (n as f64 - 1.0) / 2.0) * step
 }
 
-/// The fontfile behind a style, if any (`None` = fontconfig, no metrics).
-fn font_path_of(style: &ue_core::model::TextStyle, fallback: &str) -> Option<String> {
-    font_part_for(style, fallback).strip_prefix("fontfile=").map(str::to_string)
-}
-
 /// Escaping for drawtext's text='…' value inside a filter_complex.
 fn escape_drawtext(text: &str) -> String {
     text.replace('\\', "\\\\\\\\")
@@ -836,25 +831,6 @@ fn karaoke_overlays(
     Some(out)
 }
 
-/// drawtext chain for the sequence's titles and automatic subtitles, burned
-/// into the export. Size/offset are referenced to 1080p and scaled to `out_h`.
-///
-/// `export_windows` are the timeline ranges actually being rendered (from
-/// `ranges`/`range`; empty = the whole timeline). Overlays outside every
-/// window are skipped: they'd be trimmed away anyway, and for karaoke — which
-/// emits two drawtext PER WORD — this keeps the filtergraph from exploding
-/// (a full-transcript karaoke export produced ~4000 drawtext / ~900 KB and
-/// crashed ffmpeg; a 20 s range now emits a few dozen).
-fn build_text_overlays(
-    project: &Project,
-    seq: &ue_core::model::Sequence,
-    out_h: u32,
-    out_w: u32,
-    export_windows: &[(TimeUs, TimeUs)],
-) -> Option<String> {
-    text_overlays_inner(project, seq, out_h, out_w, None, export_windows, None, true)
-}
-
 /// A text/subtitles clip that carries effects or a moved/scaled/rotated
 /// transform can no longer be a plain `drawtext` burned onto the finished
 /// video: it has to become its own RGBA layer so the SAME effect+transform
@@ -873,7 +849,7 @@ fn in_export_windows(from: TimeUs, to: TimeUs, windows: &[(TimeUs, TimeUs)]) -> 
 /// drawtext chain for the titles/subtitles ACTIVE at timeline time `t_us`,
 /// WITHOUT any `enable` window (the single-frame preview picks the active item
 /// here and draws it unconditionally). Built from the exact same chunking,
-/// fonts, sizes and positions as [`build_text_overlays`], so the paused
+/// fonts, sizes and positions as the export path (`text_overlays_inner`), so the paused
 /// preview matches the export. Karaoke degrades to its phrase line (the
 /// per-word highlight is export-only).
 ///
@@ -1762,11 +1738,9 @@ pub fn build_ffmpeg_args(
     // The I-O range no longer lives here: the sequence was already cut down to
     // it before the graph was built (see the top of this function), so there is
     // nothing left to trim off the end.
-    let vlabel = "[vout]".to_string();
+    let mut vlabel = "[vout]".to_string();
     let alabel = "[aout]".to_string();
     let duration_us = total_us;
-    let mut vlabel = vlabel;
-    let alabel = alabel;
 
     // ---- GIF: optimized palette over the already-trimmed master ----
     if is_gif {

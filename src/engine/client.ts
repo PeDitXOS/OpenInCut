@@ -42,12 +42,7 @@ export interface EngineClient {
   getState(): Promise<StateSnapshot>;
   splitClip(clipId: Id, tUs: TimeUs): Promise<StateSnapshot>;
   deleteClips(ids: Id[], ripple: boolean): Promise<StateSnapshot>;
-  moveClip(
-    clipId: Id,
-    toTrack: Id,
-    toStartUs: TimeUs,
-    overwrite: boolean,
-  ): Promise<StateSnapshot>;
+  moveClip(clipId: Id, toTrack: Id, toStartUs: TimeUs): Promise<StateSnapshot>;
   trimClip(clipId: Id, left: boolean, newEdgeUs: TimeUs): Promise<StateSnapshot>;
   undo(): Promise<StateSnapshot>;
   redo(): Promise<StateSnapshot>;
@@ -118,8 +113,6 @@ export interface EngineClient {
   pickProjectSavePath(defaultName: string): Promise<string | null>;
   pickProjectOpenPath(): Promise<string | null>;
 
-  /** Latest JPEG frame from the playback stream (empty = no signal). */
-  playbackFrame(): Promise<Uint8Array | null>;
 
   // -- modular effects --
   getEffectsCatalog(): Promise<EffectDef[]>;
@@ -204,7 +197,6 @@ export interface EngineClient {
     ripple: boolean,
   ): Promise<StateSnapshot>;
 
-  listAvatarConfigs(): Promise<AvatarConfig[]>;
   /** Returns the saved id (a new draft gets one) plus the snapshot. */
   saveAvatarConfig(config: AvatarConfig): Promise<[Id, StateSnapshot]>;
   removeAvatarConfig(configId: Id): Promise<StateSnapshot>;
@@ -252,7 +244,7 @@ export interface EngineClient {
   addSubtitlesClip(clipId: Id): Promise<StateSnapshot>;
 
   /** Launches the Whisper transcription of an asset (background job). */
-  transcribeAsset(assetId: Id, model?: string): Promise<void>;
+  transcribeAsset(assetId: Id): Promise<void>;
 
   /** Changes a clip's speed (0.05–20; export preserves the pitch). */
   setClipSpeed(clipId: Id, speed: number): Promise<StateSnapshot>;

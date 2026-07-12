@@ -7,14 +7,7 @@
 //! manifests and parameters; user packs on disk arrive with hot-reload.
 
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 use ue_core::model::EffectInstance;
-
-#[derive(Debug, Error)]
-pub enum RenderError {
-    #[error("invalid manifest: {0}")]
-    Manifest(String),
-}
 
 // ---------------------------------------------------------------------------
 // Effect definition (manifest)
@@ -307,14 +300,6 @@ pub fn transform_vf(
     canvas: Option<(u32, u32)>,
 ) -> Option<String> {
     transform_vf_at(t, canvas, false, "t")
-}
-
-pub fn transform_vf_ex(
-    t: &ue_core::model::Transform2D,
-    canvas: Option<(u32, u32)>,
-    transparent: bool,
-) -> Option<String> {
-    transform_vf_at(t, canvas, transparent, "t")
 }
 
 /// Like `transform_vf`; with `transparent` the position canvas and the

@@ -93,7 +93,7 @@ server still answers other calls (polls, reads).
 
 ## Tools
 
-54 tools. `tools/list` carries the full schema for each, plus MCP annotations:
+53 tools. `tools/list` carries the full schema for each, plus MCP annotations:
 
 | annotation | meaning |
 |---|---|
@@ -279,15 +279,13 @@ to preview the split.
 
 ### Debugging what the user sees
 
-The paused preview, the playback stream and the export are **three different
-code paths**. `debug_render_frame` and `debug_playback_frame` **return the JPEG
-as an image** you can see (plus the temp path), and error with a clear message
-instead of handing back a black frame.
+`debug_render_frame` **returns the JPEG as an image** you can see (plus the
+temp path), and errors with a clear message instead of handing back a black
+frame.
 
 | Tool | Path |
 |---|---|
 | `debug_render_frame {t_us}` | the **paused** preview — includes titles + subtitles active at `t_us`, composited like the export |
-| `debug_playback_frame {}` | whatever is in the **playback** stream buffer right now |
 | `playback {action: play\|pause\|seek\|position}` | drives the real player |
 | `export_video` | the export |
 
@@ -318,7 +316,7 @@ The coverage test allows exactly these gaps, so the list stays honest:
 | Command | Why not |
 |---|---|
 | `get_state`, `ui_log`, `mcp_status` | GUI plumbing; `get_project_summary` + `get_timeline` cover the state |
-| `get_audio_peaks`, `ensure_thumbs`, `get_thumb_strip`, `playback_frame` | visual caches and binary streams for the timeline widget |
+| `get_audio_peaks`, `ensure_thumbs`, `get_thumb_strip` | visual caches and binary streams for the timeline widget |
 | `pick_avatar_media` | opens a native file dialog; an agent passes paths directly |
 | `cancel_export` | the agent controls export timing through the job (it just doesn't launch one it doesn't want) |
 | `check_recovery`, `recover_project`, `discard_recovery` | the UI's crash-recovery prompt; they need the app's data dir |

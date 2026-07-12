@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import type { Clip, EffectDef, EffectInstance, Param, Project } from "../engine/types";
+import type { Clip, EffectDef, EffectInstance, Param } from "../engine/types";
 import { hasKeyAt, removeKeyAt, withKeyAt } from "../engine/types";
 import {
   activeSequence,
@@ -1075,54 +1075,10 @@ const TRANSITION_KINDS: [string, string][] = [
   ["core.radial", "Radial"],
 ];
 
-/**
- * How this clip's transition will run (mirroring the export's rules): a real
- * A/B blend with the previous clip when it is adjacent and has spare
- * material, an ENTRANCE from black/transparent otherwise. It always runs.
- */
-function transitionMode(project: Project, clip: Clip): string {
-  const seq = activeSequence(project);
-  const track = seq.tracks.find((t) => t.clips.some((c) => c.id === clip.id));
-  const baseTrack = seq.tracks.find(
-    (t) =>
-      t.kind === "video" &&
-      !t.muted &&
-      t.clips.some((c) => c.payload.type === "media" || c.payload.type === "generator"),
-  );
-  const isBase = !!track && track.id === baseTrack?.id;
-  const entrance = isBase
-    ? "Enters from BLACK over the clip's first moments."
-    : "Enters from TRANSPARENT over the tracks below.";
-  if (!track || !isBase) return entrance;
-  const prev = track.clips.find((c) => Math.abs(c.start + c.duration - clip.start) <= 1_000);
-  if (!prev || prev.payload.type !== "media" || clip.payload.type !== "media") return entrance;
-  const prevAsset = project.assets.find(
-    (a) => a.id === (prev.payload as { asset_id: string }).asset_id,
-  );
-  if (!prevAsset) return entrance;
-  const availLeft =
-    Math.max(0, prevAsset.probe.duration_us - (prev.payload as { src_out: number }).src_out) /
-    prev.speed;
-  const availRight = (clip.payload as { src_in: number }).src_in / clip.speed;
-  const want = (clip.transition_in?.duration ?? 500_000) / 2;
-  const half = Math.min(want, availLeft, availRight);
-  if (half * 2 < 40_000) return entrance;
-  const eff = (half * 2) / 1e6;
-  return half < want
-    ? `Blends from the previous clip (shrunk to ${eff.toFixed(2)} s by the available material).`
-    : "Blends from the previous clip.";
-}
-
 function TransitionPanel({ clip, out }: { clip: Clip; out: boolean }) {
   const setClipTransition = useStore((s) => s.setClipTransition);
-  const project = useStore((s) => s.project);
   const current = out ? clip.transition_out : clip.transition_in;
   const durS = (current?.duration ?? 500_000) / 1e6;
-  const mode = !current
-    ? null
-    : out
-      ? "Exits over the clip's tail — to black on the base track, to transparent on upper layers."
-      : transitionMode(project, clip);
 
   return (
     <Section title={out ? "Transition out" : "Transition in"}>
@@ -1169,12 +1125,6 @@ function TransitionPanel({ clip, out }: { clip: Clip; out: boolean }) {
             }
           />
         </Row>
-      )}
-      {(mode || !out) && (
-        <p className="mt-1 text-[10px] leading-snug text-ink-faint">
-          {mode ??
-            "Blends from the previous clip when one touches on the left with spare material; otherwise it enters from black (base) or transparent (upper layers)."}
-        </p>
       )}
     </Section>
   );

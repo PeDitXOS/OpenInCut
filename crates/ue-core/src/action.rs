@@ -14,7 +14,6 @@ use crate::time::TimeUs;
 #[serde(rename_all = "snake_case", tag = "op")]
 #[allow(clippy::large_enum_variant)] // actions are short-lived and travel through history; boxing Clip would complicate the inverses
 pub enum Action {
-    SetProjectName { name: String },
     AddTrack { sequence_id: Id, index: usize, track: Track },
     RemoveTrack { track_id: Id },
     InsertClip { track_id: Id, clip: Clip },
@@ -85,17 +84,6 @@ pub enum TrackProp {
     VolumeDb(f32),
 }
 
-/// A clip's natural track kind based on its payload (for default placement).
-pub fn natural_track_kind(project: &Project, clip: &Clip) -> TrackKind {
-    match &clip.payload {
-        ClipPayload::Media { asset_id, .. } => match project.asset(*asset_id) {
-            Some(a) if a.kind == MediaKind::Audio => TrackKind::Audio,
-            _ => TrackKind::Video,
-        },
-        _ => TrackKind::Video,
-    }
-}
-
 /// Can this clip live on a track of this kind? A VIDEO asset can also go on
 /// an audio track (only its audio is used: linked clips).
 fn clip_allowed_on(project: &Project, clip: &Clip, kind: TrackKind) -> bool {
@@ -138,11 +126,6 @@ fn insert_sorted(track: &mut Track, clip: Clip) -> UeResult<()> {
 /// Applies the action and returns its inverse.
 pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
     match action {
-        Action::SetProjectName { name } => {
-            let old = std::mem::replace(&mut project.name, name);
-            Ok(Action::SetProjectName { name: old })
-        }
-
         Action::AddTrack { sequence_id, index, track } => {
             let track_id = track.id;
             let seq = project

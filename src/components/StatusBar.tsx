@@ -1,5 +1,5 @@
 import { activeSequence } from "../engine/types";
-import { engine, useStore } from "../state/store";
+import { useStore } from "../state/store";
 
 export function StatusBar() {
   const project = useStore((s) => s.project);
@@ -18,7 +18,6 @@ export function StatusBar() {
         <span className={isError ? "text-danger" : "text-ink-dim"}>· {lastAction}</span>
       )}
       <div className="flex-1" />
-      <span>{engine.kind === "tauri" ? "ue-core (desktop)" : "mock engine (browser)"}</span>
       <span className="font-[var(--font-mono)]">
         {seq.resolution[0]}×{seq.resolution[1]} · {Math.round(seq.fps[0] / seq.fps[1])} fps ·{" "}
         {(seq.sample_rate / 1000).toFixed(0)} kHz

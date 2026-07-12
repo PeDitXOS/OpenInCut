@@ -153,12 +153,7 @@ export class MockEngine implements EngineClient {
     });
   }
 
-  async moveClip(
-    clipId: Id,
-    toTrack: Id,
-    toStartUs: TimeUs,
-    _overwrite: boolean,
-  ): Promise<StateSnapshot> {
+  async moveClip(clipId: Id, toTrack: Id, toStartUs: TimeUs): Promise<StateSnapshot> {
     return this.transaction("Move clip", () => {
       const found = this.locate(clipId);
       const target = this.sequence.tracks.find((t) => t.id === toTrack);
@@ -329,10 +324,6 @@ export class MockEngine implements EngineClient {
   async pickProjectOpenPath(): Promise<string | null> {
     return null;
   }
-  async playbackFrame(): Promise<Uint8Array | null> {
-    return null;
-  }
-
   async getEffectsCatalog(): Promise<EffectDef[]> {
     // the same manifests the backend embeds (single source of truth)
     const manifests = await Promise.all([
@@ -439,9 +430,6 @@ export class MockEngine implements EngineClient {
     });
   }
 
-  async listAvatarConfigs(): Promise<AvatarConfig[]> {
-    return this.project.avatars ?? [];
-  }
   async saveAvatarConfig(config: AvatarConfig): Promise<[Id, StateSnapshot]> {
     const id = config.id || `av_${Math.random().toString(36).slice(2, 8)}`;
     const snap = await this.transaction("Save avatar", () => {
