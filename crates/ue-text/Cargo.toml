@@ -1,0 +1,16 @@
+[package]
+name = "ue-text"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+ue-core = { path = "../ue-core" }
+# cosmic-text: shaping + per-glyph font FALLBACK, rasterised by swash, which
+# reads Apple sbix, Google CBDT/CBLC and Microsoft COLR/CPAL colour glyphs.
+# That last part is the whole point: ffmpeg's drawtext loads ONE font face and
+# libass renders vector outlines in a single colour, so neither of them can put
+# a colour emoji on the screen — no matter how they are configured.
+cosmic-text = "0.19"
+png = "0.17"

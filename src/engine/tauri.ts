@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
@@ -90,6 +90,21 @@ export class TauriEngine implements EngineClient {
 
   async renderFrame(tUs: TimeUs, maxWidth: number): Promise<Uint8Array | null> {
     const buf = await invoke<ArrayBuffer>("render_frame", { tUs: us(tUs), maxWidth });
+    const bytes = new Uint8Array(buf);
+    return bytes.length > 0 ? bytes : null;
+  }
+
+  async resolveAssetUrl(assetId: Id): Promise<string | null> {
+    const path = await invoke<string | null>("resolve_asset_path", { assetId });
+    return path ? convertFileSrc(path) : null;
+  }
+
+  async renderAssetFrame(assetId: Id, srcUs: TimeUs, maxWidth: number): Promise<Uint8Array | null> {
+    const buf = await invoke<ArrayBuffer>("render_asset_frame", {
+      assetId,
+      srcUs: us(srcUs),
+      maxWidth,
+    });
     const bytes = new Uint8Array(buf);
     return bytes.length > 0 ? bytes : null;
   }
@@ -210,8 +225,9 @@ export class TauriEngine implements EngineClient {
     clipId: Id,
     style: TextStyle,
     mode: "phrase" | "word" | "karaoke",
+    maxWords: number | null,
   ): Promise<StateSnapshot> {
-    return invoke("set_subtitles_props", { clipId, style, mode });
+    return invoke("set_subtitles_props", { clipId, style, mode, maxWords });
   }
   listFonts(): Promise<[string, string][]> {
     return invoke("list_fonts");

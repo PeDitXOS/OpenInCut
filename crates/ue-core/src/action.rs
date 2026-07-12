@@ -45,7 +45,13 @@ pub enum Action {
         color_params: std::collections::BTreeMap<String, String>,
     },
     /// Changes the style and mode of a subtitles clip (Subtitles payload).
-    SetClipSubtitles { clip_id: Id, style: TextStyle, mode: SubtitleMode },
+    SetClipSubtitles {
+        clip_id: Id,
+        style: TextStyle,
+        mode: SubtitleMode,
+        /// Words per caption; `None` = fit to the frame width.
+        max_words: Option<u32>,
+    },
     /// Changes the speed of a media clip (rate stretch: same source
     /// material, duration = source/speed). `duration` comes precomputed.
     SetClipSpeed { clip_id: Id, speed: f64, duration: TimeUs },
@@ -422,16 +428,22 @@ pub fn apply(project: &mut Project, action: Action) -> UeResult<Action> {
             Ok(Action::SetClipSpeed { clip_id, speed: old_speed, duration: old_duration })
         }
 
-        Action::SetClipSubtitles { clip_id, style, mode } => {
+        Action::SetClipSubtitles { clip_id, style, mode, max_words } => {
             let (si, ti, ci) = project
                 .locate_clip(clip_id)
                 .ok_or_else(|| UeError::NotFound(format!("clip {clip_id}")))?;
             let clip = &mut project.sequences[si].tracks[ti].clips[ci];
             match &mut clip.payload {
-                ClipPayload::Subtitles { style: st, mode: md, .. } => {
+                ClipPayload::Subtitles { style: st, mode: md, max_words: mw, .. } => {
                     let old_style = std::mem::replace(st, style);
                     let old_mode = std::mem::replace(md, mode);
-                    Ok(Action::SetClipSubtitles { clip_id, style: old_style, mode: old_mode })
+                    let old_words = std::mem::replace(mw, max_words.map(|w| w.clamp(1, 20)));
+                    Ok(Action::SetClipSubtitles {
+                        clip_id,
+                        style: old_style,
+                        mode: old_mode,
+                        max_words: old_words,
+                    })
                 }
                 _ => Err(UeError::Invalid("clip is not a subtitles clip".into())),
             }

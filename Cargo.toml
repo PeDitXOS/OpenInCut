@@ -7,6 +7,7 @@ members = [
     "crates/ue-render",
     "crates/ue-ai",
     "crates/ue-whisper",
+    "crates/ue-text",
     "crates/ue-export",
     "src-tauri",
 ]

@@ -170,12 +170,30 @@ pub fn render_effect_at(def: &EffectDef, inst: &EffectInstance, at_us: i64) -> S
             }
             ParamKind::Color { default } => {
                 let hex = inst.color_params.get(&p.key).map(String::as_str).unwrap_or(default);
+                // Also expose the components as 0..1 floats ({key_r}/{key_g}/
+                // {key_b}). Filters that TINT something (a shadow colouring the
+                // source's alpha with colorchannelmixer's ra/ga/ba) need the
+                // channels, not the packed 0xRRGGBB literal.
+                let (r, g, b) = rgb01(hex).unwrap_or_else(|| rgb01(default).unwrap_or((0.0, 0.0, 0.0)));
+                out = out.replace(&format!("{{{}_r}}", p.key), &format_float(r));
+                out = out.replace(&format!("{{{}_g}}", p.key), &format_float(g));
+                out = out.replace(&format!("{{{}_b}}", p.key), &format_float(b));
                 format_color(hex).unwrap_or_else(|| format_color(default).expect("valid default"))
             }
         };
         out = out.replace(&placeholder, &value);
     }
     out
+}
+
+/// "#rrggbb" → (r, g, b) each 0..1.
+pub fn rgb01(hex: &str) -> Option<(f64, f64, f64)> {
+    let h = hex.trim().trim_start_matches('#');
+    if h.len() < 6 {
+        return None;
+    }
+    let c = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).ok().map(|v| v as f64 / 255.0);
+    Some((c(0)?, c(2)?, c(4)?))
 }
 
 /// Full -vf chain for a clip's enabled effects (None if there are none).
@@ -645,5 +663,47 @@ mod tests {
         // unknown effect is ignored without breaking
         let unknown = inst("user.nonexistent", &[], &[]);
         assert!(render_chain(&reg, &[unknown]).is_none());
+    }
+}
+
+#[cfg(test)]
+mod color_component_tests {
+    use super::*;
+    use ue_core::model::EffectInstance;
+
+    /// A colour param also exposes {key_r}/{key_g}/{key_b} as 0..1 floats, so a
+    /// filter can TINT the source's alpha (the drop shadow's colour).
+    #[test]
+    fn color_params_expose_components() {
+        let reg = core_registry();
+        let def = find_effect(&reg, "core.drop_shadow").expect("drop_shadow exists");
+        let inst = EffectInstance {
+            effect_id: "core.drop_shadow".into(),
+            enabled: true,
+            params: Default::default(),
+            color_params: [("shadow_color".to_string(), "#ff8000".to_string())]
+                .into_iter()
+                .collect(),
+        };
+        let out = render_effect_at(def, &inst, 0);
+        assert!(out.contains("ra=1"), "red channel at full: {out}");
+        assert!(out.contains("ga=0.5"), "green ~0.5: {out}");
+        assert!(out.contains("ba=0"), "blue at zero: {out}");
+        assert!(!out.contains('{'), "every placeholder substituted: {out}");
+    }
+
+    /// The default (black) keeps the classic shadow.
+    #[test]
+    fn default_shadow_is_black() {
+        let reg = core_registry();
+        let def = find_effect(&reg, "core.drop_shadow").unwrap();
+        let inst = EffectInstance {
+            effect_id: "core.drop_shadow".into(),
+            enabled: true,
+            params: Default::default(),
+            color_params: Default::default(),
+        };
+        let out = render_effect_at(def, &inst, 0);
+        assert!(out.contains("ra=0") && out.contains("ga=0") && out.contains("ba=0"), "{out}");
     }
 }

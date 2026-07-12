@@ -130,6 +130,7 @@ export interface UiState {
     clipId: Id,
     style: TextStyle,
     mode: "phrase" | "word" | "karaoke",
+    maxWords: number | null,
   ) => Promise<void>;
   toggleTrack: (trackId: Id, prop: "muted" | "solo" | "locked") => Promise<void>;
   addTrack: (kind: "video" | "audio") => Promise<void>;
@@ -438,26 +439,6 @@ export const useStore = create<UiState>((set, get) => {
       } catch (e) {
         set({
           exporting: false,
-    rangeInUs: null,
-    rangeOutUs: null,
-    setRangeIn: (us) => set({ rangeInUs: us }),
-    setRangeOut: (us) => set({ rangeOutUs: us }),
-    exportRanges: [],
-    addExportRange: () => {
-      const { rangeInUs, rangeOutUs, exportRanges } = get();
-      if (rangeInUs == null || rangeOutUs == null || rangeOutUs <= rangeInUs) {
-        set({ lastActionLabel: "⚠ mark a range with I and O first" });
-        return;
-      }
-      const pair: [number, number] = [rangeInUs, rangeOutUs];
-      const next: [number, number][] = [...exportRanges, pair].sort((a, b) => a[0] - b[0]);
-      set({ exportRanges: next, lastActionLabel: `Piece ${next.length} added` });
-    },
-    removeExportRange: (index) =>
-      set((st) => ({ exportRanges: st.exportRanges.filter((_, i) => i !== index) })),
-    clearExportRanges: () => set({ exportRanges: [] }),
-    showExportDialog: false,
-    setShowExportDialog: (v) => set({ showExportDialog: v }),
           exportProgress: null,
           lastActionLabel: `⚠ ${e instanceof Error ? e.message : String(e)}`,
         });
@@ -568,8 +549,8 @@ export const useStore = create<UiState>((set, get) => {
     },
     setClipText: (clipId, content, style) =>
       run("Edit text", () => engine.setClipText(clipId, content, style)),
-    setSubtitlesProps: (clipId, style, mode) =>
-      run("Edit subtitles", () => engine.setSubtitlesProps(clipId, style, mode)),
+    setSubtitlesProps: (clipId, style, mode, maxWords) =>
+      run("Edit subtitles", () => engine.setSubtitlesProps(clipId, style, mode, maxWords)),
 
     reloadEffectPacks: async () => {
       try {

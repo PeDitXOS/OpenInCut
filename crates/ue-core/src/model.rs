@@ -511,6 +511,11 @@ pub enum ClipPayload {
         transcript_id: Id,
         style: TextStyle,
         mode: SubtitleMode,
+        /// Hard cap on the words a caption may hold. `None` = fit the line to
+        /// the frame width (the old behaviour). Older projects deserialize to
+        /// `None`, so nothing changes for them.
+        #[serde(default)]
+        max_words: Option<u32>,
     },
     /// Generated content (solid rectangle, gradient, …): a generator manifest
     /// (ue-render) produces the lavfi source from the params.
@@ -553,6 +558,14 @@ pub struct TextStyle {
     pub y_offset: f32,
     #[serde(default)]
     pub align: TextAlign,
+    /// Line spacing as a multiple of the font size, for wrapped captions.
+    /// Old projects deserialize to 1.2.
+    #[serde(default = "default_line_height")]
+    pub line_height: f32,
+}
+
+fn default_line_height() -> f32 {
+    1.2
 }
 
 fn default_font() -> String {
@@ -578,6 +591,7 @@ impl Default for TextStyle {
             x_offset: 0.0,
             y_offset: 0.0,
             align: TextAlign::Center,
+            line_height: default_line_height(),
         }
     }
 }

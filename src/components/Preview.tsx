@@ -1,9 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 
-import type { Clip, Project } from "../engine/types";
+import type { Clip, Id, Project } from "../engine/types";
 import { activeSequence, activeSubtitleText, assetName } from "../engine/types";
-import { paramValue } from "../engine/types";
+import {
+  canvasFilterSupported,
+  compositeFrame,
+  drawStyledText,
+  probeFilter,
+  textIsStyled,
+  drawMediaLayer,
+  drawOverlays,
+  generatorPixels,
+  layerEffects,
+  videoLayers,
+  type FrameSources,
+} from "../engine/compositor";
 import { frameToUs, hash32, usToTimecode } from "../lib/time";
+import { videoCache } from "../engine/video-cache";
 import { engine, useStore } from "../state/store";
 
 /** RMS → position 0..1 on a dB scale (-60..0). */
@@ -53,151 +66,64 @@ function AudioMeters() {
 }
 
 /**
- * Program monitor. Two modes:
- * - Desktop (Tauri): REAL frame extracted by ffmpeg (ue-media) + overlays.
- * - Browser (mock): schematic representation of the active clip.
- * In both, the active texts and guides are drawn on top; the Phase 2 wgpu
- * engine will replace the frame source, not this component.
+ * Program monitor.
+ *
+ * Desktop (Tauri): the frame is composited in the webview by the shared
+ * compositor module (engine/compositor.ts), whose rules mirror the export's
+ * ffmpeg graph — ONE renderer for paused and playing. Pixels come from
+ * mediabunny (videoCache), with a backend ffmpeg fallback for codecs the
+ * webview cannot decode. The Rust audio engine stays the master clock.
+ * Browser (mock): a schematic representation of the active clip.
  */
 
-function activeClips(project: Project, playheadUs: number) {
+/** Texts + resolved subtitles active at the playhead (drawn on top). */
+function activeOverlays(project: Project, playheadUs: number) {
   const seq = activeSequence(project);
-  const topFirst = [...seq.tracks].reverse();
-  const videoClips = topFirst
+  const clips = seq.tracks
     .filter((t) => t.kind === "video" && !t.muted)
     .flatMap((t) => t.clips)
     .filter((c) => c.start <= playheadUs && playheadUs < c.start + c.duration);
-  const subtitles = videoClips
-    .filter((c) => c.payload.type === "subtitles")
-    .map((c) => activeSubtitleText(project, c, playheadUs))
-    .filter((s): s is NonNullable<typeof s> => s !== null);
+  // A text clip with effects or a transform is a LAYER (same as the export),
+  // so it is drawn separately through the effect/transform chain. Plain ones
+  // are burned on top as before.
+  const subtitleClips = clips.filter((c) => c.payload.type === "subtitles");
+  const textClips = clips.filter((c) => c.payload.type === "text");
+  const resolved = subtitleClips
+    .map((c) => ({ clip: c, item: activeSubtitleText(project, c, playheadUs) }))
+    .filter((x): x is { clip: Clip; item: NonNullable<typeof x.item> } => x.item !== null);
+  const styled = [
+    ...textClips.filter(textIsStyled).map((clip) => ({ clip, item: null })),
+    ...resolved.filter((x) => textIsStyled(x.clip)),
+  ];
   return {
-    video: videoClips.find((c) => c.payload.type === "media"),
-    texts: videoClips.filter((c) => c.payload.type === "text"),
-    // bottom to top, the way the export composes
-    generators: videoClips.filter((c) => c.payload.type === "generator").reverse(),
-    subtitles,
+    texts: textClips.filter((c) => !textIsStyled(c)),
+    subtitles: resolved.filter((x) => !textIsStyled(x.clip)).map((x) => x.item),
+    styled,
   };
 }
 
-/** Draws the generator clips (rect/gradient) with their sampled transform. */
-function drawGenerators(
-  ctx: CanvasRenderingContext2D,
-  w: number,
-  h: number,
-  seqRes: [number, number],
-  generators: Clip[],
-  playheadUs: number,
-) {
-  const sx = w / seqRes[0];
-  for (const clip of generators) {
-    if (clip.payload.type !== "generator") continue;
-    const { generator_id, params, color_params } = clip.payload;
-    const rel = Math.max(0, playheadUs - clip.start);
-    const isGrad = generator_id === "core.gradient";
-    const gw = paramValue(params["width"] ?? (isGrad ? 1920 : 640));
-    const gh = paramValue(params["height"] ?? (isGrad ? 1080 : 360));
-    const px = paramValue(clip.transform.position[0], rel);
-    const py = paramValue(clip.transform.position[1], rel);
-    const scale = paramValue(clip.transform.scale[0], rel);
-    const opacity = paramValue(clip.transform.opacity, rel);
-    const rw = gw * sx * scale;
-    const rh = gh * sx * scale;
-    const cx = w / 2 + px * sx;
-    const cy = h / 2 + py * sx;
-    ctx.save();
-    ctx.globalAlpha = Math.max(0, Math.min(1, opacity));
-    if (isGrad) {
-      const g = ctx.createLinearGradient(cx - rw / 2, cy - rh / 2, cx + rw / 2, cy + rh / 2);
-      g.addColorStop(0, color_params["color_a"] ?? "#ffb224");
-      g.addColorStop(1, color_params["color_b"] ?? "#16130f");
-      ctx.fillStyle = g;
-    } else {
-      ctx.fillStyle = color_params["color"] ?? "#ff3355";
-    }
-    ctx.fillRect(cx - rw / 2, cy - rh / 2, rw, rh);
-    ctx.restore();
-  }
-}
+/**
+ * Where the preview's time goes. Decoding and compositing are timed apart
+ * because they fail differently: a slow composite is our maths, a slow decode
+ * is the media pipeline — and guessing which one is why "it's at 1 fps" kept
+ * getting misdiagnosed.
+ */
+const perf = { decodeMs: 0, drawMs: 0, frames: 0, layers: 0 };
 
-function drawOverlays(
-  ctx: CanvasRenderingContext2D,
-  w: number,
-  h: number,
-  texts: Clip[],
-  subtitles: {
-    content: string;
-    style: {
-      size: number;
-      color: string;
-      y_offset: number;
-      font?: string;
-      highlight_color?: string | null;
-    };
-    spans?: { text: string; active: boolean }[];
-  }[] = [],
-) {
-  // rule of thirds, subtle
-  ctx.strokeStyle = "rgba(255,255,255,0.05)";
-  ctx.lineWidth = 1;
-  for (const f of [1 / 3, 2 / 3]) {
-    ctx.beginPath();
-    ctx.moveTo(w * f, 0);
-    ctx.lineTo(w * f, h);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(0, h * f);
-    ctx.lineTo(w, h * f);
-    ctx.stroke();
-  }
-
-  ctx.textAlign = "center";
-  for (const sub of subtitles) {
-    const size = (sub.style.size / 1080) * h;
-    const y = h / 2 + (sub.style.y_offset / 1080) * h;
-    const family = sub.style.font && sub.style.font !== "sans-serif" ? `"${sub.style.font}", ` : "";
-    ctx.font = `600 ${Math.round(size)}px ${family}"Inter", sans-serif`;
-    ctx.shadowColor = "rgba(0,0,0,0.85)";
-    ctx.shadowBlur = 8;
-    if (sub.spans?.length) {
-      // karaoke: centered phrase, words lit up at their time
-      const space = ctx.measureText(" ").width;
-      const widths = sub.spans.map((sp) => ctx.measureText(sp.text).width);
-      const total = widths.reduce((a, b) => a + b, 0) + space * (sub.spans.length - 1);
-      let x = w / 2 - total / 2;
-      ctx.textAlign = "left";
-      sub.spans.forEach((sp, i) => {
-        ctx.fillStyle = sp.active
-          ? (sub.style.highlight_color ?? "#FFB224")
-          : "rgba(233,228,219,0.4)";
-        ctx.fillText(sp.text, x, y);
-        x += widths[i] + space;
-      });
-      ctx.textAlign = "center";
-    } else {
-      ctx.fillStyle = sub.style.color;
-      ctx.fillText(sub.content, w / 2, y);
-    }
-    ctx.shadowBlur = 0;
-  }
-  for (const t of texts) {
-    if (t.payload.type !== "text") continue;
-    const content = t.payload.content;
-    const isCta = content.length < 16;
-    if (isCta) {
-      ctx.font = `600 ${Math.round(h * 0.055)}px "Space Grotesk", sans-serif`;
-      ctx.fillStyle = "#ffb224";
-      ctx.fillText(content, w / 2, h * 0.86);
-    } else {
-      ctx.font = `700 ${Math.round(h * 0.075)}px "Space Grotesk", sans-serif`;
-      ctx.shadowColor = "rgba(0,0,0,0.7)";
-      ctx.shadowBlur = 12;
-      ctx.fillStyle = "#e9e4db";
-      ctx.fillText(content, w / 2, h * 0.62);
-      ctx.shadowBlur = 0;
-    }
-  }
-}
+/** Pixel sources for the compositor, backed by videoCache. */
+const frameSources: FrameSources = {
+  video: async (assetId: Id, clipId: Id, timeSec: number) => {
+    const t0 = performance.now();
+    const f = await videoCache.getFrameAt(assetId, clipId, timeSec);
+    perf.decodeMs += performance.now() - t0;
+    perf.layers += 1;
+    return f;
+  },
+  image: (assetId: Id) => {
+    const img = videoCache.getImage(assetId);
+    return img ? { source: img, sw: img.naturalWidth, sh: img.naturalHeight } : null;
+  },
+};
 
 function drawMockVideo(
   ctx: CanvasRenderingContext2D,
@@ -246,12 +172,6 @@ function badge(ctx: CanvasRenderingContext2D, w: number, h: number, text: string
   ctx.fillText(text, w - bw - h * 0.04 + h * 0.015, h * 0.09);
 }
 
-async function toBitmap(bytes: Uint8Array): Promise<ImageBitmap> {
-  return createImageBitmap(
-    new Blob([bytes.slice().buffer as ArrayBuffer], { type: "image/jpeg" }),
-  );
-}
-
 function TransportButton({
   label,
   title,
@@ -280,16 +200,21 @@ function TransportButton({
 
 export function Preview() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [parentSize, setParentSize] = useState({ w: 0, h: 0 });
-  const [realFrame, setRealFrame] = useState<ImageBitmap | null>(null);
-  const frameReqRef = useRef(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
+  // Export-exact paused frame (rendered by the backend with the SAME ffmpeg
+  // graph the export runs). `bitmap: null` = "nothing to show for this key,
+  // keep the approximation" (avoids refetch loops).
+  const exactRef = useRef<{ key: string; bitmap: ImageBitmap | null } | null>(null);
+  const exactQueuedRef = useRef<string | null>(null);
+  const exactTimerRef = useRef<number>(0);
+  const exactLiveRef = useRef(false);
+  const [exactLive, setExactLive] = useState(false);
 
   const project = useStore((s) => s.project);
   const playheadUs = useStore((s) => s.playheadUs);
   const playing = useStore((s) => s.playing);
   const togglePlay = useStore((s) => s.togglePlay);
   const seek = useStore((s) => s.seek);
-  const version = useStore((s) => s.version);
 
   const fps = activeSequence(project).fps;
 
@@ -298,104 +223,204 @@ export function Preview() {
     if (!parent) return;
     const obs = new ResizeObserver((entries) => {
       const r = entries[0].contentRect;
-      setParentSize({ w: r.width, h: r.height });
+      sizeRef.current = { w: r.width, h: r.height };
     });
     obs.observe(parent);
     return () => obs.disconnect();
   }, []);
 
-  // Real frame (desktop only).
-  // Playing: continuous stream from the FrameService at ~24 fps (playback_frame).
+  // Which blur path this webview gives us — reported for BOTH canvas kinds,
+  // because asking for `willReadFrequently` silently downgrades to a software
+  // canvas that ignores filters, and probing on one of those slandered the
+  // whole engine as "no filter support".
   useEffect(() => {
-    if (engine.kind !== "tauri" || !playing) return;
-    let alive = true;
-    const id = window.setInterval(async () => {
-      try {
-        const bytes = await engine.playbackFrame();
-        if (!alive) return;
-        if (bytes) setRealFrame(await toBitmap(bytes));
-      } catch {
-        /* keep the last frame */
-      }
-    }, 1000 / 24);
-    return () => {
-      alive = false;
-      window.clearInterval(id);
-    };
-  }, [playing]);
+    const gpu = probeFilter(false);
+    const cpu = probeFilter(true);
+    engine.uiLog(
+      "info",
+      `blur probe — accelerated canvas: ${gpu.blurred ? "BLURS" : "ignores filter"} ` +
+        `(mid=${gpu.mid}, reads back "${gpu.reads}") · ` +
+        `willReadFrequently canvas: ${cpu.blurred ? "BLURS" : "ignores filter"} (mid=${cpu.mid})`,
+    );
+    engine.uiLog(
+      "info",
+      `preview blur path: ${canvasFilterSupported() ? "ctx.filter (GPU, native)" : "mip downscale (GPU, no JS loops)"}`,
+    );
+  }, []);
 
-  // On pause/seek: a high-quality frame with a short debounce (render_frame).
-  useEffect(() => {
-    if (engine.kind !== "tauri" || playing) return;
-    const req = ++frameReqRef.current;
-    const handle = window.setTimeout(async () => {
-      try {
-        const bytes = await engine.renderFrame(playheadUs, 1280);
-        if (frameReqRef.current !== req) return; // arrived late
-        if (!bytes) {
-          setRealFrame(null);
-          return;
-        }
-        const bmp = await toBitmap(bytes);
-        if (frameReqRef.current === req) setRealFrame(bmp);
-      } catch {
-        if (frameReqRef.current === req) setRealFrame(null);
-      }
-    }, 90);
-    return () => window.clearTimeout(handle);
-  }, [playheadUs, version, playing]);
-
-  // Drawing
+  // ONE renderer (the OpenCut model): a single rAF loop composites the current
+  // timeline state whether paused or playing. The render is async — it awaits
+  // the frame decodes, then draws in one pass — so the previous frame stays
+  // until the next is ready (no flicker). The Rust audio engine remains the
+  // master clock for the playhead.
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || parentSize.w === 0) return;
-    const maxW = parentSize.w - 24;
-    const maxH = parentSize.h - 24;
-    let w = maxW;
-    let h = (w * 9) / 16;
-    if (h > maxH) {
-      h = maxH;
-      w = (h * 16) / 9;
-    }
-    if (w < 10 || h < 10) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(w * dpr);
-    canvas.height = Math.round(h * dpr);
-    canvas.style.width = `${w}px`;
-    canvas.style.height = `${h}px`;
-    const ctx = canvas.getContext("2d")!;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (!canvas) return;
+    let running = true;
+    let inFlight = false;
+    let lastW = 0;
+    let lastH = 0;
+    let lastDpr = 0;
 
-    const { video, texts, generators, subtitles } = activeClips(project, playheadUs);
+    const markExact = (v: boolean) => {
+      if (exactLiveRef.current !== v) {
+        exactLiveRef.current = v;
+        setExactLive(v);
+      }
+    };
 
-    if (engine.kind === "tauri" && realFrame) {
-      // real frame, letterboxed
-      ctx.fillStyle = "#000";
-      ctx.fillRect(0, 0, w, h);
-      const scale = Math.min(w / realFrame.width, h / realFrame.height);
-      const dw = realFrame.width * scale;
-      const dh = realFrame.height * scale;
-      ctx.drawImage(realFrame, (w - dw) / 2, (h - dh) / 2, dw, dh);
-      badge(ctx, w, h, "REAL FRAME");
-    } else if (engine.kind === "tauri" && !video) {
-      ctx.fillStyle = "#0a0908";
-      ctx.fillRect(0, 0, w, h);
-      ctx.fillStyle = "rgba(164,155,143,0.35)";
-      ctx.font = `500 ${Math.round(h * 0.05)}px "Space Grotesk", sans-serif`;
-      ctx.textAlign = "center";
-      ctx.fillText("No signal at this point", w / 2, h / 2);
-    } else if (engine.kind === "tauri") {
-      // there's a clip but the frame hasn't arrived yet
-      ctx.fillStyle = "#000";
-      ctx.fillRect(0, 0, w, h);
-      badge(ctx, w, h, "LOADING…");
-    } else {
-      drawMockVideo(ctx, w, h, project, video);
-      badge(ctx, w, h, "PREVIEW ½");
-    }
-    drawGenerators(ctx, w, h, activeSequence(project).resolution, generators, playheadUs);
-    drawOverlays(ctx, w, h, texts, subtitles);
-  }, [project, playheadUs, version, parentSize, realFrame]);
+    // Debounced fetch of the export-exact frame: fires once the playhead /
+    // project / size stop changing. The approximation stays on screen until
+    // the exact bitmap arrives (no flicker, no black flash).
+    const scheduleExact = (key: string, tUs: number, px: number) => {
+      if (exactQueuedRef.current === key) return;
+      exactQueuedRef.current = key;
+      window.clearTimeout(exactTimerRef.current);
+      exactTimerRef.current = window.setTimeout(async () => {
+        try {
+          const bytes = await engine.renderFrame(tUs, px);
+          const bitmap = bytes
+            ? await createImageBitmap(new Blob([bytes as unknown as BlobPart]))
+            : null;
+          if (!running) return;
+          exactRef.current?.bitmap?.close();
+          exactRef.current = { key, bitmap };
+        } catch (e) {
+          engine.uiLog("warn", `exact frame: ${e instanceof Error ? e.message : e}`);
+          exactRef.current = { key, bitmap: null };
+        }
+      }, 160);
+    };
+
+    const render = async () => {
+      const { w: pw, h: ph } = sizeRef.current;
+      if (pw === 0) return;
+      const s = useStore.getState();
+      const seq = activeSequence(s.project);
+      const aspect = seq.resolution[0] / seq.resolution[1] || 16 / 9;
+      const maxW = pw - 24;
+      const maxH = ph - 24;
+      let w = maxW;
+      let h = w / aspect;
+      if (h > maxH) {
+        h = maxH;
+        w = h * aspect;
+      }
+      if (w < 10 || h < 10) return;
+      const dpr = window.devicePixelRatio || 1;
+      if (w !== lastW || h !== lastH || dpr !== lastDpr) {
+        canvas.width = Math.round(w * dpr);
+        canvas.height = Math.round(h * dpr);
+        canvas.style.width = `${w}px`;
+        canvas.style.height = `${h}px`;
+        lastW = w;
+        lastH = h;
+        lastDpr = dpr;
+      }
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const { texts, subtitles, styled } = activeOverlays(s.project, s.playheadUs);
+
+      if (engine.kind === "tauri") {
+        // Paused: show the export-exact backend frame once it's ready (same
+        // ffmpeg graph as the export — 1:1 for ANY effect pack, transitions
+        // and text). While it renders, keep the live approximation on screen.
+        const key = `${s.playheadUs}|${s.version}|${Math.round(w * dpr)}|${seq.id}`;
+        if (!s.playing) {
+          const hit = exactRef.current;
+          if (hit?.key === key && hit.bitmap) {
+            ctx.drawImage(hit.bitmap, 0, 0, w, h);
+            drawOverlays(ctx, w, h, [], [], true); // guides only: text is burned in
+            markExact(true);
+            return;
+          }
+          if (hit?.key !== key) scheduleExact(key, s.playheadUs, Math.round(w * dpr));
+        }
+        markExact(false);
+        const any = await compositeFrame(ctx, w, h, s.project, seq, s.playheadUs, frameSources);
+        if (!running) return;
+        if (!any && !texts.length && !subtitles.length && !styled.length) {
+          ctx.fillStyle = "#0a0908";
+          ctx.fillRect(0, 0, w, h);
+          ctx.fillStyle = "rgba(164,155,143,0.35)";
+          ctx.font = `500 ${Math.round(h * 0.05)}px "Space Grotesk", sans-serif`;
+          ctx.textAlign = "center";
+          ctx.fillText("No signal at this point", w / 2, h / 2);
+        }
+      } else {
+        ctx.clearRect(0, 0, w, h);
+        const topVideo = [...seq.tracks]
+          .reverse()
+          .filter((t) => t.kind === "video" && !t.muted)
+          .flatMap((t) => t.clips)
+          .find(
+            (c) =>
+              c.payload.type === "media" &&
+              c.start <= s.playheadUs &&
+              s.playheadUs < c.start + c.duration,
+          );
+        drawMockVideo(ctx, w, h, s.project, topVideo);
+        for (const layer of videoLayers(s.project, seq, s.playheadUs)) {
+          if (layer.kind !== "generator") continue;
+          const pixels = generatorPixels(layer.clip);
+          if (!pixels) continue;
+          const rel = Math.max(0, s.playheadUs - layer.clip.start);
+          drawMediaLayer(ctx, w, h, seq.resolution, pixels, layer, rel, layerEffects(layer.clip, rel));
+        }
+        badge(ctx, w, h, "PREVIEW ½");
+      }
+      // styled text goes through effects + transform, plain text is burned on top
+      for (const { clip, item } of styled) {
+        drawStyledText(ctx, w, h, seq.resolution, clip, item, Math.max(0, s.playheadUs - clip.start));
+      }
+      drawOverlays(ctx, w, h, texts, subtitles);
+    };
+
+    const tick = () => {
+      if (!running) return;
+      raf = requestAnimationFrame(tick);
+      if (inFlight) return;
+      inFlight = true;
+      const t0 = performance.now();
+      const d0 = perf.decodeMs;
+      // watchdog: a render that never settles freezes the preview forever
+      // (the rAF loop is guarded by `inFlight`), and that looks exactly like
+      // "10 seconds per frame". Say so out loud instead of guessing.
+      const stuck = window.setTimeout(() => {
+        engine.uiLog("warn", `preview: a frame has been rendering for 2 s (decode is the usual suspect)`);
+      }, 2000);
+      void render().finally(() => {
+        window.clearTimeout(stuck);
+        inFlight = false;
+        const total = performance.now() - t0;
+        const decode = perf.decodeMs - d0;
+        perf.drawMs += total - decode;
+        perf.frames += 1;
+        if (perf.frames >= 10) {
+          const f = perf.frames;
+          const ms = (perf.decodeMs + perf.drawMs) / f;
+          engine.uiLog(
+            "info",
+            `preview: ${ms.toFixed(1)} ms/frame (${(1000 / ms).toFixed(1)} fps) — ` +
+              `decode ${(perf.decodeMs / f).toFixed(1)} · composite ${(perf.drawMs / f).toFixed(1)} · ` +
+              `${(perf.layers / f).toFixed(1)} layers`,
+          );
+          perf.decodeMs = 0;
+          perf.drawMs = 0;
+          perf.frames = 0;
+          perf.layers = 0;
+        }
+      });
+    };
+    let raf = requestAnimationFrame(tick);
+    return () => {
+      running = false;
+      cancelAnimationFrame(raf);
+      window.clearTimeout(exactTimerRef.current);
+    };
+  }, []);
 
   const frameStep = (n: number) => seek(playheadUs + frameToUs(n, fps));
 
@@ -445,6 +470,22 @@ export function Preview() {
         <div className="flex items-center gap-2 text-[11px] text-ink-faint">
           <ShuttleBadge />
           {engine.kind === "tauri" && <AudioMeters />}
+          {engine.kind === "tauri" && !playing && (
+            <span
+              className={
+                exactLive
+                  ? "rounded-md border border-(--color-accent) px-2 py-1 text-(--color-accent)"
+                  : "rounded-md border border-line px-2 py-1"
+              }
+              title={
+                exactLive
+                  ? "This frame was rendered with the export's ffmpeg graph: what you see is exactly what exports"
+                  : "Live approximation; the export-exact frame is rendering"
+              }
+            >
+              {exactLive ? "1:1" : "≈"}
+            </span>
+          )}
           <span className="rounded-md border border-line px-2 py-1">
             {engine.kind === "tauri" ? "Engine: desktop" : "Engine: browser"}
           </span>

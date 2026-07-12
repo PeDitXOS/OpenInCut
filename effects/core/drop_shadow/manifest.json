@@ -3,12 +3,13 @@
   "name": "Drop shadow",
   "category": "style",
   "params": [
+    { "key": "shadow_color", "label": "Colour", "type": "color", "default": "#000000" },
     { "key": "offset_x", "label": "Offset X", "type": "float", "default": 14.0, "min": -150.0, "max": 150.0 },
     { "key": "offset_y", "label": "Offset Y", "type": "float", "default": 14.0, "min": -150.0, "max": 150.0 },
     { "key": "blur", "label": "Softness", "type": "float", "default": 10.0, "min": 0.0, "max": 80.0 },
     { "key": "opacity", "label": "Opacity", "type": "float", "default": 0.7, "min": 0.0, "max": 1.0 },
     { "key": "margin", "label": "Room", "type": "float", "default": 70.0, "min": 0.0, "max": 300.0 }
   ],
-  "ffmpeg": "format=rgba,split[sh{u}a][sh{u}b];[sh{u}b]colorchannelmixer=rr=0:gg=0:bb=0:aa={opacity},gblur=sigma={blur},pad=iw+{margin}*2:ih+{margin}*2:max(0\\,{margin}+{offset_x}):max(0\\,{margin}+{offset_y}):color=black@0[sh{u}s];[sh{u}s][sh{u}a]overlay=x={margin}:y={margin}:format=auto",
-  "notes": "Soft dark shadow behind the clip, offset by (offset_x, offset_y). Fast (no per-pixel geq). `margin` is the transparent room the shadow needs — keep it >= |offset| + 3*blur. Best on a PiP/overlay clip; on one with real transparency (PNG, keyed) it follows the shape."
+  "ffmpeg": "format=rgba,split[sh{u}a][sh{u}b];[sh{u}b]colorchannelmixer=rr=0:rg=0:rb=0:ra={shadow_color_r}:gr=0:gg=0:gb=0:ga={shadow_color_g}:br=0:bg=0:bb=0:ba={shadow_color_b}:ar=0:ag=0:ab=0:aa={opacity},gblur=sigma={blur},pad=iw+{margin}*2:ih+{margin}*2:max(0\\,{margin}+{offset_x}):max(0\\,{margin}+{offset_y}):color=black@0[sh{u}s];[sh{u}s][sh{u}a]overlay=x={margin}:y={margin}:format=auto",
+  "notes": "Soft coloured shadow behind the clip, offset by (offset_x, offset_y). The source's own alpha is tinted with `shadow_color` (colorchannelmixer's ra/ga/ba pull the alpha into each channel), so it follows the shape and costs no per-pixel geq. `margin` is the transparent room the shadow needs — keep it >= |offset| + 3*blur. Best on a PiP/overlay clip; on the bottom track the shadow lands on the black background and you won't see it."
 }

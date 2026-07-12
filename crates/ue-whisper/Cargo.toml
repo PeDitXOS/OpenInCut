@@ -8,9 +8,19 @@ license.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 ulid.workspace = true
-whisper-rs = "0.14"
 ue-core = { path = "../ue-core" }
 ue-audio = { path = "../ue-audio" }
+
+# whisper.cpp itself is ALREADY built optimized even in a debug profile (its
+# build.rs forces CMAKE_BUILD_TYPE=RelWithDebInfo: "debug builds are too slow to
+# even remotely be usable"). What was actually missing is the GPU: without the
+# `metal` feature whisper-rs defaults `use_gpu` to false, so an Apple Silicon
+# Mac was transcribing on the CPU with the GPU idle.
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { version = "0.14", features = ["metal"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+whisper-rs = "0.14"
 
 [dev-dependencies]
 ue-media = { path = "../ue-media" }

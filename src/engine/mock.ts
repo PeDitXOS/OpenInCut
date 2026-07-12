@@ -263,6 +263,14 @@ export class MockEngine implements EngineClient {
     return null; // the mock draws its own preview
   }
 
+  async resolveAssetUrl(): Promise<string | null> {
+    return null; // no real files in the browser mock
+  }
+
+  async renderAssetFrame(): Promise<Uint8Array | null> {
+    return null; // no backend decoder in the browser
+  }
+
   async pickSavePath(): Promise<string | null> {
     return null; // desktop only
   }
@@ -588,6 +596,7 @@ export class MockEngine implements EngineClient {
     clipId: Id,
     style: TextStyle,
     mode: "phrase" | "word" | "karaoke",
+    maxWords: number | null = null,
   ): Promise<StateSnapshot> {
     return this.transaction("Edit subtitles", () => {
       const found = this.locate(clipId);
@@ -595,6 +604,7 @@ export class MockEngine implements EngineClient {
         throw new Error("not a subtitles clip");
       found.clip.payload.style = style;
       found.clip.payload.mode = mode;
+      found.clip.payload.max_words = maxWords;
     });
   }
 

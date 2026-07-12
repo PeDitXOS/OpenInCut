@@ -1109,6 +1109,7 @@ fn auto_subtitles_burn_per_segment() {
             transcript_id: doc_id,
             style,
             mode: SubtitleMode::Phrase,
+            max_words: None,
         },
         start: 0,
         duration: 3 * SEC,
@@ -1294,6 +1295,7 @@ fn word_mode_subtitles_burn_per_word() {
             transcript_id: doc_id,
             style: TextStyle { size: 80.0, y_offset: 380.0, ..Default::default() },
             mode: SubtitleMode::Word,
+            max_words: None,
         },
         start: 0,
         duration: 3 * SEC,
@@ -1379,6 +1381,7 @@ fn karaoke_mode_highlights_words_progressively() {
             transcript_id: doc_id,
             style: TextStyle { size: 90.0, y_offset: 380.0, ..Default::default() },
             mode: SubtitleMode::Karaoke,
+            max_words: None,
         },
         start: 0,
         duration: 3 * SEC,
@@ -1517,6 +1520,7 @@ fn continuous_speech_chunks_into_multiple_captions() {
             transcript_id: doc_id,
             style: TextStyle { size: 60.0, y_offset: 380.0, ..Default::default() },
             mode: SubtitleMode::Phrase,
+            max_words: None,
         },
         start: 0,
         duration: 4 * SEC,
@@ -1678,6 +1682,7 @@ fn corrected_words_appear_in_captions() {
             transcript_id: doc_id,
             style: TextStyle::default(),
             mode: SubtitleMode::Phrase,
+            max_words: None,
         },
         start: 0,
         duration: 2 * SEC,
@@ -2050,7 +2055,7 @@ fn karaoke_highlights_the_active_word() {
     let style = TextStyle { size: 80.0, y_offset: 380.0, highlight_color: Some("#ffcc00".into()), ..Default::default() };
     store.insert_clip(v2, Clip {
         id: Id::new(),
-        payload: ClipPayload::Subtitles { transcript_id: doc_id, style, mode: SubtitleMode::Karaoke },
+        payload: ClipPayload::Subtitles { transcript_id: doc_id, style, mode: SubtitleMode::Karaoke, max_words: None },
         start: 0, duration: 10 * SEC, speed: 1.0, effects: vec![], transform: Default::default(),
         audio: Default::default(), transition_in: None, label_color: None, name: None, group: None,
     }, InsertMode::Strict).unwrap();
@@ -2109,7 +2114,7 @@ fn karaoke_bounds_to_range_and_guards_the_rest() {
     let style = TextStyle { size: 90.0, y_offset: 380.0, highlight_color: Some("#ffcc00".into()), ..Default::default() };
     store.insert_clip(v2, Clip {
         id: Id::new(),
-        payload: ClipPayload::Subtitles { transcript_id: doc_id, style, mode: SubtitleMode::Karaoke },
+        payload: ClipPayload::Subtitles { transcript_id: doc_id, style, mode: SubtitleMode::Karaoke, max_words: None },
         start: 0, duration: 30 * SEC, speed: 1.0, effects: vec![], transform: Default::default(),
         audio: Default::default(), transition_in: None, label_color: None, name: None, group: None,
     }, InsertMode::Strict).unwrap();
@@ -2312,4 +2317,1257 @@ fn audit_generator_preview_equals_export() {
     let d = (er as i32-pr as i32).abs().max((eg as i32-pg as i32).abs()).max((eb as i32-pb as i32).abs());
     assert!(d <= 30, "generator diverges: export=({er},{eg},{eb}) preview=({pr},{pg},{pb})");
     assert!(eg > 150 && er < 120, "the green generator actually rendered");
+}
+
+/// Material living only on V2 (V1 empty) is the export's base: it fills the
+/// canvas instead of failing with "empty timeline".
+#[test]
+fn clips_only_on_upper_track_export_as_base() {
+    let Some(dir) = media_dir() else { return };
+    let src = dir.join("upper_only_blue.mp4");
+    if !src.exists() {
+        let st = Command::new(ue_media::ffmpeg_bin())
+            .args([
+                "-y", "-v", "error",
+                "-f", "lavfi", "-i", "color=blue:size=640x360:rate=30:duration=2",
+                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            ])
+            .arg(&src)
+            .status()
+            .unwrap();
+        assert!(st.success());
+    }
+    let mut project = Project::new("upper-only");
+    let seq_id = project.active_sequence;
+    let asset = ue_media::import_file(&src).unwrap();
+    let aid = asset.id;
+    project.assets.push(asset);
+    let seq = project.sequence_mut(seq_id).unwrap();
+    seq.tracks.push(Track::new(TrackKind::Video, "V2"));
+    let v2 = seq.tracks.last().unwrap().id;
+    let mut store = ProjectStore::new(project);
+    store.insert_clip(v2, Clip::new_media(aid, 0, 2 * SEC, 0), InsertMode::Strict).unwrap();
+
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-upper-only.mp4");
+    let _ = std::fs::remove_file(&out);
+    export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+    let meta = ffprobe_json(&out);
+    let dur: f64 = meta["format"]["duration"].as_str().unwrap().parse().unwrap();
+    assert!((1.9..=2.2).contains(&dur), "lasts 2 s, was {dur}");
+    let (r, _g, b) = pixel_at(&out, 1.0, 960, 540);
+    assert!(b > 150 && r < 90, "centre is blue, was ({r},{b})");
+    let (r2, _g2, b2) = pixel_at(&out, 1.0, 100, 100);
+    assert!(b2 > 150 && r2 < 90, "fills the canvas as the base, was ({r2},{b2})");
+}
+
+/// A timeline with only a title exports over black instead of failing.
+#[test]
+fn text_only_timeline_exports_over_black() {
+    let Some(dir) = media_dir() else { return };
+    let project = Project::new("titles");
+    let seq_id = project.active_sequence;
+    let v1 = project
+        .sequence(seq_id)
+        .unwrap()
+        .tracks
+        .iter()
+        .find(|t| t.kind == TrackKind::Video)
+        .unwrap()
+        .id;
+    let mut store = ProjectStore::new(project);
+    store.insert_clip(v1, Clip::new_text("TITLE CARD", 0, 3 * SEC), InsertMode::Strict).unwrap();
+
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-text-only.mp4");
+    let _ = std::fs::remove_file(&out);
+    export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+    let meta = ffprobe_json(&out);
+    let dur: f64 = meta["format"]["duration"].as_str().unwrap().parse().unwrap();
+    assert!((2.9..=3.2).contains(&dur), "lasts 3 s, was {dur}");
+    let (r, g, b) = pixel_at(&out, 1.0, 100, 100);
+    assert!(r < 30 && g < 30 && b < 30, "background is black, was ({r},{g},{b})");
+}
+
+/// Preview compositor parity: a gap in the base track keeps the upper layer
+/// PiP-sized over black (never stretched to fill), exactly like the export.
+#[test]
+fn preview_gap_in_base_keeps_layer_pip() {
+    let Some(dir) = media_dir() else { return };
+    for (name, color) in [("gap_red.mp4", "red"), ("gap_blue.mp4", "blue")] {
+        let out = dir.join(name);
+        if !out.exists() {
+            let st = Command::new(ue_media::ffmpeg_bin())
+                .args([
+                    "-y", "-v", "error",
+                    "-f", "lavfi", "-i",
+                    &format!("color={color}:size=640x360:rate=30:duration=3"),
+                    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                ])
+                .arg(&out)
+                .status()
+                .unwrap();
+            assert!(st.success());
+        }
+    }
+    let mut project = Project::new("gap");
+    let seq_id = project.active_sequence;
+    let red = ue_media::import_file(&dir.join("gap_red.mp4")).unwrap();
+    let blue = ue_media::import_file(&dir.join("gap_blue.mp4")).unwrap();
+    let (rid, bid) = (red.id, blue.id);
+    project.assets.push(red);
+    project.assets.push(blue);
+    let seq = project.sequence_mut(seq_id).unwrap();
+    seq.tracks.push(Track::new(TrackKind::Video, "V2"));
+    let v1 = seq.tracks.iter().find(|t| t.name == "V1").unwrap().id;
+    let v2 = seq.tracks.iter().find(|t| t.name == "V2").unwrap().id;
+    let mut store = ProjectStore::new(project);
+    // base red only [0,1s); the blue layer runs [0,3s) — at t=2s the base gaps
+    store.insert_clip(v1, Clip::new_media(rid, 0, 1 * SEC, 0), InsertMode::Strict).unwrap();
+    store.insert_clip(v2, Clip::new_media(bid, 0, 3 * SEC, 0), InsertMode::Strict).unwrap();
+
+    // export frame at t=2s
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-gap-export.mp4");
+    let _ = std::fs::remove_file(&out);
+    export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+
+    // preview frame at t=2s
+    let jpeg = ue_export::preview::render_preview_frame(&store.project, seq_id, dir, 2 * SEC, 960, &[])
+        .unwrap()
+        .unwrap();
+    let prev = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-gap-prev.png");
+    std::fs::write(dir.join("gap-prev.jpg"), &jpeg).unwrap();
+    Command::new(ue_media::ffmpeg_bin())
+        .args(["-y", "-v", "error", "-i"])
+        .arg(dir.join("gap-prev.jpg"))
+        .args(["-vf", "scale=960:540"])
+        .arg(&prev)
+        .status()
+        .unwrap();
+
+    // both: corner black (layer is NOT stretched), centre blue (layer visible)
+    let (er, _eg, eb) = pixel_at(&out, 2.0, 80, 80);
+    assert!(er < 30 && eb < 30, "export corner black, was ({er},{eb})");
+    let (er2, _eg2, eb2) = pixel_at(&out, 2.0, 960, 540);
+    assert!(eb2 > 150 && er2 < 90, "export centre blue, was ({er2},{eb2})");
+    let (pr, _pg, pb) = pixel_at_w(&prev, 0.0, 40, 40, 960);
+    assert!(pr < 30 && pb < 30, "preview corner black, was ({pr},{pb})");
+    let (pr2, _pg2, pb2) = pixel_at_w(&prev, 0.0, 480, 270, 960);
+    assert!(pb2 > 150 && pr2 < 90, "preview centre blue, was ({pr2},{pb2})");
+}
+
+/// Paused preview inside a transition runs the REAL xfade — same pattern and
+/// progress as the export — for a fade and for a directional wipe.
+#[test]
+fn preview_transition_matches_export() {
+    let Some(dir) = media_dir() else { return };
+    for (name, color) in [("xf_red.mp4", "red"), ("xf_blue.mp4", "blue")] {
+        let out = dir.join(name);
+        if !out.exists() {
+            let st = Command::new(ue_media::ffmpeg_bin())
+                .args([
+                    "-y", "-v", "error",
+                    "-f", "lavfi", "-i",
+                    &format!("color={color}:size=640x360:rate=30:duration=3"),
+                    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                ])
+                .arg(&out)
+                .status()
+                .unwrap();
+            assert!(st.success());
+        }
+    }
+    // A red [src 0..2) at 0; B blue [src 1..3) at 2 with a 1 s transition.
+    // Handles: A has 1 s of tail, B has 1 s of lead → effective window
+    // [1.5 s, 2.5 s), exactly like the export's xfade.
+    for (kind, t_check) in [("core.crossfade", 2_000_000i64), ("core.wipeleft", 1_750_000i64)] {
+        let mut project = Project::new("xfade");
+        let seq_id = project.active_sequence;
+        let red = ue_media::import_file(&dir.join("xf_red.mp4")).unwrap();
+        let blue = ue_media::import_file(&dir.join("xf_blue.mp4")).unwrap();
+        let (rid, bid) = (red.id, blue.id);
+        project.assets.push(red);
+        project.assets.push(blue);
+        let v1 = project
+            .sequence(seq_id)
+            .unwrap()
+            .tracks
+            .iter()
+            .find(|t| t.kind == TrackKind::Video)
+            .unwrap()
+            .id;
+        let mut store = ProjectStore::new(project);
+        store.insert_clip(v1, Clip::new_media(rid, 0, 2 * SEC, 0), InsertMode::Strict).unwrap();
+        let mut b = Clip::new_media(bid, 1 * SEC, 3 * SEC, 2 * SEC);
+        b.transition_in = Some(TransitionRef {
+            effect_id: kind.into(),
+            duration: 1 * SEC,
+            params: Default::default(),
+        });
+        store.insert_clip(v1, b, InsertMode::Strict).unwrap();
+
+        let slug = kind.replace('.', "-");
+        let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("ue-{slug}.mp4"));
+        let _ = std::fs::remove_file(&out);
+        export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+
+        let jpeg = ue_export::preview::render_preview_frame(
+            &store.project, seq_id, dir, t_check, 960, &[],
+        )
+        .unwrap()
+        .unwrap();
+        let prev = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("ue-{slug}-prev.png"));
+        std::fs::write(dir.join("xfade-prev.jpg"), &jpeg).unwrap();
+        Command::new(ue_media::ffmpeg_bin())
+            .args(["-y", "-v", "error", "-i"])
+            .arg(dir.join("xfade-prev.jpg"))
+            .args(["-vf", "scale=960:540"])
+            .arg(&prev)
+            .status()
+            .unwrap();
+
+        let t = t_check as f64 / 1e6;
+        for (x, y) in [(120u32, 270u32), (330, 270), (480, 200), (630, 270), (840, 270)] {
+            let (er, eg, eb) = pixel_at(&out, t, x * 2, y * 2);
+            let (pr, pg, pb) = pixel_at_w(&prev, 0.0, x, y, 960);
+            let d = (er as i32 - pr as i32)
+                .abs()
+                .max((eg as i32 - pg as i32).abs())
+                .max((eb as i32 - pb as i32).abs());
+            eprintln!("{kind} ({x},{y}) export=({er},{eg},{eb}) preview=({pr},{pg},{pb}) d={d}");
+            assert!(d <= 40, "{kind} at ({x},{y}) diverges: export=({er},{eg},{eb}) preview=({pr},{pg},{pb})");
+        }
+        // sanity per kind: fade at p=0.5 is a red/blue blend; wipeleft at
+        // p=0.25 still shows opposite sides with different content
+        let (mr, _mg, mb) = pixel_at_w(&prev, 0.0, 480, 270, 960);
+        if kind == "core.crossfade" {
+            assert!((60..=200).contains(&(mr as i32)) && (60..=200).contains(&(mb as i32)),
+                "fade p=0.5 blends red+blue, was ({mr},{mb})");
+        } else {
+            let (lr, _lg, lb) = pixel_at_w(&prev, 0.0, 120, 270, 960);
+            let (rr, _rg, rb) = pixel_at_w(&prev, 0.0, 840, 270, 960);
+            assert!((lr > 150) != (rr > 150) || (lb > 150) != (rb > 150),
+                "wipe p=0.25 shows different content on each side: left=({lr},{lb}) right=({rr},{rb})");
+        }
+    }
+}
+
+/// Regression: a transition that comes AFTER earlier cuts/gaps used to kill
+/// the whole export ("xfade timebase … do not match") because concat moved
+/// the accumulated stream to another timebase. Found live via MCP.
+#[test]
+fn transition_after_gaps_still_exports() {
+    let Some(dir) = media_dir() else { return };
+    for (name, color) in [("xf_red.mp4", "red"), ("xf_blue.mp4", "blue")] {
+        let out = dir.join(name);
+        if !out.exists() {
+            let st = Command::new(ue_media::ffmpeg_bin())
+                .args([
+                    "-y", "-v", "error",
+                    "-f", "lavfi", "-i",
+                    &format!("color={color}:size=640x360:rate=30:duration=3"),
+                    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                ])
+                .arg(&out)
+                .status()
+                .unwrap();
+            assert!(st.success());
+        }
+    }
+    let mut project = Project::new("xfade-late");
+    let seq_id = project.active_sequence;
+    let red = ue_media::import_file(&dir.join("xf_red.mp4")).unwrap();
+    let blue = ue_media::import_file(&dir.join("xf_blue.mp4")).unwrap();
+    let counter = ue_media::import_file(&dir.join("counter.mp4")).unwrap();
+    let (rid, bid, cid) = (red.id, blue.id, counter.id);
+    project.assets.push(red);
+    project.assets.push(blue);
+    project.assets.push(counter);
+    let v1 = project
+        .sequence(seq_id)
+        .unwrap()
+        .tracks
+        .iter()
+        .find(|t| t.kind == TrackKind::Video)
+        .unwrap()
+        .id;
+    let mut store = ProjectStore::new(project);
+    // earlier material + a GAP before the transition pair (this is what broke)
+    store.insert_clip(v1, Clip::new_media(cid, 0, 2 * SEC, 0), InsertMode::Strict).unwrap();
+    store.insert_clip(v1, Clip::new_media(rid, 0, 2 * SEC, 3 * SEC), InsertMode::Strict).unwrap();
+    let mut b = Clip::new_media(bid, 1 * SEC, 3 * SEC, 5 * SEC);
+    b.transition_in = Some(TransitionRef {
+        effect_id: "core.crossfade".into(),
+        duration: 1 * SEC,
+        params: Default::default(),
+    });
+    store.insert_clip(v1, b, InsertMode::Strict).unwrap();
+
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-xfade-late.mp4");
+    let _ = std::fs::remove_file(&out);
+    export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+    let meta = ffprobe_json(&out);
+    let dur: f64 = meta["format"]["duration"].as_str().unwrap().parse().unwrap();
+    assert!((6.8..=7.3).contains(&dur), "timeline stays 7 s (handles absorb the fade), was {dur}");
+    // progress 0.5 of the fade at t=5.0 → red/blue blend
+    let (r, _g, b2) = pixel_at(&out, 5.0, 960, 540);
+    assert!((60..=200).contains(&(r as i32)) && (60..=200).contains(&(b2 as i32)),
+        "mid-fade blend at 5 s, was ({r},{b2})");
+}
+
+/// The paused frame of a KARAOKE subtitle must show the same highlighted word
+/// the export burns in (it used to degrade to a plain phrase line, so pause
+/// and playback looked different).
+#[test]
+fn preview_karaoke_matches_export() {
+    let Some(dir) = media_dir() else { return };
+    let src = dir.join("kar_black.mp4");
+    if !src.exists() {
+        let st = Command::new(ue_media::ffmpeg_bin())
+            .args([
+                "-y", "-v", "error",
+                "-f", "lavfi", "-i", "color=black:s=1920x1080:r=30:d=4",
+                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            ])
+            .arg(&src)
+            .status()
+            .unwrap();
+        assert!(st.success());
+    }
+    let mut project = Project::new("karaoke");
+    let seq_id = project.active_sequence;
+    let asset = ue_media::import_file(&src).unwrap();
+    let aid = asset.id;
+    project.assets.push(asset);
+    // two words, one second apart
+    let words: Vec<Word> = ["UNO", "DOS"]
+        .iter()
+        .enumerate()
+        .map(|(i, t)| Word {
+            text: (*t).into(),
+            start_us: i as i64 * SEC,
+            end_us: i as i64 * SEC + 800_000,
+            confidence: 1.0,
+            rejected: false,
+            display: None,
+        })
+        .collect();
+    let doc = TranscriptDoc {
+        id: Id::new(),
+        asset_id: aid,
+        language: "es".into(),
+        model: "t".into(),
+        segments: vec![ue_core::model::Segment {
+            text: "UNO DOS".into(),
+            start_us: 0,
+            end_us: 2 * SEC,
+            word_range: (0, 2),
+            emotion: None,
+            volume_rms: 0.0,
+        }],
+        words,
+        global_avg_volume: 0.0,
+    };
+    let doc_id = doc.id;
+    project.transcripts.push(doc);
+    let v1 = project.sequence(seq_id).unwrap().tracks.iter()
+        .find(|t| t.kind == TrackKind::Video).unwrap().id;
+    let mut store = ProjectStore::new(project);
+    store.insert_clip(v1, Clip::new_media(aid, 0, 4 * SEC, 0), InsertMode::Strict).unwrap();
+    let style = TextStyle {
+        size: 90.0,
+        highlight_color: Some("#FFB224".into()),
+        ..Default::default()
+    };
+    let sub = Clip {
+        id: Id::new(),
+        payload: ClipPayload::Subtitles { transcript_id: doc_id, style, mode: SubtitleMode::Karaoke, max_words: None },
+        start: 0,
+        duration: 4 * SEC,
+        speed: 1.0,
+        effects: vec![],
+        transform: Default::default(),
+        audio: Default::default(),
+        transition_in: None,
+        label_color: None,
+        name: None,
+        group: None,
+    };
+    let seq = store.project.sequence_mut(seq_id).unwrap();
+    seq.tracks.push(Track::new(TrackKind::Video, "V2"));
+    let v2 = seq.tracks.last().unwrap().id;
+    store.insert_clip(v2, sub, InsertMode::Strict).unwrap();
+
+    // at t=1.5s the FIRST word is already spoken (highlighted) and the second
+    // one has just started too → both amber. At t=0.5s only "UNO" is amber.
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-karaoke-preview.mp4");
+    let _ = std::fs::remove_file(&out);
+    export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+
+    let t = 500_000; // 0.5 s: "UNO" highlighted, "DOS" still dim
+    let jpeg = ue_export::preview::render_preview_frame(&store.project, seq_id, dir, t, 960, &[])
+        .unwrap()
+        .unwrap();
+    let prev = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-karaoke-prev.png");
+    std::fs::write(dir.join("kar-prev.jpg"), &jpeg).unwrap();
+    Command::new(ue_media::ffmpeg_bin())
+        .args(["-y", "-v", "error", "-i"]).arg(dir.join("kar-prev.jpg"))
+        .args(["-vf", "scale=960:540"]).arg(&prev).status().unwrap();
+
+    // count amber-ish pixels (the highlight) in both, on the caption band
+    let amber = |path: &Path, from_export: bool| -> usize {
+        let out = Command::new(ue_media::ffmpeg_bin())
+            .args(["-v", "error"])
+            .args(if from_export { vec!["-ss", "0.5"] } else { vec![] })
+            .args(["-i"]).arg(path)
+            .args(["-frames:v", "1", "-vf", "scale=960:540", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
+            .output()
+            .unwrap();
+        out.stdout
+            .chunks_exact(3)
+            .filter(|p| p[0] > 180 && p[1] > 120 && p[1] < 200 && p[2] < 90)
+            .count()
+    };
+    let e = amber(&out, true);
+    let p = amber(&prev, false);
+    eprintln!("amber pixels — export: {e}, preview: {p}");
+    assert!(e > 200, "the export really highlights a word ({e} amber px)");
+    assert!(p > 200, "the PAUSED preview highlights it too ({p} amber px)");
+    let ratio = p as f64 / e as f64;
+    assert!((0.7..=1.4).contains(&ratio), "same highlight: export={e} preview={p}");
+}
+
+/// core.drop_shadow must appear in the PAUSED preview, not only in playback.
+#[test]
+fn preview_drop_shadow_matches_export() {
+    let Some(dir) = media_dir() else { return };
+    for (name, filter) in [
+        ("ds_white_bg.mp4", "color=white:s=1920x1080:r=30:d=2"),
+        ("ds_red_pip.mp4", "color=red:s=400x400:r=30:d=2"),
+    ] {
+        let out = dir.join(name);
+        if !out.exists() {
+            let st = Command::new(ue_media::ffmpeg_bin())
+                .args(["-y", "-v", "error", "-f", "lavfi", "-i", filter,
+                       "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"])
+                .arg(&out).status().unwrap();
+            assert!(st.success());
+        }
+    }
+    let mut project = Project::new("shadow");
+    let seq_id = project.active_sequence;
+    let bg = ue_media::import_file(&dir.join("ds_white_bg.mp4")).unwrap();
+    let pip = ue_media::import_file(&dir.join("ds_red_pip.mp4")).unwrap();
+    let (bgid, pipid) = (bg.id, pip.id);
+    project.assets.push(bg);
+    project.assets.push(pip);
+    let seq = project.sequence_mut(seq_id).unwrap();
+    seq.tracks.push(Track::new(TrackKind::Video, "V2"));
+    let v1 = seq.tracks.iter().find(|t| t.name == "V1").unwrap().id;
+    let v2 = seq.tracks.iter().find(|t| t.name == "V2").unwrap().id;
+    let mut store = ProjectStore::new(project);
+    store.insert_clip(v1, Clip::new_media(bgid, 0, 2 * SEC, 0), InsertMode::Strict).unwrap();
+    let mut top = Clip::new_media(pipid, 0, 2 * SEC, 0);
+    top.effects.push(EffectInstance {
+        effect_id: "core.drop_shadow".into(),
+        enabled: true,
+        params: Default::default(),
+        color_params: Default::default(),
+    });
+    store.insert_clip(v2, top, InsertMode::Strict).unwrap();
+
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-shadow.mp4");
+    let _ = std::fs::remove_file(&out);
+    export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+    let jpeg = ue_export::preview::render_preview_frame(&store.project, seq_id, dir, SEC, 960, &[])
+        .unwrap()
+        .unwrap();
+    let prev = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-shadow-prev.png");
+    std::fs::write(dir.join("shadow-prev.jpg"), &jpeg).unwrap();
+    Command::new(ue_media::ffmpeg_bin())
+        .args(["-y", "-v", "error", "-i"]).arg(dir.join("shadow-prev.jpg"))
+        .args(["-vf", "scale=960:540"]).arg(&prev).status().unwrap();
+
+    // count "grey" pixels (the soft shadow over the white bg) in each
+    let greys = |path: &Path, from_export: bool| -> usize {
+        let o = Command::new(ue_media::ffmpeg_bin())
+            .args(["-v", "error"])
+            .args(if from_export { vec!["-ss", "1"] } else { vec![] })
+            .args(["-i"]).arg(path)
+            .args(["-frames:v", "1", "-vf", "scale=960:540", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
+            .output().unwrap();
+        o.stdout.chunks_exact(3)
+            .filter(|p| {
+                let (r, g, b) = (p[0] as i32, p[1] as i32, p[2] as i32);
+                // grey: dark-ish, and all channels close together (not the red pip)
+                r < 235 && r > 40 && (r - g).abs() < 24 && (g - b).abs() < 24
+            })
+            .count()
+    };
+    let e = greys(&out, true);
+    let p = greys(&prev, false);
+    eprintln!("shadow (grey) pixels — export: {e}, preview: {p}");
+    assert!(e > 500, "the export really draws a shadow ({e} grey px)");
+    assert!(p > 500, "the PAUSED preview draws it too ({p} grey px)");
+}
+
+/// Same, but the shadowed clip is an IMAGE (the user's repro: import an image,
+/// give it an exaggerated drop shadow). Compares the paused frame against the
+/// export PIXEL BY PIXEL instead of counting "grey": with opacity 1 the shadow
+/// is pure black, and a grey-counting check silently calls that "no shadow".
+#[test]
+fn preview_drop_shadow_on_image_matches_export() {
+    let Some(dir) = media_dir() else { return };
+    let bgv = dir.join("dsi_white_bg.mp4");
+    if !bgv.exists() {
+        Command::new(ue_media::ffmpeg_bin())
+            .args(["-y", "-v", "error", "-f", "lavfi", "-i", "color=white:s=1920x1080:r=30:d=2",
+                   "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"])
+            .arg(&bgv).status().unwrap();
+    }
+    let png = dir.join("dsi_red.png");
+    if !png.exists() {
+        Command::new(ue_media::ffmpeg_bin())
+            .args(["-y", "-v", "error", "-f", "lavfi", "-i", "color=red:s=400x400",
+                   "-frames:v", "1"])
+            .arg(&png).status().unwrap();
+    }
+    let mut project = Project::new("shadow-img");
+    let seq_id = project.active_sequence;
+    let bg = ue_media::import_file(&bgv).unwrap();
+    let img = ue_media::import_file(&png).unwrap();
+    let (bgid, imgid) = (bg.id, img.id);
+    project.assets.push(bg);
+    project.assets.push(img);
+    let seq = project.sequence_mut(seq_id).unwrap();
+    seq.tracks.push(Track::new(TrackKind::Video, "V2"));
+    let v1 = seq.tracks.iter().find(|t| t.name == "V1").unwrap().id;
+    let v2 = seq.tracks.iter().find(|t| t.name == "V2").unwrap().id;
+    let mut store = ProjectStore::new(project);
+    store.insert_clip(v1, Clip::new_media(bgid, 0, 2 * SEC, 0), InsertMode::Strict).unwrap();
+    let mut top = Clip::new_media(imgid, 0, 2 * SEC, 0);
+    let mut params: std::collections::BTreeMap<String, ue_core::keyframe::Param> = Default::default();
+    params.insert("offset_x".into(), 60.0.into());
+    params.insert("offset_y".into(), 60.0.into());
+    params.insert("blur".into(), 30.0.into());
+    params.insert("opacity".into(), 1.0.into());
+    params.insert("margin".into(), 200.0.into());
+    top.effects.push(EffectInstance {
+        effect_id: "core.drop_shadow".into(),
+        enabled: true,
+        params,
+        color_params: Default::default(),
+    });
+    store.insert_clip(v2, top, InsertMode::Strict).unwrap();
+
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-shadow-img.mp4");
+    let _ = std::fs::remove_file(&out);
+    export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+    let jpeg = ue_export::preview::render_preview_frame(&store.project, seq_id, dir, SEC, 960, &[])
+        .unwrap()
+        .unwrap();
+    let prev = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-shadow-img-prev.png");
+    std::fs::write(dir.join("shadow-img-prev.jpg"), &jpeg).unwrap();
+    Command::new(ue_media::ffmpeg_bin())
+        .args(["-y", "-v", "error", "-i"]).arg(dir.join("shadow-img-prev.jpg"))
+        .args(["-vf", "scale=960:540"]).arg(&prev).status().unwrap();
+
+    // the shadow is DARK (not grey): count pixels that are neither the red
+    // image nor the white background
+    let dark = |path: &Path, from_export: bool| -> usize {
+        let o = Command::new(ue_media::ffmpeg_bin())
+            .args(["-v", "error"])
+            .args(if from_export { vec!["-ss", "1"] } else { vec![] })
+            .args(["-i"]).arg(path)
+            .args(["-frames:v", "1", "-vf", "scale=960:540", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
+            .output().unwrap();
+        o.stdout.chunks_exact(3)
+            .filter(|p| {
+                let (r, g, b) = (p[0] as i32, p[1] as i32, p[2] as i32);
+                let is_red = r > 150 && g < 90;
+                let is_white = r > 235 && g > 235 && b > 235;
+                !is_red && !is_white
+            })
+            .count()
+    };
+    let e = dark(&out, true);
+    let p = dark(&prev, false);
+    eprintln!("IMAGE shadow px — export: {e}, preview: {p}");
+    assert!(e > 5000, "the export draws the shadow ({e} px)");
+    assert!(p > 5000, "the PAUSED preview draws it too ({p} px)");
+    let ratio = p as f64 / e as f64;
+    assert!((0.75..=1.3).contains(&ratio), "same shadow: export={e} preview={p}");
+}
+
+/// A subtitles clip with `max_words: Some(2)` chunks the captions two words at
+/// a time, in the export AND in the paused preview (the user picks the number,
+/// the frame-width heuristic steps aside).
+#[test]
+fn subtitles_respect_the_word_cap() {
+    use ue_export::graph::transcript_phrases;
+    let asset_id = Id::new();
+    let labels = ["uno", "dos", "tres", "cuatro", "cinco", "seis"];
+    let words: Vec<Word> = labels
+        .iter()
+        .enumerate()
+        .map(|(i, t)| Word {
+            text: (*t).into(),
+            start_us: i as i64 * 300_000,
+            end_us: i as i64 * 300_000 + 250_000,
+            confidence: 1.0,
+            rejected: false,
+            display: None,
+        })
+        .collect();
+    let doc = TranscriptDoc {
+        id: Id::new(),
+        asset_id,
+        language: "es".into(),
+        model: "t".into(),
+        segments: vec![],
+        words,
+        global_avg_volume: 0.0,
+    };
+    // no cap: the whole run fits one caption line at 64 chars
+    let auto = transcript_phrases(&doc, 64);
+    assert_eq!(auto.len(), 1, "without a cap it packs the line: {auto:?}");
+
+    // the cap is what the UI/MCP write into the clip; check the chunker honours it
+    let two = ue_export::graph::caption_phrases_for_test(&doc, 64, Some(2));
+    assert_eq!(two.len(), 3, "6 words / 2 per line = 3 captions: {two:?}");
+    assert_eq!(two[0].0, "uno dos");
+    assert_eq!(two[1].0, "tres cuatro");
+    assert_eq!(two[2].0, "cinco seis");
+
+    let one = ue_export::graph::caption_phrases_for_test(&doc, 64, Some(1));
+    assert_eq!(one.len(), 6, "one word per caption");
+    assert_eq!(one[3].0, "cuatro");
+}
+
+/// A TITLE with effects + a transform must actually get them: the clip becomes
+/// its own RGBA layer and goes through the same effect/transform chain a media
+/// clip does. Before this, every effect and every transform on text silently
+/// did nothing (the text was just burned in with drawtext at the end).
+#[test]
+fn text_clip_gets_effects_and_transform() {
+    let Some(dir) = media_dir() else { return };
+    let bgv = dir.join("txfx_black.mp4");
+    if !bgv.exists() {
+        Command::new(ue_media::ffmpeg_bin())
+            .args(["-y", "-v", "error", "-f", "lavfi", "-i", "color=black:s=1920x1080:r=30:d=2",
+                   "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"])
+            .arg(&bgv).status().unwrap();
+    }
+    let mut project = Project::new("text-fx");
+    let seq_id = project.active_sequence;
+    let bg = ue_media::import_file(&bgv).unwrap();
+    let bgid = bg.id;
+    project.assets.push(bg);
+    let seq = project.sequence_mut(seq_id).unwrap();
+    seq.tracks.push(Track::new(TrackKind::Video, "V2"));
+    let v1 = seq.tracks.iter().find(|t| t.name == "V1").unwrap().id;
+    let v2 = seq.tracks.iter().find(|t| t.name == "V2").unwrap().id;
+    let mut store = ProjectStore::new(project);
+    store.insert_clip(v1, Clip::new_media(bgid, 0, 2 * SEC, 0), InsertMode::Strict).unwrap();
+
+    // the SAME title twice: once plain, once moved far down + blurred
+    let render = |styled: bool| -> Vec<u8> {
+        let mut st = ProjectStore::new(store.project.clone());
+        let mut text = Clip::new_text("HELLO", 0, 2 * SEC);
+        if let ClipPayload::Text { style, .. } = &mut text.payload {
+            style.size = 120.0;
+        }
+        if styled {
+            text.transform.position = (0.0.into(), 300.0.into());
+            let mut params: std::collections::BTreeMap<String, ue_core::keyframe::Param> =
+                Default::default();
+            params.insert("sigma".into(), 6.0.into());
+            text.effects.push(EffectInstance {
+                effect_id: "core.gaussian_blur".into(),
+                enabled: true,
+                params,
+                color_params: Default::default(),
+            });
+        }
+        st.insert_clip(v2, text, InsertMode::Strict).unwrap();
+        let out = Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(if styled { "ue-textfx-on.mp4" } else { "ue-textfx-off.mp4" });
+        let _ = std::fs::remove_file(&out);
+        export_sequence(&st.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+        let o = Command::new(ue_media::ffmpeg_bin())
+            .args(["-v", "error", "-ss", "1", "-i"]).arg(&out)
+            .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
+            .output().unwrap();
+        o.stdout
+    };
+
+    // brightest row of the frame = where the text sits
+    let text_row = |buf: &[u8]| -> usize {
+        let (w, h) = (1920usize, 1080usize);
+        let mut best = (0usize, 0u64);
+        for y in 0..h {
+            let sum: u64 = (0..w).map(|x| buf[(y * w + x) * 3] as u64).sum();
+            if sum > best.1 {
+                best = (y, sum);
+            }
+        }
+        best.0
+    };
+    let plain = render(false);
+    let styled = render(true);
+    let y_plain = text_row(&plain);
+    let y_styled = text_row(&styled);
+    eprintln!("text row — plain: {y_plain}, styled (moved +300px): {y_styled}");
+    assert!(
+        (y_plain as i64 - 540).abs() < 90,
+        "the plain title sits at the middle, was {y_plain}"
+    );
+    assert!(
+        y_styled > y_plain + 200,
+        "the TRANSFORM moved the title down ({y_plain} → {y_styled})"
+    );
+    // and the blur really softened it: fewer near-white pixels than the sharp one
+    let bright = |b: &[u8]| b.chunks_exact(3).filter(|p| p[0] > 230).count();
+    let (bp, bs) = (bright(&plain), bright(&styled));
+    eprintln!("near-white px — plain: {bp}, blurred: {bs}");
+    assert!(bs < bp, "the EFFECT (blur) softened the title ({bp} → {bs})");
+}
+
+/// The PAUSED frame of a styled text clip matches the export (both now render
+/// it as a layer through the effect/transform chain).
+#[test]
+fn preview_styled_text_matches_export() {
+    let Some(dir) = media_dir() else { return };
+    let bgv = dir.join("txfx_black.mp4");
+    if !bgv.exists() {
+        Command::new(ue_media::ffmpeg_bin())
+            .args(["-y", "-v", "error", "-f", "lavfi", "-i", "color=black:s=1920x1080:r=30:d=2",
+                   "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"])
+            .arg(&bgv).status().unwrap();
+    }
+    let mut project = Project::new("text-fx-preview");
+    let seq_id = project.active_sequence;
+    let bg = ue_media::import_file(&bgv).unwrap();
+    let bgid = bg.id;
+    project.assets.push(bg);
+    let seq = project.sequence_mut(seq_id).unwrap();
+    seq.tracks.push(Track::new(TrackKind::Video, "V2"));
+    let v1 = seq.tracks.iter().find(|t| t.name == "V1").unwrap().id;
+    let v2 = seq.tracks.iter().find(|t| t.name == "V2").unwrap().id;
+    let mut store = ProjectStore::new(project);
+    store.insert_clip(v1, Clip::new_media(bgid, 0, 2 * SEC, 0), InsertMode::Strict).unwrap();
+    let mut text = Clip::new_text("HELLO", 0, 2 * SEC);
+    if let ClipPayload::Text { style, .. } = &mut text.payload {
+        style.size = 120.0;
+    }
+    text.transform.position = (0.0.into(), 300.0.into());
+    text.transform.scale = (0.5.into(), 0.5.into());
+    store.insert_clip(v2, text, InsertMode::Strict).unwrap();
+
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-textfx-prev.mp4");
+    let _ = std::fs::remove_file(&out);
+    export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+    let jpeg = ue_export::preview::render_preview_frame(&store.project, seq_id, dir, SEC, 960, &[])
+        .unwrap()
+        .unwrap();
+    let prev = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-textfx-prev.png");
+    std::fs::write(dir.join("textfx-prev.jpg"), &jpeg).unwrap();
+    Command::new(ue_media::ffmpeg_bin())
+        .args(["-y", "-v", "error", "-i"]).arg(dir.join("textfx-prev.jpg"))
+        .args(["-vf", "scale=960:540"]).arg(&prev).status().unwrap();
+
+    // brightest row (the text) must land at the same place in both
+    let row = |path: &Path, from_export: bool| -> usize {
+        let o = Command::new(ue_media::ffmpeg_bin())
+            .args(["-v", "error"])
+            .args(if from_export { vec!["-ss", "1"] } else { vec![] })
+            .args(["-i"]).arg(path)
+            .args(["-frames:v", "1", "-vf", "scale=960:540", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
+            .output().unwrap();
+        let (w, h) = (960usize, 540usize);
+        let mut best = (0usize, 0u64);
+        for y in 0..h {
+            let sum: u64 = (0..w).map(|x| o.stdout[(y * w + x) * 3] as u64).sum();
+            if sum > best.1 { best = (y, sum); }
+        }
+        best.0
+    };
+    let e = row(&out, true);
+    let p = row(&prev, false);
+    eprintln!("styled text row — export: {e}, paused preview: {p}");
+    assert!(e > 300, "the export really moved the text down, was row {e}");
+    assert!((e as i64 - p as i64).abs() <= 12, "pause == export: export={e} preview={p}");
+}
+
+/// Wrapping is measured with the REAL font: a caption too wide for the frame
+/// becomes several lines, the block stays vertically centred on y_offset, and
+/// the PAUSED frame wraps exactly where the export does.
+#[test]
+fn long_caption_wraps_and_pause_matches_export() {
+    let Some(dir) = media_dir() else { return };
+    let bgv = dir.join("wrap_black.mp4");
+    if !bgv.exists() {
+        Command::new(ue_media::ffmpeg_bin())
+            .args(["-y", "-v", "error", "-f", "lavfi", "-i", "color=black:s=1080x1920:r=30:d=2",
+                   "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"])
+            .arg(&bgv).status().unwrap();
+    }
+    let mut project = Project::new("wrap");
+    let seq_id = project.active_sequence;
+    project.sequence_mut(seq_id).unwrap().resolution = (1080, 1920);
+    let bg = ue_media::import_file(&bgv).unwrap();
+    let bgid = bg.id;
+    project.assets.push(bg);
+    let seq = project.sequence_mut(seq_id).unwrap();
+    seq.tracks.push(Track::new(TrackKind::Video, "V2"));
+    let v1 = seq.tracks.iter().find(|t| t.name == "V1").unwrap().id;
+    let v2 = seq.tracks.iter().find(|t| t.name == "V2").unwrap().id;
+    let mut store = ProjectStore::new(project);
+    store.insert_clip(v1, Clip::new_media(bgid, 0, 2 * SEC, 0), InsertMode::Strict).unwrap();
+
+    // a line far too long for a 1080-wide frame at 80 px
+    let long = "esta frase es demasiado larga para caber en una sola linea del video";
+    let mut text = Clip::new_text(long, 0, 2 * SEC);
+    if let ClipPayload::Text { style, .. } = &mut text.payload {
+        style.size = 80.0;
+    }
+    store.insert_clip(v2, text, InsertMode::Strict).unwrap();
+
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-wrap.mp4");
+    let _ = std::fs::remove_file(&out);
+    export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+    let jpeg = ue_export::preview::render_preview_frame(&store.project, seq_id, dir, SEC, 1080, &[])
+        .unwrap()
+        .unwrap();
+    let prev = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-wrap-prev.png");
+    std::fs::write(dir.join("wrap-prev.jpg"), &jpeg).unwrap();
+    Command::new(ue_media::ffmpeg_bin())
+        .args(["-y", "-v", "error", "-i"]).arg(dir.join("wrap-prev.jpg"))
+        .args(["-vf", "scale=1080:1920"]).arg(&prev).status().unwrap();
+
+    // rows that contain text, and how many separate bands of them there are
+    let bands = |path: &Path, from_export: bool| -> (Vec<usize>, usize, usize) {
+        let o = Command::new(ue_media::ffmpeg_bin())
+            .args(["-v", "error"])
+            .args(if from_export { vec!["-ss", "1"] } else { vec![] })
+            .args(["-i"]).arg(path)
+            .args(["-frames:v", "1", "-vf", "scale=1080:1920", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
+            .output().unwrap();
+        let (w, h) = (1080usize, 1920usize);
+        let mut rows = vec![];
+        let mut widest = 0usize;
+        for y in 0..h {
+            let lit = (0..w).filter(|x| o.stdout[(y * w + x) * 3] > 120).count();
+            if lit > 0 {
+                rows.push(y);
+                widest = widest.max(lit);
+            }
+        }
+        // count bands (runs of consecutive text rows)
+        let mut n = 0;
+        for (i, y) in rows.iter().enumerate() {
+            if i == 0 || *y > rows[i - 1] + 3 {
+                n += 1;
+            }
+        }
+        (rows.clone(), n, widest)
+    };
+    let (erows, elines, ewide) = bands(&out, true);
+    let (prows, plines, pwide) = bands(&prev, false);
+    eprintln!("export: {elines} lines, rows {}..{}, widest {ewide}px",
+        erows.first().unwrap(), erows.last().unwrap());
+    eprintln!("paused: {plines} lines, rows {}..{}, widest {pwide}px",
+        prows.first().unwrap(), prows.last().unwrap());
+
+    assert!(elines >= 2, "the long caption WRAPPED ({elines} lines)");
+    assert!(ewide < 1080, "no line spills past the frame ({ewide}px of 1080)");
+    assert_eq!(elines, plines, "pause wraps into the same number of lines");
+
+    // the block stays centred on y_offset (=0 → the middle of the frame)
+    let mid_e = (erows.first().unwrap() + erows.last().unwrap()) / 2;
+    let mid_p = (prows.first().unwrap() + prows.last().unwrap()) / 2;
+    assert!((mid_e as i64 - 960).abs() < 60, "block centred, was {mid_e}");
+    assert!((mid_e as i64 - mid_p as i64).abs() <= 6, "pause == export: {mid_e} vs {mid_p}");
+}
+
+/// Karaoke wraps too: a long phrase spreads over several lines, the highlight
+/// still follows the spoken word, and pause matches the export.
+#[test]
+fn karaoke_wraps_across_lines() {
+    let Some(dir) = media_dir() else { return };
+    let src = dir.join("kwrap_black.mp4");
+    if !src.exists() {
+        Command::new(ue_media::ffmpeg_bin())
+            .args(["-y", "-v", "error", "-f", "lavfi", "-i", "color=black:s=1080x1920:r=30:d=6",
+                   "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"])
+            .arg(&src).status().unwrap();
+    }
+    let mut project = Project::new("kwrap");
+    let seq_id = project.active_sequence;
+    project.sequence_mut(seq_id).unwrap().resolution = (1080, 1920);
+    let asset = ue_media::import_file(&src).unwrap();
+    let aid = asset.id;
+    project.assets.push(asset);
+    // 8 long-ish words, close together so they stay one caption
+    let labels = ["ESTA", "FRASE", "LARGUISIMA", "NECESITA", "VARIAS", "LINEAS", "PARA", "CABER"];
+    let words: Vec<Word> = labels
+        .iter()
+        .enumerate()
+        .map(|(i, t)| Word {
+            text: (*t).into(),
+            start_us: i as i64 * 200_000,
+            end_us: i as i64 * 200_000 + 180_000,
+            confidence: 1.0,
+            rejected: false,
+            display: None,
+        })
+        .collect();
+    let doc = TranscriptDoc {
+        id: Id::new(),
+        asset_id: aid,
+        language: "es".into(),
+        model: "t".into(),
+        segments: vec![],
+        words,
+        global_avg_volume: 0.0,
+    };
+    let doc_id = doc.id;
+    project.transcripts.push(doc);
+    let seq = project.sequence_mut(seq_id).unwrap();
+    seq.tracks.push(Track::new(TrackKind::Video, "V2"));
+    let v1 = seq.tracks.iter().find(|t| t.name == "V1").unwrap().id;
+    let v2 = seq.tracks.iter().find(|t| t.name == "V2").unwrap().id;
+    let mut store = ProjectStore::new(project);
+    store.insert_clip(v1, Clip::new_media(aid, 0, 6 * SEC, 0), InsertMode::Strict).unwrap();
+    let style = TextStyle {
+        size: 80.0,
+        highlight_color: Some("#FFB224".into()),
+        ..Default::default()
+    };
+    let sub = Clip {
+        id: Id::new(),
+        payload: ClipPayload::Subtitles {
+            transcript_id: doc_id,
+            style,
+            mode: SubtitleMode::Karaoke,
+            max_words: None,
+        },
+        start: 0,
+        duration: 6 * SEC,
+        speed: 1.0,
+        effects: vec![],
+        transform: Default::default(),
+        audio: Default::default(),
+        transition_in: None,
+        label_color: None,
+        name: None,
+        group: None,
+    };
+    store.insert_clip(v2, sub, InsertMode::Strict).unwrap();
+
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-kwrap.mp4");
+    let _ = std::fs::remove_file(&out);
+    export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+    let t = 1_000_000; // 1 s: the first 5 words are already spoken
+    let jpeg = ue_export::preview::render_preview_frame(&store.project, seq_id, dir, t, 1080, &[])
+        .unwrap()
+        .unwrap();
+    let prev = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-kwrap-prev.png");
+    std::fs::write(dir.join("kwrap-prev.jpg"), &jpeg).unwrap();
+    Command::new(ue_media::ffmpeg_bin())
+        .args(["-y", "-v", "error", "-i"]).arg(dir.join("kwrap-prev.jpg"))
+        .args(["-vf", "scale=1080:1920"]).arg(&prev).status().unwrap();
+
+    let stats = |path: &Path, from_export: bool| -> (usize, usize, usize) {
+        let o = Command::new(ue_media::ffmpeg_bin())
+            .args(["-v", "error"])
+            .args(if from_export { vec!["-ss", "1"] } else { vec![] })
+            .args(["-i"]).arg(path)
+            .args(["-frames:v", "1", "-vf", "scale=1080:1920", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
+            .output().unwrap();
+        let (w, h) = (1080usize, 1920usize);
+        let mut rows: Vec<usize> = vec![];
+        let mut amber = 0usize;
+        for y in 0..h {
+            let mut lit = false;
+            for x in 0..w {
+                let i = (y * w + x) * 3;
+                let (r, g, b) = (o.stdout[i], o.stdout[i + 1], o.stdout[i + 2]);
+                if r > 100 || g > 100 {
+                    lit = true;
+                }
+                if r > 180 && (120..200).contains(&g) && b < 90 {
+                    amber += 1;
+                }
+            }
+            if lit {
+                rows.push(y);
+            }
+        }
+        let mut lines = 0;
+        for (i, y) in rows.iter().enumerate() {
+            if i == 0 || *y > rows[i - 1] + 3 {
+                lines += 1;
+            }
+        }
+        (lines, amber, rows.len())
+    };
+    let (elines, eamber, _) = stats(&out, true);
+    let (plines, pamber, _) = stats(&prev, false);
+    eprintln!("karaoke — export: {elines} lines, {eamber} amber px | pause: {plines} lines, {pamber} amber px");
+    assert!(elines >= 2, "the karaoke phrase WRAPPED ({elines} lines)");
+    assert_eq!(elines, plines, "pause wraps the same");
+    assert!(eamber > 200, "the highlight still lights the spoken words");
+    let ratio = pamber as f64 / eamber as f64;
+    assert!((0.7..=1.4).contains(&ratio), "same highlight: export={eamber} pause={pamber}");
+}
+
+/// A range deep inside a long recording must cost its own LENGTH, not its
+/// offset. Before, the whole timeline was rendered from t=0 and trimmed at the
+/// end of the filtergraph, so a 5 s clip at minute N took as long as rendering
+/// N minutes. Now the sequence is cut to the range up front and each input is
+/// seeked with `-ss`, so early and late ranges take the same time.
+#[test]
+fn late_range_costs_the_same_as_an_early_one() {
+    let Some(dir) = media_dir() else { return };
+    // 4 minutes of 720p: long enough that decoding it from 0 is unmissable
+    let long = dir.join("long4min.mp4");
+    if !long.exists() {
+        let st = Command::new(ue_media::ffmpeg_bin())
+            .args([
+                "-y", "-v", "error",
+                "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30:duration=240",
+                "-f", "lavfi", "-i", "sine=frequency=300:duration=240",
+                "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+                "-g", "60", "-c:a", "aac", "-shortest",
+            ])
+            .arg(&long)
+            .status()
+            .unwrap();
+        assert!(st.success());
+    }
+    let mut project = Project::new("late-range");
+    let seq_id = project.active_sequence;
+    project.sequence_mut(seq_id).unwrap().resolution = (1280, 720);
+    let asset = ue_media::import_file(&long).unwrap();
+    let aid = asset.id;
+    let dur = asset.probe.duration_us;
+    project.assets.push(asset);
+    let v1 = project.sequence(seq_id).unwrap().tracks.iter()
+        .find(|t| t.kind == TrackKind::Video).unwrap().id;
+    let mut store = ProjectStore::new(project);
+    // the whole recording as ONE clip — exactly the shape of the field report
+    store.insert_clip(v1, Clip::new_media(aid, 0, dur, 0), InsertMode::Strict).unwrap();
+
+    let export_range = |name: &str, from: i64, to: i64| -> (f64, f64) {
+        let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+        let _ = std::fs::remove_file(&out);
+        let settings = ExportSettings { range: Some((from, to)), ..Default::default() };
+        let t0 = std::time::Instant::now();
+        export_sequence(&store.project, seq_id, dir, &out, &settings).unwrap();
+        let secs = t0.elapsed().as_secs_f64();
+        let meta = ffprobe_json(&out);
+        let d: f64 = meta["format"]["duration"].as_str().unwrap().parse().unwrap();
+        (secs, d)
+    };
+
+    // the same 5-second clip, once at the start and once at 3.5 minutes in
+    let (early_s, early_d) = export_range("ue-range-early.mp4", 2 * SEC, 7 * SEC);
+    let (late_s, late_d) = export_range("ue-range-late.mp4", 210 * SEC, 215 * SEC);
+    eprintln!("5 s range — early: {early_s:.1}s (out {early_d:.1}s) · late (3.5 min in): {late_s:.1}s (out {late_d:.1}s)");
+
+    assert!((4.8..=5.3).contains(&early_d), "early piece is 5 s, was {early_d}");
+    assert!((4.8..=5.3).contains(&late_d), "late piece is 5 s, was {late_d}");
+    // the late one must not be dominated by its offset any more
+    assert!(
+        late_s < early_s * 3.0 + 2.0,
+        "a late range still costs its offset: early {early_s:.1}s vs late {late_s:.1}s"
+    );
+}
+
+/// A preview frame that never finishes must be KILLED, not waited on forever.
+/// `Command::output()` used to block the calling thread for good and leave the
+/// ffmpeg process alive; an agent retrying the tool then piled up processes
+/// (~17 seen in the field) and pegged the machine.
+#[test]
+fn a_stalled_preview_frame_is_killed_not_waited_on() {
+    if !ffmpeg_available() {
+        return;
+    }
+    let before = ffmpeg_process_count();
+    // a graph that produces frames forever and never satisfies `-frames:v 1`
+    // would hang; here we simply prove the bound exists and reports itself
+    let args: Vec<String> = vec![
+        "-v".into(), "error".into(),
+        "-f".into(), "lavfi".into(),
+        // a source that never ends, and no frame limit → runs until killed
+        "-i".into(), "testsrc2=size=64x64:rate=30".into(),
+        "-f".into(), "null".into(), "-".into(),
+    ];
+    let t0 = std::time::Instant::now();
+    let r = ue_export::preview::run_bounded_for_test(&args, std::time::Duration::from_secs(2));
+    let secs = t0.elapsed().as_secs_f64();
+    eprintln!("stalled ffmpeg: returned after {secs:.1}s → {r:?}");
+    assert!(r.is_err(), "an endless render must fail, not hang");
+    assert!(secs < 6.0, "it was killed at the deadline, took {secs:.1}s");
+
+    // and no ffmpeg is left behind
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let after = ffmpeg_process_count();
+    assert!(after <= before, "no ffmpeg leaked (before {before}, after {after})");
+}
+
+/// How many ffmpeg processes this machine currently has.
+fn ffmpeg_process_count() -> usize {
+    let out = Command::new("pgrep").args(["-f", "ffmpeg"]).output();
+    out.map(|o| String::from_utf8_lossy(&o.stdout).lines().count()).unwrap_or(0)
+}
+
+/// EMOJI — STILL BROKEN, and this test says so out loud.
+///
+/// Moving to libass fixed the *font fallback* problem (`drawtext` loads exactly
+/// one face and draws .notdef boxes for anything it lacks), and fontconfig here
+/// does resolve "Apple Color Emoji". But libass/FreeType in this ffmpeg build
+/// cannot rasterise it: Apple Color Emoji is an `sbix` BITMAP font, and colour
+/// bitmap glyphs come out as boxes. Measured: 0 coloured pixels.
+///
+/// The check is for COLOUR, deliberately. An earlier version of this test only
+/// counted "more ink than without the emoji" — which a .notdef box satisfies
+/// perfectly, so it passed while the frame showed two empty rectangles. A test
+/// that can be satisfied by the bug is worse than no test.
+///
+/// Real fixes: ship a CBDT/COLR colour font (Noto Color Emoji) and confirm the
+/// bundled libass rasterises it, or rasterise text ourselves with a shaping
+/// engine (cosmic-text, PLAN §6.6) instead of handing it to ffmpeg at all.
+#[test]
+fn a_title_with_an_emoji_renders_colour_glyphs() {
+    let Some(dir) = media_dir() else { return };
+    let bgv = dir.join("emoji_black.mp4");
+    if !bgv.exists() {
+        Command::new(ue_media::ffmpeg_bin())
+            .args(["-y", "-v", "error", "-f", "lavfi", "-i", "color=black:s=1280x720:r=30:d=2",
+                   "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"])
+            .arg(&bgv).status().unwrap();
+    }
+    let mut project = Project::new("emoji");
+    let seq_id = project.active_sequence;
+    project.sequence_mut(seq_id).unwrap().resolution = (1280, 720);
+    let bg = ue_media::import_file(&bgv).unwrap();
+    let bgid = bg.id;
+    project.assets.push(bg);
+    let seq = project.sequence_mut(seq_id).unwrap();
+    seq.tracks.push(Track::new(TrackKind::Video, "V2"));
+    let v1 = seq.tracks.iter().find(|t| t.name == "V1").unwrap().id;
+    let v2 = seq.tracks.iter().find(|t| t.name == "V2").unwrap().id;
+    let mut store = ProjectStore::new(project);
+    store.insert_clip(v1, Clip::new_media(bgid, 0, 2 * SEC, 0), InsertMode::Strict).unwrap();
+    let mut t = Clip::new_text("HOLA \u{1F3AC}\u{1F525}", 0, 2 * SEC);
+    if let ClipPayload::Text { style, .. } = &mut t.payload {
+        style.size = 90.0;
+    }
+    store.insert_clip(v2, t, InsertMode::Strict).unwrap();
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-emoji.mp4");
+    let _ = std::fs::remove_file(&out);
+    export_sequence(&store.project, seq_id, dir, &out, &ExportSettings::default()).unwrap();
+    let buf = Command::new(ue_media::ffmpeg_bin())
+        .args(["-v", "error", "-ss", "1", "-i"]).arg(&out)
+        .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"])
+        .output().unwrap().stdout;
+
+    // a real emoji is COLOURED; a .notdef box is white, like the rest of the text
+    let coloured = buf
+        .chunks_exact(3)
+        .filter(|p| {
+            let (mx, mn) = (
+                p[0].max(p[1]).max(p[2]) as i32,
+                p[0].min(p[1]).min(p[2]) as i32,
+            );
+            mx > 90 && mx - mn > 60
+        })
+        .count();
+    eprintln!("coloured pixels in the exported frame: {coloured}");
+    assert!(coloured > 200, "the emoji rendered as colour glyphs, not boxes ({coloured} px)");
+}
+
+/// A LONG karaoke transcript used to blow the filtergraph past ffmpeg's parser
+/// ("the subtitle filtergraph is too large (1263 KB)"). With libass the whole
+/// transcript lives in a FILE, so the graph size no longer depends on it.
+#[test]
+fn a_long_karaoke_transcript_no_longer_explodes_the_filtergraph() {
+    // 20 minutes of dense speech: ~6000 words. The old path emitted TWO
+    // drawtext per word — well over a megabyte of filtergraph.
+    let asset = fake_asset(MediaKind::Video, "long.mp4", 1200, true);
+    let aid = asset.id;
+    let mut project = Project::new("kbig");
+    let seq_id = project.active_sequence;
+    project.sequence_mut(seq_id).unwrap().resolution = (640, 360);
+    project.assets.push(asset);
+    let words: Vec<Word> = (0..6000)
+        .map(|i| Word {
+            text: format!("palabra{i}"),
+            start_us: i as i64 * 200_000,
+            end_us: i as i64 * 200_000 + 180_000,
+            confidence: 1.0,
+            rejected: false,
+            display: None,
+        })
+        .collect();
+    let doc = TranscriptDoc {
+        id: Id::new(),
+        asset_id: aid,
+        language: "es".into(),
+        model: "t".into(),
+        segments: vec![],
+        words,
+        global_avg_volume: 0.0,
+    };
+    let doc_id = doc.id;
+    project.transcripts.push(doc);
+    let seq = project.sequence_mut(seq_id).unwrap();
+    seq.tracks.push(Track::new(TrackKind::Video, "V2"));
+    let v1 = seq.tracks.iter().find(|t| t.name == "V1").unwrap().id;
+    let v2 = seq.tracks.iter().find(|t| t.name == "V2").unwrap().id;
+    let mut store = ProjectStore::new(project);
+    store.insert_clip(v1, Clip::new_media(aid, 0, 1200 * SEC, 0), InsertMode::Strict).unwrap();
+    let sub = Clip {
+        id: Id::new(),
+        payload: ClipPayload::Subtitles {
+            transcript_id: doc_id,
+            style: TextStyle { size: 40.0, highlight_color: Some("#FFB224".into()), ..Default::default() },
+            mode: SubtitleMode::Karaoke,
+            max_words: None,
+        },
+        start: 0,
+        duration: 1200 * SEC,
+        speed: 1.0,
+        effects: vec![],
+        transform: Default::default(),
+        audio: Default::default(),
+        transition_in: None,
+        label_color: None,
+        name: None,
+        group: None,
+    };
+    store.insert_clip(v2, sub, InsertMode::Strict).unwrap();
+
+    // only the PLAN: what matters is that the graph stays small no matter how
+    // big the transcript is (rendering 20 minutes here would prove nothing)
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue-kbig.mp4");
+    let plan = ue_export::graph::build_ffmpeg_args(
+        &store.project, seq_id, Path::new("."), &out, &ExportSettings::default(),
+    )
+    .expect("a 6000-word karaoke must not be rejected any more");
+    let graph_len = plan
+        .args
+        .iter()
+        .find(|a| a.contains("[vout]"))
+        .map(|a| a.len())
+        .unwrap_or(0);
+    eprintln!("filtergraph with a 6000-word karaoke: {graph_len} bytes");
+    assert!(graph_len < 20_000, "the graph no longer scales with the transcript ({graph_len} bytes)");
+    let p = plan.subs_file.expect("an ASS script was written");
+    let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+    let script = std::fs::read_to_string(&p).unwrap_or_default();
+    eprintln!("…and the ASS script carrying it: {size} bytes, {} events", script.matches("Dialogue:").count());
+    assert!(size > 100_000, "the whole transcript really is in the file ({size} bytes)");
+    assert!(script.contains("\\k"), "karaoke uses ASS \\k timing tags");
+    let _ = std::fs::remove_file(&p);
 }

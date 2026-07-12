@@ -12,6 +12,8 @@ pub mod edl;
 pub mod avatar_gen;
 pub mod graph;
 pub mod preview;
+pub mod ass;
+pub mod range;
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
@@ -195,6 +197,13 @@ pub fn export_sequence_with_progress(
 
     let status = child.wait().map_err(|e| ExportError::Spawn(e.to_string()))?;
     let err_text = stderr_thread.join().unwrap_or_default();
+    // the subtitle script and the rasterised titles were only ever for this run
+    if let Some(p) = &plan.subs_file {
+        let _ = std::fs::remove_file(p);
+    }
+    for p in &plan.temp_files {
+        let _ = std::fs::remove_file(p);
+    }
     if cancel.load(Ordering::SeqCst) {
         let _ = std::fs::remove_file(output);
         return Err(ExportError::Cancelled);

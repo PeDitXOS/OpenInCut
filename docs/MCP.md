@@ -242,10 +242,17 @@ to preview the split.
 `job_id` right away and run in the background.
 
 - **`get_job_status`** `{job_id}` → `{status: running|done|error, progress,
-  message, result?, error?}`. Poll until `done` (result is in `result`) or
-  `error`. A launch that "times out" client-side is **still running** — poll,
-  don't re-run.
+  message, result?, error?, output_path?, output_bytes?}`. Poll until `done`
+  (result is in `result`) or `error`. A launch that "times out" client-side is
+  **still running** — poll, don't re-run. `progress` is real: a transcription
+  reports whisper's own percentage, an export reports encoded time.
+  `output_path`/`output_bytes` say which file is being written and how big it
+  has got, so a slow job is distinguishable from a hung one.
 - **`list_jobs`** — every job this session, newest first.
+- **`cancel_job`** `{job_id}` — stops a running transcription or export. The
+  work unwinds cleanly (whisper aborts, ffmpeg is killed and the partial file
+  removed), so the app stays usable. There used to be no way out of a long
+  transcription except killing the editor.
 
 ### Project, render, history
 

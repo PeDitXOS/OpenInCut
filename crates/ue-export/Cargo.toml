@@ -10,6 +10,7 @@ thiserror.workspace = true
 ue-core = { path = "../ue-core" }
 ue-media = { path = "../ue-media" }
 ue-render = { path = "../ue-render" }
+ue-text = { path = "../ue-text" }
 fontdb = "0.16"
 ttf-parser = "0.20"
 

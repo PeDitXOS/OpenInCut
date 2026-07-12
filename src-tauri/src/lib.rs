@@ -55,10 +55,20 @@ pub struct Job {
     /// The tool result once `status == "done"`.
     pub result: Option<serde_json::Value>,
     pub error: Option<String>,
+    /// Set by `cancel_job`; long jobs poll it and stop.
+    pub cancel: Arc<AtomicBool>,
+    /// What this job writes — so an agent can tell "slow" from "hung" without
+    /// resorting to `lsof` on the ffmpeg child.
+    pub output_path: Option<String>,
 }
 
 impl Job {
     pub fn to_value(&self) -> serde_json::Value {
+        let bytes = self
+            .output_path
+            .as_ref()
+            .and_then(|p| std::fs::metadata(p).ok())
+            .map(|m| m.len());
         serde_json::json!({
             "job_id": self.id,
             "kind": self.kind,
@@ -67,6 +77,8 @@ impl Job {
             "message": self.message,
             "result": self.result,
             "error": self.error,
+            "output_path": self.output_path,
+            "output_bytes": bytes,
         })
     }
 }
@@ -82,6 +94,8 @@ pub fn job_start(state: &AppState, kind: &str, message: &str) -> String {
         message: message.to_string(),
         result: None,
         error: None,
+        cancel: Arc::new(AtomicBool::new(false)),
+        output_path: None,
     };
     let mut jobs = state.jobs.lock().unwrap();
     // keep the map from growing without bound across a long session
@@ -94,6 +108,35 @@ pub fn job_start(state: &AppState, kind: &str, message: &str) -> String {
     }
     jobs.insert(id.clone(), job);
     id
+}
+
+/// The job's cancel flag (a fresh one if the job is already gone).
+pub fn job_cancel_flag(state: &AppState, id: &str) -> Arc<AtomicBool> {
+    state
+        .jobs
+        .lock()
+        .unwrap()
+        .get(id)
+        .map(|j| j.cancel.clone())
+        .unwrap_or_else(|| Arc::new(AtomicBool::new(false)))
+}
+
+/// Asks a running job to stop. False when there is no such live job.
+pub fn job_request_cancel(state: &AppState, id: &str) -> bool {
+    match state.jobs.lock().unwrap().get(id) {
+        Some(j) if j.status == "running" => {
+            j.cancel.store(true, Ordering::SeqCst);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Records the file a job is writing, so its size can be reported.
+pub fn job_set_output(state: &AppState, id: &str, path: &str) {
+    if let Some(j) = state.jobs.lock().unwrap().get_mut(id) {
+        j.output_path = Some(path.to_string());
+    }
 }
 
 /// Updates a job's progress/message (no-op if it's gone).
@@ -206,6 +249,7 @@ pub fn should_reuse_session(
     })
 }
 
+#[allow(dead_code)] // superseded by the webview compositor; kept for reference
 fn frame_service_loop(app: tauri::AppHandle, latest: Arc<Mutex<Vec<u8>>>, running: Arc<AtomicBool>) {
     // ONE rendering path: playback composites each frame with the SAME
     // compositor the paused preview uses (render_preview_frame), which is
@@ -258,6 +302,7 @@ fn frame_service_loop(app: tauri::AppHandle, latest: Arc<Mutex<Vec<u8>>>, runnin
     running.store(false, Ordering::SeqCst);
 }
 
+#[allow(dead_code)] // kept for the MCP debug frame tool / future reuse
 fn start_frame_service(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
     let mut guard = state.frames.lock().unwrap();
@@ -578,13 +623,14 @@ fn set_subtitles_props(
     clip_id: String,
     style: ue_core::model::TextStyle,
     mode: ue_core::model::SubtitleMode,
+    max_words: Option<u32>,
 ) -> Res<StateSnapshot> {
     let mut store = state.store.lock().unwrap();
     let id = parse_id(&clip_id)?;
     store
         .dispatch(
             "Edit subtitles",
-            vec![ue_core::Action::SetClipSubtitles { clip_id: id, style, mode }],
+            vec![ue_core::Action::SetClipSubtitles { clip_id: id, style, mode, max_words }],
         )
         .map_err(|e| e.to_string())?;
     Ok(snapshot(&store))
@@ -857,10 +903,11 @@ pub fn playback_play_impl(
         let guard = state.player.lock().unwrap();
         guard.as_ref().ok_or("no player")?.play(from_us);
     }
-    match app {
-        Some(a) => start_frame_service(a),
-        None => return Err("no app handle (headless)".into()),
-    }
+    // The video preview is composited in the webview now (native <video>/<img>
+    // on a canvas), so the ffmpeg-per-frame service is no longer started for
+    // playback — it only fed the old MJPEG program monitor. Audio playback and
+    // the master clock are unaffected.
+    let _ = app;
     Ok(())
 }
 
@@ -990,7 +1037,8 @@ fn playback_set_rate(
         }
         p.set_rate(rate);
     }
-    start_frame_service(&app);
+    // preview frames come from the webview compositor now (see playback_play_impl)
+    let _ = app;
     Ok(())
 }
 
@@ -1073,46 +1121,61 @@ fn add_clip(state: State<AppState>, asset_id: String, at_us: TimeUs) -> Res<Stat
     Ok(snapshot(&store))
 }
 
+/// Everything the paused-frame compositor needs, snapshotted under the lock
+/// so the actual ffmpeg run can happen on a blocking thread.
+pub struct FrameJob {
+    project: Project,
+    seq_id: Id,
+    base_dir: PathBuf,
+    registry: Arc<Vec<ue_render::EffectDef>>,
+    packs: Vec<ue_render::EffectDef>,
+}
+
+pub fn frame_job(state: &AppState) -> FrameJob {
+    let store = state.store.lock().unwrap();
+    let base_dir = state
+        .path
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    FrameJob {
+        project: store.project.clone(),
+        seq_id: store.project.active_sequence,
+        base_dir,
+        registry: state.registry.lock().unwrap().clone(),
+        packs: state.user_packs.lock().unwrap().clone(),
+    }
+}
+
 /// Real JPEG frame at the given time (raw bytes; empty = no signal).
-/// Shared by the render_frame command and the MCP debug tool.
-pub fn render_frame_impl(state: &AppState, t_us: TimeUs, max_width: u32) -> Res<Vec<u8>> {
-    let (project, seq_id, base_dir) = {
-        let store = state.store.lock().unwrap();
-        let base = state
-            .path
-            .lock()
-            .unwrap()
-            .as_ref()
-            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-        (store.project.clone(), store.project.active_sequence, base)
-    }; // release the lock before invoking ffmpeg
-    let reg = state.registry.lock().unwrap().clone();
-    let canvas = project.sequence(seq_id).map(|s| s.resolution);
+pub fn render_frame_run(job: &FrameJob, t_us: TimeUs, max_width: u32) -> Res<Vec<u8>> {
+    let FrameJob { project, seq_id, base_dir, registry: reg, packs } = job;
+    let canvas = project.sequence(*seq_id).map(|s| s.resolution);
 
     // FAITHFUL PATH (golden rule): one compositor renders EVERY active layer —
     // video clips (incl. a generated avatar, which is just normal media),
-    // reactive avatar overlays, titles and subtitles — the same way the export
-    // burns them in. Verified pixel-for-pixel against the export. The old
-    // single-clip path stays only as a fallback if the compositor errors.
-    let packs = state.user_packs.lock().unwrap().clone();
+    // titles and subtitles, and real xfade transitions — the same way the
+    // export burns them in. Verified pixel-for-pixel against the export. The
+    // old single-clip path stays only as a fallback if the compositor errors.
     match ue_export::preview::render_preview_frame(
-        &project, seq_id, &base_dir, t_us, max_width, &packs,
+        project, *seq_id, base_dir, t_us, max_width, packs,
     ) {
         Ok(bytes) => return Ok(bytes.unwrap_or_default()),
         Err(e) => dlog("frame", &format!("compositor @ {:.3}s: {e}; falling back", t_us as f64 / 1e6)),
     }
 
     // animated scrub: evaluate transform AND effect curves at the clip time
-    let mut vf = ue_media::frame::resolve_top_video(&project, seq_id, t_us).and_then(|r| {
-        ue_render::clip_vf_sampled(&reg, &r.effects, &r.transform, canvas, r.clip_rel_us)
+    let mut vf = ue_media::frame::resolve_top_video(project, *seq_id, t_us).and_then(|r| {
+        ue_render::clip_vf_sampled(reg, &r.effects, &r.transform, canvas, r.clip_rel_us)
     });
     // titles + subtitles active at t_us, built from the EXACT export chain so
     // the paused preview matches what export burns in (golden rule). They live
     // in canvas coordinates, so when no transform already fit the frame to the
     // canvas we fit it here before drawing, then the outer scale downsizes it.
-    let text = project.sequence(seq_id).and_then(|seq| {
-        ue_export::graph::text_overlays_at(&project, seq, seq.resolution.1, seq.resolution.0, t_us)
+    let text = project.sequence(*seq_id).and_then(|seq| {
+        ue_export::graph::text_overlays_at(project, seq, seq.resolution.1, seq.resolution.0, t_us)
     });
     if text.is_some() && vf.is_none() {
         if let Some((cw, ch)) = canvas {
@@ -1128,7 +1191,7 @@ pub fn render_frame_impl(state: &AppState, t_us: TimeUs, max_width: u32) -> Res<
     }
     let t0 = std::time::Instant::now();
     let result =
-        ue_media::frame::render_frame(&project, seq_id, t_us, max_width, &base_dir, vf.as_deref());
+        ue_media::frame::render_frame(project, *seq_id, t_us, max_width, base_dir, vf.as_deref());
     let ms = t0.elapsed().as_millis();
     let bytes = match result {
         Ok(b) => b.unwrap_or_default(),
@@ -1143,13 +1206,117 @@ pub fn render_frame_impl(state: &AppState, t_us: TimeUs, max_width: u32) -> Res<
     Ok(bytes)
 }
 
+/// Shared by the render_frame command and the MCP debug tool.
+pub fn render_frame_impl(state: &AppState, t_us: TimeUs, max_width: u32) -> Res<Vec<u8>> {
+    render_frame_run(&frame_job(state), t_us, max_width)
+}
+
+/// Async on purpose: the render spawns ffmpeg (tens to hundreds of ms) and a
+/// sync command would run it on the MAIN thread, freezing the whole UI. The
+/// webview calls this on pause to show the export-exact frame.
 #[tauri::command]
-fn render_frame(
-    state: State<AppState>,
+async fn render_frame(
+    state: State<'_, AppState>,
     t_us: TimeUs,
     max_width: u32,
 ) -> Res<tauri::ipc::Response> {
-    render_frame_impl(&state, t_us, max_width).map(tauri::ipc::Response::new)
+    let job = frame_job(&state);
+    tauri::async_runtime::spawn_blocking(move || render_frame_run(&job, t_us, max_width))
+        .await
+        .map_err(|e| e.to_string())?
+        .map(tauri::ipc::Response::new)
+}
+
+/// Codecs that can carry an alpha channel: their h264 proxy would flatten the
+/// transparency (e.g. the generated avatar's qtrle), so the webview must
+/// decode the original (or fall back to `render_asset_frame`).
+pub fn codec_may_have_alpha(vcodec: Option<&str>) -> bool {
+    matches!(
+        vcodec,
+        Some("qtrle" | "prores" | "png" | "apng" | "ffv1" | "vp8" | "vp9" | "gif")
+    )
+}
+
+/// Absolute filesystem path of an asset, for the webview to load through the
+/// asset protocol. Project files may store a path relative to the `.uep` dir,
+/// so resolve it against the project base dir here where that dir is known.
+///
+/// Prefers the 960p proxy when it exists: the webview decodes far less data
+/// (4K originals stall WebCodecs) and the compositor lays layers out with the
+/// asset's probe size, so the proxy never changes the geometry. Alpha-capable
+/// codecs keep the original (the proxy flattens transparency).
+#[tauri::command]
+fn resolve_asset_path(state: State<AppState>, asset_id: String) -> Option<String> {
+    let id: Id = asset_id.parse().ok()?;
+    let store = state.store.lock().unwrap();
+    let asset = store.project.asset(id)?;
+    if !codec_may_have_alpha(asset.probe.vcodec.as_deref()) {
+        if let Some(proxy) = &asset.proxy {
+            if Path::new(proxy).exists() {
+                return Some(proxy.clone());
+            }
+        }
+    }
+    let base = state
+        .path
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let abs = ue_export::graph::resolve_path_pub(&base, &asset.path);
+    Some(abs.to_string_lossy().into_owned())
+}
+
+/// One decoded source frame of an asset at `src_us`, as PNG bytes with the
+/// alpha channel preserved. Pixel fallback for the webview compositor when
+/// WebCodecs cannot decode the codec (e.g. the generated avatar's qtrle .mov,
+/// which is intra-only, so the input-side seek is exact and cheap).
+#[tauri::command]
+async fn render_asset_frame(
+    state: State<'_, AppState>,
+    asset_id: String,
+    src_us: i64,
+    max_width: u32,
+) -> Res<tauri::ipc::Response> {
+    let id: Id = asset_id.parse().map_err(|_| "invalid id")?;
+    let path = {
+        let store = state.store.lock().unwrap();
+        let asset = store.project.asset(id).ok_or("asset not found")?;
+        let base = state
+            .path
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        ue_export::graph::resolve_path_pub(&base, &asset.path)
+    };
+    let src = (src_us.max(0)) as f64 / 1e6;
+    let max_width = max_width.clamp(64, 4096);
+    let bytes = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let args: Vec<String> = vec![
+            "-v".into(), "error".into(),
+            "-ss".into(), format!("{src:.6}"),
+            "-i".into(), path.to_string_lossy().into_owned(),
+            "-frames:v".into(), "1".into(),
+            "-vf".into(), format!("scale='min({max_width},iw)':-2,format=rgba"),
+            "-f".into(), "image2".into(),
+            "-c:v".into(), "png".into(),
+            "pipe:1".into(),
+        ];
+        let out = std::process::Command::new(ue_media::ffmpeg_bin())
+            .args(&args)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+        }
+        Ok(out.stdout)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 /// Catalog of available effects (for the UI and MCP).
@@ -1416,7 +1583,12 @@ pub(crate) fn add_subtitles_clip_impl(state: &AppState, id: Id) -> Res<Id> {
     let style = TextStyle { size: 48.0, y_offset: 380.0, ..Default::default() };
     let clip = Clip {
         id: ue_core::model::Id::new(),
-        payload: ClipPayload::Subtitles { transcript_id, style, mode: SubtitleMode::Phrase },
+        payload: ClipPayload::Subtitles {
+            transcript_id,
+            style,
+            mode: SubtitleMode::Phrase,
+            max_words: None,
+        },
         start: media.start,
         duration: media.duration,
         speed: 1.0,
@@ -1851,9 +2023,24 @@ pub(crate) fn transcribe_blocking(
     asset_id: Id,
     model: Option<String>,
 ) -> Res<(Id, usize)> {
+    transcribe_blocking_with(state, asset_id, model, |_| {}, &AtomicBool::new(false))
+}
+
+/// Same, reporting real progress and honouring a cancel flag. A job that sat at
+/// 0.0 until it finished made "slow" and "hung" indistinguishable, and the only
+/// way out of a long transcription was killing the whole app.
+pub(crate) fn transcribe_blocking_with(
+    state: &AppState,
+    asset_id: Id,
+    model: Option<String>,
+    on_progress: impl FnMut(f64) + Send,
+    cancel: &AtomicBool,
+) -> Res<(Id, usize)> {
     let (conform, models_dir, model_name, lang) = transcribe_plan(state, asset_id, model)?;
     let doc = ue_whisper::ensure_model(&models_dir, &model_name)
-        .and_then(|m| ue_whisper::transcribe(&conform, &m, lang.as_deref(), asset_id))
+        .and_then(|m| {
+            ue_whisper::transcribe_with(&conform, &m, lang.as_deref(), asset_id, on_progress, cancel)
+        })
         .map_err(|e| e.to_string())?;
     let words = doc.words.len();
     Ok((transcribe_commit(state, asset_id, doc), words))
@@ -2613,6 +2800,18 @@ pub fn run() {
                 let _ = std::fs::create_dir_all(&models);
                 *state.models_dir.lock().unwrap() = Some(models);
             }
+            // PERSIST THE TOKEN. It used to be regenerated on every launch, so
+            // any MCP client that cached the Authorization header (i.e. all of
+            // them) lost the session the moment the app restarted and had to be
+            // re-registered by hand.
+            if let Ok(dir) = app.path().app_config_dir() {
+                if let Ok(saved) = std::fs::read_to_string(dir.join("mcp_token")) {
+                    let saved = saved.trim().to_string();
+                    if !saved.is_empty() {
+                        *state.mcp_token.lock().unwrap() = saved;
+                    }
+                }
+            }
             match mcp::start(app.handle().clone()) {
                 Some(port) => {
                     *state.mcp_port.lock().unwrap() = Some(port);
@@ -2656,6 +2855,8 @@ pub fn run() {
             import_media,
             add_clip,
             render_frame,
+            resolve_asset_path,
+            render_asset_frame,
             get_effects_catalog,
             reload_effect_packs,
             mcp_status,

@@ -12,6 +12,10 @@ use crate::{ExportError, ExportResult, ExportSettings};
 pub struct FfmpegPlan {
     pub args: Vec<String>,
     pub duration_us: TimeUs,
+    /// Subtitle script written for this run; the runner deletes it afterwards.
+    pub subs_file: Option<PathBuf>,
+    /// Rasterised title images for this run; the runner deletes them too.
+    pub temp_files: Vec<PathBuf>,
 }
 
 fn secs(us: TimeUs) -> String {
@@ -149,6 +153,86 @@ fn collect_audio(project: &Project, sequence_id: Id) -> Vec<AudioItem> {
     items
 }
 
+// ---------------------------------------------------------------------------
+// Line wrapping
+//
+// Captions are laid out on ONE line unless they don't fit, and then they wrap.
+// The break decision is made from a REAL measurement of the chosen font (the
+// sum of the glyph advances, `measure_text_px`), never from a character-count
+// guess — an Arial Black caption and a Helvetica one break in different places
+// and only the font knows where.
+//
+// The canvas compositor mirrors this exact algorithm (word widths + one space,
+// greedy fill, never split a word), so playback wraps where the export wraps.
+// ---------------------------------------------------------------------------
+
+/// Usable fraction of the frame width for a caption.
+pub const CAPTION_WIDTH_FRACTION: f64 = 0.86;
+
+/// Width of one word in px, measured with the real font (or approximated when
+/// the family resolves to no file on disk).
+fn word_width(font_path: Option<&str>, word: &str, px: f64) -> f64 {
+    match font_path {
+        Some(p) => measure_text_px(p, word, px).unwrap_or(px * 0.5 * word.chars().count() as f64),
+        // no fontfile (fontconfig `font=sans`): fall back to the old heuristic
+        None => px * 0.52 * word.chars().count() as f64,
+    }
+}
+
+/// Greedy word wrap into lines that each fit `max_w` px. A single word wider
+/// than the line gets its own line (we never break inside a word).
+pub fn wrap_words<'a>(
+    font_path: Option<&str>,
+    words: &[&'a str],
+    px: f64,
+    max_w: f64,
+) -> Vec<Vec<&'a str>> {
+    if words.is_empty() {
+        return vec![];
+    }
+    let space = word_width(font_path, " ", px);
+    let mut lines: Vec<Vec<&str>> = vec![];
+    let mut line: Vec<&str> = vec![];
+    let mut width = 0.0f64;
+    for w in words {
+        let ww = word_width(font_path, w, px);
+        let add = if line.is_empty() { ww } else { space + ww };
+        if !line.is_empty() && width + add > max_w {
+            lines.push(std::mem::take(&mut line));
+            width = ww;
+            line.push(w);
+        } else {
+            width += add;
+            line.push(w);
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
+/// Wraps a whole caption string.
+pub fn wrap_text(font_path: Option<&str>, text: &str, px: f64, max_w: f64) -> Vec<String> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    wrap_words(font_path, &words, px, max_w)
+        .into_iter()
+        .map(|l| l.join(" "))
+        .collect()
+}
+
+/// Vertical offset of line `i` of `n`, so the whole block stays centred on the
+/// style's `y_offset` (a 2-line caption must not drift downwards).
+fn line_y_offset(i: usize, n: usize, px: f64, line_height: f32) -> f64 {
+    let step = px * line_height.max(0.6) as f64;
+    (i as f64 - (n as f64 - 1.0) / 2.0) * step
+}
+
+/// The fontfile behind a style, if any (`None` = fontconfig, no metrics).
+fn font_path_of(style: &ue_core::model::TextStyle, fallback: &str) -> Option<String> {
+    font_part_for(style, fallback).strip_prefix("fontfile=").map(str::to_string)
+}
+
 /// Escaping for drawtext's text='…' value inside a filter_complex.
 fn escape_drawtext(text: &str) -> String {
     text.replace('\\', "\\\\\\\\")
@@ -276,25 +360,43 @@ fn enable_clause(window: Option<(TimeUs, TimeUs)>) -> String {
     }
 }
 
+/// One drawtext PER LINE: the caption is wrapped with the real font metrics and
+/// each line placed itself, so the block stays centred on `y_offset` and the
+/// line spacing is exactly `style.line_height`. Emitting a single drawtext with
+/// embedded newlines would hand the spacing to ffmpeg and make the canvas
+/// unable to match it.
 fn drawtext_for(
     font_part: &str,
     content: &str,
     style: &ue_core::model::TextStyle,
     scale: f64,
     enable: Option<(TimeUs, TimeUs)>,
-) -> String {
-    let fontsize = ((style.size as f64) * scale).round().max(8.0) as u32;
+    out_w: u32,
+) -> Vec<String> {
+    let px = ((style.size as f64) * scale).round().max(8.0);
+    let fontsize = px as u32;
     let color = style.color.trim_start_matches('#');
     let y_off = (style.y_offset as f64 * scale).round() as i64;
-    let font_part = font_part_for(style, font_part);
-    format!(
-        "drawtext={font_part}:text='{}':fontsize={fontsize}:fontcolor=0x{color}:\
-         borderw={}:bordercolor=black@0.6:x={}:y=(h-text_h)/2+{y_off}{}",
-        escape_drawtext(content),
-        (2.0 * scale).round().max(1.0) as u32,
-        x_expr_for(style, scale),
-        enable_clause(enable),
-    )
+    let resolved = font_part_for(style, font_part);
+    let font_path = resolved.strip_prefix("fontfile=");
+    let max_w = out_w as f64 * CAPTION_WIDTH_FRACTION;
+    let lines = wrap_text(font_path, content, px, max_w);
+    let n = lines.len();
+    lines
+        .iter()
+        .enumerate()
+        .map(|(i, line)| {
+            let dy = y_off + line_y_offset(i, n, px, style.line_height).round() as i64;
+            format!(
+                "drawtext={resolved}:text='{}':fontsize={fontsize}:fontcolor=0x{color}:\
+                 borderw={}:bordercolor=black@0.6:x={}:y=(h-text_h)/2+{dy}{}",
+                escape_drawtext(line),
+                (2.0 * scale).round().max(1.0) as u32,
+                x_expr_for(style, scale),
+                enable_clause(enable),
+            )
+        })
+        .collect()
 }
 
 /// drawtext with an explicit x expression (karaoke: precomputed positions).
@@ -492,12 +594,12 @@ fn build_audio_only_args(
         "+faststart".into(),
     ]);
     args.push(output.to_string_lossy().into_owned());
-    Ok(FfmpegPlan { args, duration_us })
+    Ok(FfmpegPlan { args, duration_us, subs_file: None, temp_files: vec![] })
 }
 
 /// Caption-sized max line length for a canvas: Whisper segments can span
 /// MINUTES of continuous speech; captions must be chunked to fit the frame.
-fn caption_max_chars(out_w: u32, font_px: f64) -> usize {
+pub fn caption_max_chars(out_w: u32, font_px: f64) -> usize {
     ((out_w as f64 * 0.86) / (font_px * 0.52)).round().clamp(12.0, 64.0) as usize
 }
 
@@ -516,7 +618,34 @@ pub fn transcript_phrases(
     doc: &ue_core::model::TranscriptDoc,
     max_chars: usize,
 ) -> Vec<(String, i64, i64)> {
-    caption_phrases(doc, max_chars.clamp(8, 200))
+    caption_phrases(doc, max_chars.clamp(8, 200), None)
+}
+
+/// The exact chunker the export, the preview and the ASS builder all call.
+pub fn caption_phrases_pub(
+    doc: &ue_core::model::TranscriptDoc,
+    max_chars: usize,
+    max_words: Option<u32>,
+) -> Vec<(String, i64, i64)> {
+    caption_phrases(doc, max_chars, max_words)
+}
+
+/// Asset time → timeline, shared with the ASS builder.
+pub fn asset_time_to_timeline_pub(
+    seq: &ue_core::model::Sequence,
+    asset_id: Id,
+    t_asset: TimeUs,
+) -> Option<TimeUs> {
+    asset_time_to_timeline(seq, asset_id, t_asset)
+}
+
+/// Test hook: the exact chunker the export and the preview both call.
+pub fn caption_phrases_for_test(
+    doc: &ue_core::model::TranscriptDoc,
+    max_chars: usize,
+    max_words: Option<u32>,
+) -> Vec<(String, i64, i64)> {
+    caption_phrases(doc, max_chars, max_words)
 }
 
 /// Build caption phrases straight from the WORDS (Whisper's own segment
@@ -526,6 +655,7 @@ pub fn transcript_phrases(
 fn caption_phrases(
     doc: &ue_core::model::TranscriptDoc,
     max_chars: usize,
+    max_words: Option<u32>,
 ) -> Vec<(String, i64, i64)> {
     let words: Vec<&ue_core::model::Word> =
         doc.words.iter().filter(|w| !w.rejected).collect();
@@ -533,23 +663,33 @@ fn caption_phrases(
         // old/wordless transcripts: fall back to the segments as-is
         return doc.segments.iter().map(|s| (s.text.clone(), s.start_us, s.end_us)).collect();
     }
+    let cap = max_words.map(|w| w.clamp(1, 20) as usize);
     let mut cuts: Vec<usize> = vec![0];
     let mut chars = 0usize;
+    let mut count = 0usize;
     let mut chunk_start = words[0].start_us;
     for (i, w) in words.iter().enumerate() {
         if i == 0 {
             chars = w.label().len();
+            count = 1;
             continue;
         }
         let gap = w.start_us - words[i - 1].end_us;
-        let too_long = chars + 1 + w.label().len() > max_chars;
+        // an explicit word cap REPLACES the width heuristic: the user asked for
+        // N words a line, so give exactly N (the line may then be long)
+        let full = match cap {
+            Some(n) => count >= n,
+            None => chars + 1 + w.label().len() > max_chars,
+        };
         let too_slow = w.end_us - chunk_start > CAPTION_MAX_DUR_US;
-        if too_long || gap > CAPTION_GAP_US || too_slow {
+        if full || gap > CAPTION_GAP_US || too_slow {
             cuts.push(i);
             chars = w.label().len();
+            count = 1;
             chunk_start = w.start_us;
         } else {
             chars += 1 + w.label().len();
+            count += 1;
         }
     }
     cuts.push(words.len());
@@ -571,6 +711,11 @@ fn caption_phrases(
 /// Karaoke: per segment, each word in a dim color for the whole phrase and
 /// in a highlighted color from when it is spoken until the end of the segment.
 /// None if there is no measurable fontfile (the caller falls back to word mode).
+/// `at = Some(t)`: emit ONLY the phrase on screen at `t`, with no `enable`
+/// clauses and the highlight already resolved (words whose time has come are
+/// drawn in the highlight colour). That makes the paused preview show the very
+/// same karaoke frame the export burns in — it used to fall back to a plain
+/// phrase line, so pause and playback simply looked different.
 #[allow(clippy::too_many_arguments)]
 fn karaoke_overlays(
     seq: &ue_core::model::Sequence,
@@ -581,6 +726,8 @@ fn karaoke_overlays(
     scale: f64,
     out_w: u32,
     export_windows: &[(TimeUs, TimeUs)],
+    at: Option<TimeUs>,
+    max_words: Option<u32>,
 ) -> Option<Vec<String>> {
     let font_part = font_part_for(style, fallback_font);
     let font_path = font_part.strip_prefix("fontfile=")?.to_string();
@@ -599,7 +746,7 @@ fn karaoke_overlays(
     let space_w = measure_text_px(&font_path, " ", px)?;
 
     // karaoke lines = the same word-driven caption phrases as phrase mode
-    let phrases = caption_phrases(doc, caption_max_chars(out_w, px));
+    let phrases = caption_phrases(doc, caption_max_chars(out_w, px), max_words);
 
     let mut out = vec![];
     for (_text, ph_start, ph_end) in &phrases {
@@ -620,35 +767,70 @@ fn karaoke_overlays(
         if seg_to <= seg_from {
             continue;
         }
-        // only phrases inside the rendered ranges: keeps the per-word drawtext
-        // (two per word) bounded so ffmpeg doesn't choke on a long transcript
-        if !in_export_windows(seg_from, seg_to, export_windows) {
-            continue;
+        match at {
+            // preview: only the phrase actually on screen at t
+            Some(t) if t < seg_from || t >= seg_to => continue,
+            // export: only phrases inside the rendered ranges — keeps the
+            // per-word drawtext (two per word) bounded so ffmpeg doesn't choke
+            None if !in_export_windows(seg_from, seg_to, export_windows) => continue,
+            _ => {}
         }
-        // line layout: per-word widths + spaces
-        let widths: Vec<f64> = words
-            .iter()
-            .map(|w| measure_text_px(&font_path, w.label(), px).unwrap_or(px * 0.5))
-            .collect();
-        let total: f64 =
-            widths.iter().sum::<f64>() + space_w * (words.len().saturating_sub(1)) as f64;
-        let mut prefix = 0.0f64;
+        // MULTI-LINE layout: wrap the phrase's words with the real font metrics,
+        // then place every word by (line, x). Each line is centred on its own
+        // width, and the block of lines is centred on the style's y_offset.
+        let labels: Vec<&str> = words.iter().map(|w| w.label()).collect();
+        let max_w = out_w as f64 * CAPTION_WIDTH_FRACTION;
+        let wrapped = wrap_words(Some(&font_path), &labels, px, max_w);
+        let n_lines = wrapped.len();
+        // (line index, x offset within the line) for every word, in order
+        let mut placed: Vec<(usize, f64, f64)> = Vec::with_capacity(words.len()); // (line, prefix, line_total)
+        for (li, line) in wrapped.iter().enumerate() {
+            let widths: Vec<f64> = line
+                .iter()
+                .map(|w| measure_text_px(&font_path, w, px).unwrap_or(px * 0.5))
+                .collect();
+            let total: f64 =
+                widths.iter().sum::<f64>() + space_w * (line.len().saturating_sub(1)) as f64;
+            let mut prefix = 0.0f64;
+            for wpx in &widths {
+                placed.push((li, prefix, total));
+                prefix += wpx + space_w;
+            }
+        }
         for (i, w) in words.iter().enumerate() {
+            let (li, prefix, total) = placed.get(i).copied().unwrap_or((0, 0.0, 0.0));
             let x_expr = format!("(w-{total:.0})/2+{prefix:.0}");
+            let y_off = y_off + line_y_offset(li, n_lines, px, style.line_height).round() as i64;
             let word_tl = asset_time_to_timeline(seq, doc.asset_id, w.start_us)
                 .unwrap_or(seg_tl)
                 .max(clip.start);
-            // dim layer (whole phrase visible during the segment)
-            out.push(drawtext_at(
-                &font_part, w.label(), fontsize, &base_color, &x_expr, y_off, scale,
-                Some((seg_from, seg_to)),
-            ));
-            // highlighted layer (from when the word plays)
-            out.push(drawtext_at(
-                &font_part, w.label(), fontsize, &hi_color, &x_expr, y_off, scale,
-                Some((word_tl.min(seg_to), seg_to)),
-            ));
-            prefix += widths[i] + space_w;
+            let hi_from = word_tl.min(seg_to);
+            match at {
+                Some(t) => {
+                    // draw unconditionally: dim, then the highlight if the
+                    // word has already been spoken at t (what export shows)
+                    out.push(drawtext_at(
+                        &font_part, w.label(), fontsize, &base_color, &x_expr, y_off, scale, None,
+                    ));
+                    if t >= hi_from {
+                        out.push(drawtext_at(
+                            &font_part, w.label(), fontsize, &hi_color, &x_expr, y_off, scale, None,
+                        ));
+                    }
+                }
+                None => {
+                    // dim layer (whole phrase visible during the segment)
+                    out.push(drawtext_at(
+                        &font_part, w.label(), fontsize, &base_color, &x_expr, y_off, scale,
+                        Some((seg_from, seg_to)),
+                    ));
+                    // highlighted layer (from when the word plays)
+                    out.push(drawtext_at(
+                        &font_part, w.label(), fontsize, &hi_color, &x_expr, y_off, scale,
+                        Some((hi_from, seg_to)),
+                    ));
+                }
+            }
         }
     }
     Some(out)
@@ -670,7 +852,16 @@ fn build_text_overlays(
     out_w: u32,
     export_windows: &[(TimeUs, TimeUs)],
 ) -> Option<String> {
-    text_overlays_inner(project, seq, out_h, out_w, None, export_windows)
+    text_overlays_inner(project, seq, out_h, out_w, None, export_windows, None, true)
+}
+
+/// A text/subtitles clip that carries effects or a moved/scaled/rotated
+/// transform can no longer be a plain `drawtext` burned onto the finished
+/// video: it has to become its own RGBA layer so the SAME effect+transform
+/// chain a media clip gets applies to it. Plain ones keep the cheap path.
+pub fn text_is_styled_pub(clip: &ue_core::model::Clip) -> bool {
+    clip.effects.iter().any(|e| e.enabled)
+        || clip.transform != ue_core::model::Transform2D::default()
 }
 
 /// Does `[from, to)` overlap any export window? (Empty windows = whole timeline,
@@ -695,12 +886,27 @@ pub fn text_overlays_at(
     out_w: u32,
     t_us: TimeUs,
 ) -> Option<String> {
-    text_overlays_inner(project, seq, out_h, out_w, Some(t_us), &[])
+    text_overlays_inner(project, seq, out_h, out_w, Some(t_us), &[], None, true)
+}
+
+/// The drawtext chain for ONE text/subtitles clip, unconditional (no `enable`)
+/// when `at` is given. Used to render a styled text clip as its own layer.
+pub fn text_clip_chain(
+    project: &Project,
+    seq: &ue_core::model::Sequence,
+    clip_id: Id,
+    out_h: u32,
+    out_w: u32,
+    at: Option<TimeUs>,
+    export_windows: &[(TimeUs, TimeUs)],
+) -> Option<String> {
+    text_overlays_inner(project, seq, out_h, out_w, at, export_windows, Some(clip_id), false)
 }
 
 /// Shared body: `at = None` burns the whole timeline in (export); `at = Some(t)`
 /// emits only what is on screen at `t`, without enable clauses (preview).
 /// `export_windows` bounds the export path to the ranges being rendered.
+#[allow(clippy::too_many_arguments)]
 fn text_overlays_inner(
     project: &Project,
     seq: &ue_core::model::Sequence,
@@ -708,6 +914,10 @@ fn text_overlays_inner(
     out_w: u32,
     at: Option<TimeUs>,
     export_windows: &[(TimeUs, TimeUs)],
+    // `Some(id)` = emit ONLY this clip (it is being rendered as its own layer).
+    only: Option<Id>,
+    // Skip clips that carry effects/transform: those are layers, not burn-ins.
+    skip_styled: bool,
 ) -> Option<String> {
     use ue_core::model::{ClipPayload, SubtitleMode, TrackKind};
     let scale = out_h as f64 / 1080.0;
@@ -732,32 +942,41 @@ fn text_overlays_inner(
     let mut parts: Vec<String> = vec![];
     for track in seq.tracks.iter().filter(|t| t.kind == TrackKind::Video && !t.muted) {
         for clip in &track.clips {
+            if let Some(id) = only {
+                if clip.id != id {
+                    continue;
+                }
+            } else if skip_styled && text_is_styled_pub(clip) {
+                continue; // rendered as a layer, with its effects and transform
+            }
             match &clip.payload {
                 ClipPayload::Text { content, style } => {
                     if content.trim().is_empty() {
                         continue;
                     }
                     if let Some(enable) = window(clip.start, clip.end()) {
-                        parts.push(drawtext_for(&font_part, content, style, scale, enable));
+                        parts.extend(drawtext_for(&font_part, content, style, scale, enable, out_w));
                     }
                 }
-                ClipPayload::Subtitles { transcript_id, style, mode } => {
+                ClipPayload::Subtitles { transcript_id, style, mode, max_words } => {
                     let Some(doc) =
                         project.transcripts.iter().find(|t| t.id == *transcript_id)
                     else {
                         continue;
                     };
                     // karaoke: full phrase with the current word highlighted
-                    // (progressive fill); needs font metrics. Export only —
-                    // the preview falls through to the phrase line below.
-                    if *mode == SubtitleMode::Karaoke && at.is_none() {
+                    // (progressive fill); needs font metrics. The PREVIEW takes
+                    // the same path with `at`, so a paused karaoke frame is the
+                    // export's frame, highlight and all.
+                    if *mode == SubtitleMode::Karaoke {
                         if let Some(chains) = karaoke_overlays(
-                            seq, doc, clip, style, &font_part, scale, out_w, export_windows,
+                            seq, doc, clip, style, &font_part, scale, out_w, export_windows, at,
+                            *max_words,
                         ) {
                             parts.extend(chains);
                             continue;
                         }
-                        // no metrics → falls back to word mode
+                        // no metrics → falls back to phrase mode below
                     }
                     // phrase / karaoke-preview: caption-sized chunks (a segment
                     // can span minutes of continuous speech);
@@ -771,7 +990,7 @@ fn text_overlays_inner(
                             .collect(),
                         SubtitleMode::Phrase | SubtitleMode::Karaoke => {
                             let px = (style.size as f64) * scale;
-                            caption_phrases(doc, caption_max_chars(out_w, px))
+                            caption_phrases(doc, caption_max_chars(out_w, px), *max_words)
                         }
                     };
                     let word_scale = if *mode == SubtitleMode::Word { 1.6 } else { 1.0 };
@@ -792,7 +1011,7 @@ fn text_overlays_inner(
                             continue;
                         }
                         if let Some(enable) = window(from, to) {
-                            parts.push(drawtext_for(&font_part, text, &wstyle, scale, enable));
+                            parts.extend(drawtext_for(&font_part, text, &wstyle, scale, enable, out_w));
                         }
                     }
                 }
@@ -822,7 +1041,7 @@ pub const TRANSITION_KINDS: &[(&str, &str, &str)] = &[
     ("core.radial", "radial", "Radial"),
 ];
 
-fn xfade_kind(effect_id: &str) -> &'static str {
+pub fn xfade_kind(effect_id: &str) -> &'static str {
     TRANSITION_KINDS
         .iter()
         .find(|(id, _, _)| *id == effect_id)
@@ -837,6 +1056,32 @@ pub fn build_ffmpeg_args(
     output: &Path,
     settings: &ExportSettings,
 ) -> ExportResult<FfmpegPlan> {
+    // RANGES ARE APPLIED FIRST, NOT LAST.
+    //
+    // They used to be a `trim` bolted onto the END of the filtergraph, so
+    // ffmpeg rendered the whole timeline from t=0 and discarded everything
+    // before the range: a 46 s clip starting at minute 22 spent ~12 minutes
+    // writing nothing, and `-progress` (which reports OUTPUT time) sat at 0 the
+    // entire time and then jumped to 1. Cutting the sequence down to the wanted
+    // material up front means the graph carries nothing to throw away — the
+    // cost becomes proportional to the range's LENGTH, not to where it starts.
+    let pieces: Vec<(TimeUs, TimeUs)> = if !settings.ranges.is_empty() {
+        settings.ranges.clone()
+    } else {
+        settings.range.into_iter().collect()
+    };
+    let restricted;
+    let mut settings_owned;
+    let (project, settings) = if pieces.is_empty() {
+        (project, settings)
+    } else {
+        restricted = crate::range::restrict_to_ranges(project, sequence_id, &pieces);
+        settings_owned = settings.clone();
+        settings_owned.range = None;
+        settings_owned.ranges = vec![];
+        (&restricted, &settings_owned)
+    };
+
     let seq = project
         .sequence(sequence_id)
         .ok_or(ExportError::NoSequence(sequence_id))?;
@@ -845,13 +1090,21 @@ pub fn build_ffmpeg_args(
         return build_audio_only_args(project, sequence_id, base_dir, output, settings);
     }
 
-    // MULTI-LAYER: the lowest video track (base) drives the EDL; media clips
-    // on upper tracks are composited on top with overlay (+opacity).
+    // MULTI-LAYER: the lowest video track WITH CONTENT (base) drives the EDL;
+    // media clips on tracks above it are composited on top with overlay
+    // (+opacity). Empty tracks below don't count — otherwise material living
+    // only on V2+ exported as "empty timeline".
     let video_tracks: Vec<&ue_core::model::Track> = seq
         .tracks
         .iter()
         .filter(|t| t.kind == TrackKind::Video && !t.muted)
         .collect();
+    let has_content = |t: &&ue_core::model::Track| {
+        t.clips
+            .iter()
+            .any(|c| matches!(c.payload, ClipPayload::Media { .. } | ClipPayload::Generator { .. }))
+    };
+    let base_idx = video_tracks.iter().position(has_content);
     let registry =
         ue_render::merge_registries(ue_render::core_registry(), settings.extra_packs.clone());
     let generators = ue_render::core_generators();
@@ -866,7 +1119,7 @@ pub fn build_ffmpeg_args(
         vf: Option<String>,
     }
     let mut layer_clips: Vec<LayerClip> = vec![];
-    for track in video_tracks.iter().skip(1) {
+    for track in video_tracks.iter().skip(base_idx.map_or(usize::MAX, |i| i + 1)) {
         for clip in &track.clips {
             // layers run in timeline time: t relative to the clip
             let tvar = format!("(t-{})", secs(clip.start));
@@ -920,23 +1173,46 @@ pub fn build_ffmpeg_args(
         }
     }
     let multilayer = !layer_clips.is_empty();
-    let edl = if multilayer {
-        // EDL with only the base track: (visually) mute the upper ones
+    let edl_res = if multilayer {
+        // EDL with only the base track: (visually) mute the others
         let mut base_project = project.clone();
         if let Some(s) = base_project.sequence_mut(sequence_id) {
-            let mut seen_base = false;
+            let mut vid_i = 0usize;
             for t in &mut s.tracks {
                 if t.kind == TrackKind::Video && !t.muted {
-                    if seen_base {
+                    if Some(vid_i) != base_idx {
                         t.muted = true;
                     }
-                    seen_base = true;
+                    vid_i += 1;
                 }
             }
         }
-        build_video_edl_with(&base_project, sequence_id, &settings.extra_packs)?
+        build_video_edl_with(&base_project, sequence_id, &settings.extra_packs)
     } else {
-        build_video_edl_with(project, sequence_id, &settings.extra_packs)?
+        build_video_edl_with(project, sequence_id, &settings.extra_packs)
+    };
+    let edl = match edl_res {
+        Ok(edl) => edl,
+        Err(ExportError::EmptyTimeline) => {
+            // no media anywhere, but titles/subtitles still export over black
+            // (title cards) — the preview shows exactly that
+            let text_end = seq
+                .tracks
+                .iter()
+                .filter(|t| t.kind == TrackKind::Video && !t.muted)
+                .flat_map(|t| &t.clips)
+                .filter(|c| {
+                    matches!(c.payload, ClipPayload::Text { .. } | ClipPayload::Subtitles { .. })
+                })
+                .map(|c| c.end())
+                .max()
+                .unwrap_or(0);
+            if text_end <= 0 {
+                return Err(ExportError::EmptyTimeline);
+            }
+            vec![Segment::Black { duration: text_end }]
+        }
+        Err(e) => return Err(e),
     };
     let base_dur = edl_duration(&edl);
     // the master lasts until the end of the longest layer
@@ -953,19 +1229,43 @@ pub fn build_ffmpeg_args(
     }
     let fps = format!("{}/{}", seq.fps.0, seq.fps.1);
 
-    // unique inputs per asset
-    let mut input_index: BTreeMap<PathBuf, usize> = BTreeMap::new();
-    let mut inputs: Vec<PathBuf> = vec![];
-    let mut input_of_path = |path: PathBuf| -> usize {
-        *input_index.entry(path.clone()).or_insert_with(|| {
-            inputs.push(path);
-            inputs.len() - 1
-        })
-    };
-    let mut input_of = |asset_id: Id, project: &Project| -> usize {
-        let asset = project.asset(asset_id).expect("validated in the EDL");
-        input_of_path(resolve_path(base_dir, &asset.path))
-    };
+    // ---- INPUTS: one per (file, seek point), with an INPUT-SIDE `-ss` --------
+    //
+    // The old scheme opened one input per FILE and reached the wanted material
+    // with a `trim=start=X` filter — an OUTPUT-side seek, which makes ffmpeg
+    // decode the file from byte zero and throw the result away. Exporting a
+    // clip that starts at minute 22 of a 24-minute recording therefore decoded
+    // 22 minutes of video before writing a single frame.
+    //
+    // `-ss` placed BEFORE `-i` is an input-side seek: ffmpeg jumps to the
+    // nearest keyframe and decodes forward only to the exact requested time
+    // (accurate_seek is on by default), so the cost is proportional to the GOP,
+    // not to the offset. Each segment gets its own input at its own seek point,
+    // which also removes the implicit `split` ffmpeg used to insert when one
+    // input fed several segments — and with it the memory blow-up when a
+    // reordered edit made one branch buffer frames while another was consumed.
+    struct Inputs {
+        /// (path, seek µs, loop the still image?)
+        specs: Vec<(PathBuf, TimeUs, bool)>,
+        index: BTreeMap<(PathBuf, TimeUs), usize>,
+    }
+    impl Inputs {
+        fn at(&mut self, path: PathBuf, seek_us: TimeUs) -> usize {
+            let is_image = ue_media::is_image_path(&path);
+            // a still image has nothing to seek into (and `-loop 1` + `-ss`
+            // would just spin), so images always share one input at 0
+            let seek = if is_image { 0 } else { seek_us.max(0) };
+            let key = (path.clone(), seek);
+            if let Some(i) = self.index.get(&key) {
+                return *i;
+            }
+            self.specs.push((path, seek, is_image));
+            let i = self.specs.len() - 1;
+            self.index.insert(key, i);
+            i
+        }
+    }
+    let mut inputs = Inputs { specs: vec![], index: BTreeMap::new() };
 
     // ---- video chains ----
     let mut fc: Vec<String> = vec![];
@@ -977,7 +1277,8 @@ pub fn build_ffmpeg_args(
         let label = format!("v{k}");
         match seg {
             Segment::Source { asset_id, src_in, src_out, speed, vf, .. } => {
-                let idx = input_of(*asset_id, project);
+                let asset = project.asset(*asset_id).expect("validated in the EDL");
+                let idx = inputs.at(resolve_path(base_dir, &asset.path), *src_in);
                 let effects = match vf {
                     Some(chain) => format!("{chain},"),
                     None => String::new(),
@@ -987,10 +1288,11 @@ pub fn build_ffmpeg_args(
                 } else {
                     "setpts=PTS-STARTPTS".to_string()
                 };
+                // `-ss` already parked the demuxer at src_in, so the trim only
+                // has to say how MUCH material this segment wants
                 fc.push(format!(
-                    "[{idx}:v]trim=start={}:end={},{setpts},{effects}{norm}[{label}]",
-                    secs(*src_in),
-                    secs(*src_out),
+                    "[{idx}:v]trim=start=0:end={},{setpts},{effects}{norm}[{label}]",
+                    secs(*src_out - *src_in),
                 ));
             }
             Segment::Gen { source, vf, .. } => {
@@ -1022,8 +1324,14 @@ pub fn build_ffmpeg_args(
             Some((d, effect_id)) => {
                 let offset = acc_dur - d;
                 let kind = xfade_kind(&effect_id);
+                // xfade requires BOTH inputs on the same timebase; after a
+                // concat the accumulated stream may sit on 1/AV_TIME_BASE
+                // while a fresh normed segment sits on 1/fps — without the
+                // settb pair the whole export dies with "timebase … do not
+                // match" as soon as a transition follows any earlier cut.
                 fc.push(format!(
-                    "[{current}][v{k}]xfade=transition={kind}:duration={}:offset={}[{out_label}]",
+                    "[{current}]settb=AVTB[xa{k}];[v{k}]settb=AVTB[xb{k}];\
+                     [xa{k}][xb{k}]xfade=transition={kind}:duration={}:offset={}[{out_label}]",
                     secs(d),
                     secs(offset),
                 ));
@@ -1063,11 +1371,11 @@ pub fn build_ffmpeg_args(
         let start = layer.start;
         match &layer.src {
             LayerSrc::Media { asset_id, src_in, src_out, speed } => {
-                let idx = input_of(*asset_id, project);
+                let asset = project.asset(*asset_id).expect("validated when collecting");
+                let idx = inputs.at(resolve_path(base_dir, &asset.path), *src_in);
                 fc.push(format!(
-                    "[{idx}:v]trim=start={}:end={},setpts=(PTS-STARTPTS)/{speed}+{}/TB,{effects}{fit},{alpha}fps={fps}[ly{k}]",
-                    secs(*src_in),
-                    secs(*src_out),
+                    "[{idx}:v]trim=start=0:end={},setpts=(PTS-STARTPTS)/{speed}+{}/TB,{effects}{fit},{alpha}fps={fps}[ly{k}]",
+                    secs(*src_out - *src_in),
                     secs(start),
                 ));
             }
@@ -1092,6 +1400,126 @@ pub fn build_ffmpeg_args(
         current = "flat".to_string();
     }
 
+    // ---- STYLED TEXT LAYERS -------------------------------------------------
+    // A title or subtitles clip that carries effects (blur, drop shadow, colour
+    // correct…) or a moved/scaled/rotated transform is rendered as its own RGBA
+    // layer and pushed through the very SAME chain a media layer gets, then
+    // overlaid. Plain text keeps the cheap burn-in below. Without this, every
+    // effect and every transform silently did nothing on text.
+    let export_windows_pre: Vec<(TimeUs, TimeUs)> = if !settings.ranges.is_empty() {
+        settings.ranges.clone()
+    } else {
+        settings.range.into_iter().collect()
+    };
+    let mut temp_files: Vec<PathBuf> = vec![];
+    let mut tk = 0usize;
+
+    // ---- TITLES: rasterised by us, composited as image layers ---------------
+    //
+    // ffmpeg cannot draw a colour emoji by any route: `drawtext` loads one font
+    // face and does no fallback, and libass renders vector outlines in a single
+    // colour (no colour-font support, open since 2020). Apple Color Emoji is an
+    // `sbix` BITMAP font, so both drew empty boxes. ue-text shapes with per-glyph
+    // fallback and rasterises through swash, which reads sbix/CBDT/COLR — so the
+    // title arrives here as a finished RGBA frame and just gets overlaid, going
+    // through the very same effect + transform chain as any other layer.
+    let tmp_dir = output.parent().unwrap_or(Path::new(".")).to_path_buf();
+    for track in seq.tracks.iter().filter(|t| t.kind == TrackKind::Video && !t.muted) {
+        for clip in &track.clips {
+            let ClipPayload::Text { content, style } = &clip.payload else { continue };
+            if content.trim().is_empty() {
+                continue;
+            }
+            let img = ue_text::render_to_png(
+                &ue_text::TextSpec {
+                    content,
+                    style,
+                    out_w,
+                    out_h,
+                    width_fraction: ue_text::DEFAULT_WIDTH_FRACTION,
+                },
+                &tmp_dir,
+            )
+            .map_err(|e| ExportError::Ffmpeg(format!("could not render the title: {e}")))?;
+            let idx = inputs.at(img.clone(), 0);
+            temp_files.push(img);
+            let tvar = format!("(t-{})", secs(clip.start));
+            let vf = ue_render::clip_vf_layer(
+                &registry,
+                &clip.effects,
+                &clip.transform,
+                Some((out_w, out_h)),
+                &tvar,
+            )
+            .map(|c| format!("{c},"))
+            .unwrap_or_default();
+            let label = format!("tl{tk}");
+            fc.push(format!(
+                "[{idx}:v]setpts=PTS-STARTPTS+{}/TB,{vf}format=rgba,fps={fps}[{label}]",
+                secs(clip.start),
+            ));
+            let out_label = format!("tc{tk}");
+            fc.push(format!(
+                "[{current}][{label}]overlay=x=(W-w)/2:y=(H-h)/2:eof_action=pass:\
+                 enable='between(t,{},{})'[{out_label}]",
+                secs(clip.start),
+                secs(clip.end()),
+            ));
+            current = out_label;
+            tk += 1;
+        }
+    }
+
+    // ---- styled SUBTITLES clips still ride the drawtext layer path ----------
+    for track in seq.tracks.iter().filter(|t| t.kind == TrackKind::Video && !t.muted) {
+        for clip in &track.clips {
+            if !matches!(clip.payload, ClipPayload::Subtitles { .. }) {
+                continue;
+            }
+            if !text_is_styled_pub(clip) {
+                continue; // burned in by libass with the others
+            }
+            let Some(chain) =
+                text_clip_chain(project, seq, clip.id, out_h, out_w, None, &export_windows_pre)
+            else {
+                continue;
+            };
+            // transparent canvas the size of the frame, drawn in TIMELINE time so
+            // the drawtext `enable` windows and any keyframes line up
+            let tvar = format!("(t-{})", secs(clip.start));
+            let vf = ue_render::clip_vf_layer(
+                &registry,
+                &clip.effects,
+                &clip.transform,
+                Some((out_w, out_h)),
+                &tvar,
+            )
+            .map(|c| format!("{c},"))
+            .unwrap_or_default();
+            let label = format!("tl{tk}");
+            fc.push(format!(
+                // setpts FIRST: drawtext `enable` windows are in TIMELINE time, so the
+                // layer's clock must be the timeline's before they run
+                "color=c=black@0:s={out_w}x{out_h}:r={fps}:d={},setpts=PTS-STARTPTS+{}/TB,\
+                 format=rgba,{chain},{vf}format=rgba[{label}]",
+                secs(clip.duration),
+                secs(clip.start),
+            ));
+            let out_label = format!("tc{tk}");
+            fc.push(format!(
+                "[{current}][{label}]overlay=x=(W-w)/2:y=(H-h)/2:eof_action=pass:                 enable='between(t,{},{})'[{out_label}]",
+                secs(clip.start),
+                secs(clip.end()),
+            ));
+            current = out_label;
+            tk += 1;
+        }
+    }
+    if tk > 0 {
+        fc.push(format!("[{current}]format=yuv420p[tflat]"));
+        current = "tflat".to_string();
+    }
+
     // burn titles and subtitles onto the combined video, bounded to the ranges
     // actually being rendered (a full-transcript karaoke would otherwise emit
     // thousands of drawtext and crash ffmpeg)
@@ -1100,22 +1528,24 @@ pub fn build_ffmpeg_args(
     } else {
         settings.range.into_iter().collect()
     };
-    let text_chain = build_text_overlays(project, seq, out_h, out_w, &export_windows);
-    // guard: even bounded, a very long single range of dense karaoke could grow
-    // the filtergraph past what ffmpeg can parse (~900 KB crashed it). Fail with
-    // a clear message instead of a black-box crash.
-    if let Some(chain) = &text_chain {
-        const MAX_TEXT_FILTER: usize = 400_000;
-        if chain.len() > MAX_TEXT_FILTER {
-            return Err(ExportError::Ffmpeg(format!(
-                "the subtitle filtergraph is too large ({} KB): export a shorter range, \
-                 or use 'phrase'/'word' subtitles instead of 'karaoke'",
-                chain.len() / 1000
-            )));
+    let _ = &export_windows; // ranges are pre-applied now; nothing left to bound
+    // TITLES AND SUBTITLES GO THROUGH libass, NOT drawtext.
+    //
+    // The old path emitted one drawtext per line and TWO per karaoke word, each
+    // with its own `enable='between(t,…)'`; the filtergraph grew ~1 KB per second
+    // of speech and ffmpeg's parser gave up around 1 MB. An ASS script keeps all
+    // of that in a FILE, so the graph carries a single `ass=` filter no matter
+    // how long the transcript is — and libass, unlike drawtext, does per-glyph
+    // font fallback, which is what finally makes emoji render at all.
+    let mut subs_file: Option<PathBuf> = None;
+    match crate::ass::build_script(project, seq, out_w, out_h, None) {
+        Some(script) => {
+            let dir = output.parent().unwrap_or(Path::new("."));
+            let path = crate::ass::write_script(&script, dir)
+                .map_err(|e| ExportError::Ffmpeg(format!("could not write the subtitles: {e}")))?;
+            fc.push(format!("[{current}]{}[vout]", crate::ass::ass_filter(&path)));
+            subs_file = Some(path);
         }
-    }
-    match text_chain {
-        Some(chain) => fc.push(format!("[{current}]{chain}[vout]")),
         None => fc.push(format!("[{current}]null[vout]")),
     }
 
@@ -1127,14 +1557,13 @@ pub fn build_ffmpeg_args(
             let asset = project.asset(item.asset_id).expect("validated when collecting");
             resolve_path(base_dir, &asset.path)
         });
-        let idx = input_of_path(path);
+        let idx = inputs.at(path, item.src_in);
         let label = format!("a{k}");
         let dur_us = (((item.src_out - item.src_in) as f64) / item.speed).round() as TimeUs;
         let mut chain = format!(
-            "[{idx}:a]atrim=start={}:end={},asetpts=PTS-STARTPTS,\
+            "[{idx}:a]atrim=start=0:end={},asetpts=PTS-STARTPTS,\
              aresample=48000,aformat=channel_layouts=stereo",
-            secs(item.src_in),
-            secs(item.src_out),
+            secs(item.src_out - item.src_in),
         );
         if item.denoise && item.input_override.is_none() {
             // fallback: the denoised conform isn't rendered yet
@@ -1196,68 +1625,14 @@ pub fn build_ffmpeg_args(
         ));
     }
 
-    // ---- I-O range: trim the already-composited master ----
-    let mut vlabel = "[vout]".to_string();
-    let mut alabel = "[aout]".to_string();
-    let mut duration_us = total_us;
-    // normalize the requested pieces: `ranges` wins over the `range` shorthand
-    let requested: Vec<(TimeUs, TimeUs)> = if !settings.ranges.is_empty() {
-        settings.ranges.clone()
-    } else {
-        settings.range.into_iter().collect()
-    };
-    let pieces: Vec<(TimeUs, TimeUs)> = requested
-        .iter()
-        .map(|&(a, b)| (a.clamp(0, total_us), b.clamp(0, total_us)))
-        .filter(|(a, b)| b > a)
-        .collect();
-    if !pieces.is_empty() {
-        let want_audio = has_audio && !is_gif;
-        let n = pieces.len();
-        // the master is consumed once per piece → split it first
-        if n > 1 {
-            let vs: String = (0..n).map(|i| format!("[vs{i}]")).collect();
-            fc.push(format!("[vout]split={n}{vs}"));
-            if want_audio {
-                let as_: String = (0..n).map(|i| format!("[as{i}]")).collect();
-                fc.push(format!("[aout]asplit={n}{as_}"));
-            }
-        }
-        for (i, (a, b)) in pieces.iter().enumerate() {
-            let vsrc = if n > 1 { format!("[vs{i}]") } else { "[vout]".to_string() };
-            fc.push(format!(
-                "{vsrc}trim=start={}:end={},setpts=PTS-STARTPTS[vp{i}]",
-                secs(*a),
-                secs(*b)
-            ));
-            if want_audio {
-                let asrc = if n > 1 { format!("[as{i}]") } else { "[aout]".to_string() };
-                fc.push(format!(
-                    "{asrc}atrim=start={}:end={},asetpts=PTS-STARTPTS[ap{i}]",
-                    secs(*a),
-                    secs(*b)
-                ));
-            }
-        }
-        if n == 1 {
-            vlabel = "[vp0]".into();
-            if want_audio {
-                alabel = "[ap0]".into();
-            }
-        } else {
-            let inputs: String = (0..n)
-                .map(|i| if want_audio { format!("[vp{i}][ap{i}]") } else { format!("[vp{i}]") })
-                .collect();
-            let a_flag = u8::from(want_audio);
-            let outs = if want_audio { "[vcat][acat]" } else { "[vcat]" };
-            fc.push(format!("{inputs}concat=n={n}:v=1:a={a_flag}{outs}"));
-            vlabel = "[vcat]".into();
-            if want_audio {
-                alabel = "[acat]".into();
-            }
-        }
-        duration_us = pieces.iter().map(|(a, b)| b - a).sum();
-    }
+    // The I-O range no longer lives here: the sequence was already cut down to
+    // it before the graph was built (see the top of this function), so there is
+    // nothing left to trim off the end.
+    let vlabel = "[vout]".to_string();
+    let alabel = "[aout]".to_string();
+    let duration_us = total_us;
+    let mut vlabel = vlabel;
+    let alabel = alabel;
 
     // ---- GIF: optimized palette over the already-trimmed master ----
     if is_gif {
@@ -1271,15 +1646,21 @@ pub fn build_ffmpeg_args(
 
     // ---- command line ----
     let mut args: Vec<String> = vec!["-y".into(), "-v".into(), "error".into()];
-    for input in &inputs {
+    for (path, seek, is_image) in &inputs.specs {
         // a still image is one frame: loop it so it produces frames for the
         // whole clip. Without this a trim/overlay only saw a single frame and
         // the image flashed for ~one frame then vanished (base OR layer).
-        if ue_media::is_image_path(input) {
+        if *is_image {
             args.extend(["-loop".into(), "1".into()]);
         }
+        // INPUT-side seek: jumps by keyframe instead of decoding the file from
+        // byte zero. This is what makes exporting a clip from deep inside a
+        // long recording cost the clip's length, not its offset.
+        if *seek > 0 {
+            args.extend(["-ss".into(), secs(*seek)]);
+        }
         args.push("-i".into());
-        args.push(input.to_string_lossy().into_owned());
+        args.push(path.to_string_lossy().into_owned());
     }
     args.push("-filter_complex".into());
     args.push(fc.join(";"));
@@ -1312,5 +1693,5 @@ pub fn build_ffmpeg_args(
     }
     args.push(output.to_string_lossy().into_owned());
 
-    Ok(FfmpegPlan { args, duration_us })
+    Ok(FfmpegPlan { args, duration_us, subs_file, temp_files })
 }

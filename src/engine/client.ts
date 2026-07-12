@@ -62,6 +62,20 @@ export interface EngineClient {
   /** Real JPEG frame at the given time, or null if there is no signal / unsupported. */
   renderFrame(tUs: TimeUs, maxWidth: number): Promise<Uint8Array | null>;
 
+  /**
+   * A URL the webview can load this asset's media from (asset protocol on
+   * desktop). Used by the frontend preview compositor to decode video/image
+   * frames natively. Returns null when unavailable (mock/browser).
+   */
+  resolveAssetUrl(assetId: Id): Promise<string | null>;
+
+  /**
+   * One decoded source frame of an asset at `srcUs` as PNG bytes (alpha
+   * preserved), rendered by the backend with ffmpeg. Fallback for codecs the
+   * webview cannot decode (e.g. the generated avatar's qtrle .mov).
+   */
+  renderAssetFrame(assetId: Id, srcUs: TimeUs, maxWidth: number): Promise<Uint8Array | null>;
+
   /** Native "save as" dialog (null if the user cancels or it's unsupported). */
   pickSavePath(defaultName: string, extension?: string): Promise<string | null>;
   /** Exports the active sequence to MP4. Returns the written path. */
@@ -119,6 +133,7 @@ export interface EngineClient {
     clipId: Id,
     style: TextStyle,
     mode: "phrase" | "word" | "karaoke",
+    maxWords: number | null,
   ): Promise<StateSnapshot>;
   /** System fonts (family, path) for the text picker. */
   listFonts(): Promise<[string, string][]>;

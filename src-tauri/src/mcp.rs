@@ -506,6 +506,10 @@ fn tool_defs() -> Value {
                 },
                 "subtitles_mode": str_("Subtitles clips: 'phrase' (a line at a time), \
                     'word' (one word at a time) or 'karaoke' (the phrase, current word lit)"),
+                "subtitles_max_words": int("Subtitles clips: how many words a caption may hold \
+                    (1..20). This is the TOTAL per caption, not per line — a caption that does \
+                    not fit the frame is wrapped onto several lines. 0 or null = fit as many \
+                    words as the frame width allows (the default)."),
                 "generator_id": str_("Generator clips: switch the generator"),
                 "generator_params": { "type": "object", "description": "Generator clips: numeric/curve params (replaces them)" },
                 "generator_colors": { "type": "object", "description": "Generator clips: '#rrggbb' params (replaces them)" },
@@ -794,7 +798,10 @@ fn tool_defs() -> Value {
             "get_job_status",
             "Poll a background job started by transcribe_asset, export_video or \
              generate_avatar_video. Returns {status: running|done|error, \
-             progress: 0..1, message, result?, error?}. Those tools return a \
+             progress: 0..1, message, result?, error?, output_path?, output_bytes?}. \
+             `output_path`/`output_bytes` tell you WHICH file the job is writing and \
+             how big it has got, so a slow job is distinguishable from a hung one \
+             without inspecting the ffmpeg process. Those tools return a \
              `job_id` immediately (they can run for minutes) — keep calling this \
              until status is 'done' (the tool's real result is in `result`) or \
              'error'. A client-side timeout on the launching call is NOT a \
@@ -807,6 +814,16 @@ fn tool_defs() -> Value {
             "All background jobs this session (running and finished), newest \
              first: their kind, status, progress and message.",
             json!({}), &[], Kind::Read,
+        ),
+        tool(
+            "cancel_job",
+            "Stops a running job (transcribe or export). The work unwinds on its \
+             own — a transcription aborts inside whisper, an export kills its \
+             ffmpeg and removes the partial file — so the app stays usable. \
+             Before this the only way out of a long transcription was killing the \
+             whole editor.",
+            json!({ "job_id": str_("the id returned by the launching tool") }),
+            &["job_id"], Kind::Destructive,
         ),
 
         // ------------------------------------------------------------- history
@@ -1083,8 +1100,15 @@ fn call_tool(state: &AppState, app: Option<&tauri::AppHandle>, name: &str, raw: 
             Ok::<_, String>((asset_id, model))
         })() {
             Err(e) => tool_error(&e),
-            Ok((asset_id, model)) => run_async(state, app, "transcribe", "transcribing…", move |s, _| {
-                let (transcript_id, words) = crate::transcribe_blocking(s, asset_id, model)?;
+            Ok((asset_id, model)) => run_async(state, app, "transcribe", "transcribing…", move |s, jid| {
+                let cancel = crate::job_cancel_flag(s, jid);
+                let (transcript_id, words) = crate::transcribe_blocking_with(
+                    s,
+                    asset_id,
+                    model,
+                    |p| crate::job_progress(s, jid, p, ""),
+                    &cancel,
+                )?;
                 Ok(json!({ "transcript_id": transcript_id.to_string(), "words": words }))
             }),
         },
@@ -1416,6 +1440,15 @@ fn call_tool(state: &AppState, app: Option<&tauri::AppHandle>, name: &str, raw: 
         "playback" => finish(playback(state, app, &args)),
 
         // ---------------------------------------------------------------- jobs
+        "cancel_job" => finish((|| {
+            let id = args.get("job_id").and_then(|v| v.as_str()).ok_or("missing job_id")?;
+            let stopped = crate::job_request_cancel(state, id);
+            Ok(json!({
+                "job_id": id,
+                "cancelled": stopped,
+                "note": if stopped { "the job was asked to stop" } else { "no running job with that id" },
+            }))
+        })()),
         "get_job_status" => finish((|| {
             let id = args.str("job_id")?;
             state
@@ -1846,7 +1879,7 @@ fn set_clip_content(state: &AppState, args: &Args) -> Result<Value, String> {
             font_used = Some(style.font.clone());
             ue_core::Action::SetClipText { clip_id, content, style }
         }
-        ClipPayload::Subtitles { style, mode, .. } => {
+        ClipPayload::Subtitles { style, mode, max_words, .. } => {
             let style = match args.get("style") {
                 Some(p) => patch_style(style, p)?,
                 None => style.clone(),
@@ -1859,7 +1892,13 @@ fn set_clip_content(state: &AppState, args: &Args) -> Result<Value, String> {
                 Some("karaoke") => SubtitleMode::Karaoke,
                 Some(o) => return Err(format!("unknown subtitles_mode '{o}' (phrase|word|karaoke)")),
             };
-            ue_core::Action::SetClipSubtitles { clip_id, style, mode }
+            // 0 (or null) = back to fitting the line to the frame width
+            let max_words = match args.get("subtitles_max_words") {
+                None => *max_words,
+                Some(v) if v.is_null() => None,
+                Some(v) => v.as_u64().filter(|n| *n > 0).map(|n| n.min(20) as u32),
+            };
+            ue_core::Action::SetClipSubtitles { clip_id, style, mode, max_words }
         }
         ClipPayload::Generator { generator_id, params, color_params } => {
             let generator_id = args
@@ -2058,7 +2097,20 @@ impl ExportPlan {
     fn run(self, state: &AppState, job_id: &str) -> Result<Value, String> {
         let cancel = state.export_cancel.clone();
         cancel.store(false, Ordering::SeqCst);
+        crate::job_set_output(state, job_id, &self.path);
         let pieces = self.settings.ranges.len();
+        // a cancelled JOB must also stop the ffmpeg the export is driving
+        let job_cancel = crate::job_cancel_flag(state, job_id);
+        let export_cancel = cancel.clone();
+        std::thread::spawn(move || {
+            while !export_cancel.load(Ordering::SeqCst) {
+                if job_cancel.load(Ordering::SeqCst) {
+                    export_cancel.store(true, Ordering::SeqCst);
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+        });
         // the progress closure runs synchronously inside this call, so it can
         // borrow state/job_id directly (no escape)
         ue_export::export_sequence_with_progress(

@@ -156,10 +156,16 @@ function useNativeFileDrop() {
 /** Surface webview errors in the dev terminal (debugging without devtools). */
 function useErrorBridge() {
   useEffect(() => {
-    const onError = (e: ErrorEvent) =>
-      engine.uiLog("error", `${e.message} @ ${e.filename}:${e.lineno}`);
-    const onRejection = (e: PromiseRejectionEvent) =>
-      engine.uiLog("error", `unhandled rejection: ${e.reason}`);
+    const onError = (e: ErrorEvent) => {
+      // the stack names the real throw site; e.filename often points at
+      // react-dom's rethrow instead
+      const stack = (e.error as Error | undefined)?.stack?.split("\n").slice(0, 6).join(" | ");
+      engine.uiLog("error", `${e.message} @ ${e.filename}:${e.lineno}${stack ? ` :: ${stack}` : ""}`);
+    };
+    const onRejection = (e: PromiseRejectionEvent) => {
+      const stack = (e.reason as Error | undefined)?.stack?.split("\n").slice(0, 6).join(" | ");
+      engine.uiLog("error", `unhandled rejection: ${e.reason}${stack ? ` :: ${stack}` : ""}`);
+    };
     window.addEventListener("error", onError);
     window.addEventListener("unhandledrejection", onRejection);
     return () => {

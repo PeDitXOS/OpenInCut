@@ -1129,7 +1129,7 @@ fn tool_count_matches_the_docs() {
     let state = AppState::new_default();
     let tools = rpc(&state, "tools/list", json!({}));
     let n = tools.pointer("/result/tools").unwrap().as_array().unwrap().len();
-    assert_eq!(n, 51, "README/docs/MCP.md advertise the tool count; update them");
+    assert_eq!(n, 52, "README/docs/MCP.md advertise the tool count; update them");
 }
 
 /// GOLDEN RULE: the paused preview must show subtitles, exactly like the
@@ -1198,7 +1198,7 @@ fn preview_frame_shows_subtitles_like_export() {
         let style = TextStyle { size: 90.0, y_offset: 380.0, ..Default::default() };
         let subs = Clip {
             id: Id::new(),
-            payload: ClipPayload::Subtitles { transcript_id: doc_id, style, mode: SubtitleMode::Phrase },
+            payload: ClipPayload::Subtitles { transcript_id: doc_id, style, mode: SubtitleMode::Phrase, max_words: None },
             start: 0,
             duration: 3 * SEC,
             speed: 1.0,
@@ -1454,7 +1454,7 @@ fn preview_matches_export_pixel_for_pixel() {
         style.color = "#ffffff".into();
         store.insert_clip(v3, Clip {
             id: Id::new(),
-            payload: ClipPayload::Subtitles { transcript_id: doc_id, style, mode: SubtitleMode::Phrase },
+            payload: ClipPayload::Subtitles { transcript_id: doc_id, style, mode: SubtitleMode::Phrase, max_words: None },
             start: 0, duration: 3*SEC, speed: 1.0, effects: vec![], transform: Default::default(),
             audio: Default::default(), transition_in: None, label_color: None, name: None, group: None,
         }, InsertMode::Strict).unwrap();

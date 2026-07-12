@@ -40,6 +40,18 @@ function Slider({
   format?: (v: number) => string;
   onChange: (v: number) => void;
 }) {
+  const decimals = step < 1 ? 2 : 0;
+  const shown = format ? format(value) : `${value.toFixed(decimals)}${unit ?? ""}`;
+  // A slider alone can't hit an exact number, so the readout is an input:
+  // click it and type. ↑/↓ nudge by one step (×10 with Shift), Enter commits,
+  // Esc reverts. Typing is NOT clamped to the slider's range — the engine's
+  // own limits are the real ones, and a slider maximum shouldn't cap you.
+  const [draft, setDraft] = useState<string | null>(null);
+  const commit = (raw: string) => {
+    const n = Number(raw.replace(/[^\d.eE+-]/g, ""));
+    if (Number.isFinite(n)) onChange(n);
+    setDraft(null);
+  };
   return (
     <>
       <input
@@ -48,13 +60,37 @@ function Slider({
         min={min}
         max={max}
         step={step}
-        value={value}
+        value={Math.min(max, Math.max(min, value))}
         disabled={disabled}
         onChange={(e) => onChange(Number(e.target.value))}
       />
-      <span className="w-14 shrink-0 text-right font-[var(--font-mono)] text-[11px] text-ink">
-        {format ? format(value) : `${value.toFixed(step < 1 ? 2 : 0)}${unit ?? ""}`}
-      </span>
+      <input
+        className="focus-ring w-14 shrink-0 rounded bg-transparent text-right font-[var(--font-mono)] text-[11px] text-ink hover:bg-bg3 focus:bg-bg3 disabled:opacity-40"
+        value={draft ?? shown}
+        disabled={disabled}
+        title="Type an exact value · ↑/↓ to nudge (Shift ×10)"
+        onFocus={(e) => {
+          setDraft(String(Number(value.toFixed(decimals))));
+          requestAnimationFrame(() => e.target.select());
+        }}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={(e) => commit(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            commit((e.target as HTMLInputElement).value);
+            (e.target as HTMLInputElement).blur();
+          } else if (e.key === "Escape") {
+            setDraft(null);
+            (e.target as HTMLInputElement).blur();
+          } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+            e.preventDefault();
+            const d = (e.key === "ArrowUp" ? 1 : -1) * step * (e.shiftKey ? 10 : 1);
+            const next = Number((value + d).toFixed(6));
+            onChange(next);
+            setDraft(String(Number(next.toFixed(decimals))));
+          }
+        }}
+      />
     </>
   );
 }
@@ -491,6 +527,34 @@ function ClipInspector({ clip }: { clip: Clip }) {
             onChange={(p) => void setClipTransform(clip.id, { ...clip.transform, rotation: p })}
           />
         )}
+        <Row label="Flip">
+          <div className="flex min-w-0 flex-1 items-center gap-1.5">
+            {(
+              [
+                ["flip_h", "Horizontal", "↔"],
+                ["flip_v", "Vertical", "↕"],
+              ] as const
+            ).map(([key, title, glyph]) => (
+              <button
+                key={key}
+                className={`focus-ring flex h-6 flex-1 items-center justify-center gap-1 rounded-md border text-[11px] ${
+                  clip.transform[key]
+                    ? "border-(--color-accent) bg-accent/15 text-accent"
+                    : "border-line text-ink-dim hover:bg-bg3 hover:text-ink"
+                }`}
+                title={`Flip ${title.toLowerCase()}`}
+                onClick={() =>
+                  void setClipTransform(clip.id, {
+                    ...clip.transform,
+                    [key]: !clip.transform[key],
+                  })
+                }
+              >
+                {glyph} {title.slice(0, 1)}
+              </button>
+            ))}
+          </div>
+        </Row>
       </Section>
 
       <Section title="Audio">
@@ -876,6 +940,18 @@ function TextPanel({ clip }: { clip: Clip }) {
           Save
         </button>
       </div>
+      <Row label="Line height">
+        <Slider
+          value={style.line_height ?? 1.2}
+          min={0.8}
+          max={2}
+          step={0.05}
+          unit="×"
+          onChange={(v) =>
+            void setClipText(clip.id, content, { ...style, line_height: v })
+          }
+        />
+      </Row>
     </Section>
   );
 }
@@ -885,6 +961,7 @@ function SubtitlesPanel({ clip }: { clip: Clip }) {
   const subFonts = useStore((s) => s.fonts);
   if (clip.payload.type !== "subtitles") return null;
   const { style, mode } = clip.payload;
+  const maxWords = clip.payload.max_words ?? null;
 
   return (
     <Section title="Subtitles">
@@ -897,6 +974,7 @@ function SubtitlesPanel({ clip }: { clip: Clip }) {
               clip.id,
               style,
               e.target.value as "phrase" | "word" | "karaoke",
+              maxWords,
             )
           }
           title="Full phrase, word by word (shorts style) or karaoke"
@@ -911,7 +989,7 @@ function SubtitlesPanel({ clip }: { clip: Clip }) {
           className="focus-ring min-w-0 flex-1 cursor-pointer rounded-md border border-line bg-bg2 px-2 py-1 text-[12px] text-ink"
           value={style.font}
           onChange={(e) =>
-            void setSubtitlesProps(clip.id, { ...style, font: e.target.value }, mode)
+            void setSubtitlesProps(clip.id, { ...style, font: e.target.value }, mode, maxWords)
           }
           style={{ fontFamily: style.font }}
         >
@@ -930,11 +1008,37 @@ function SubtitlesPanel({ clip }: { clip: Clip }) {
             className="h-6 w-10 cursor-pointer rounded border border-line bg-transparent"
             value={style.highlight_color ?? "#FFB224"}
             onChange={(e) =>
-              void setSubtitlesProps(clip.id, { ...style, highlight_color: e.target.value }, mode)
+              void setSubtitlesProps(clip.id, { ...style, highlight_color: e.target.value }, mode, maxWords)
             }
           />
         </Row>
       )}
+      <Row label="Words">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <button
+            className={`focus-ring h-6 shrink-0 rounded-md border px-2 text-[11px] ${
+              maxWords === null
+                ? "border-(--color-accent) bg-accent/15 text-accent"
+                : "border-line text-ink-dim hover:bg-bg3 hover:text-ink"
+            }`}
+            title="Fit as many words as the frame width allows"
+            onClick={() => void setSubtitlesProps(clip.id, style, mode, null)}
+          >
+            Auto
+          </button>
+          <Slider
+            value={maxWords ?? 0}
+            min={1}
+            max={12}
+            step={1}
+            unit=""
+            format={(v) => (maxWords === null ? "auto" : `${v}`)}
+            onChange={(v) =>
+              void setSubtitlesProps(clip.id, style, mode, Math.max(1, Math.round(v)))
+            }
+          />
+        </div>
+      </Row>
       <Row label="Size">
         <Slider
           value={style.size}
@@ -942,7 +1046,7 @@ function SubtitlesPanel({ clip }: { clip: Clip }) {
           max={160}
           step={1}
           unit=" px"
-          onChange={(v) => void setSubtitlesProps(clip.id, { ...style, size: v }, mode)}
+          onChange={(v) => void setSubtitlesProps(clip.id, { ...style, size: v }, mode, maxWords)}
         />
       </Row>
       <Row label="Color">
@@ -950,7 +1054,7 @@ function SubtitlesPanel({ clip }: { clip: Clip }) {
           type="color"
           className="h-6 w-10 cursor-pointer rounded border border-line bg-transparent"
           value={style.color}
-          onChange={(e) => void setSubtitlesProps(clip.id, { ...style, color: e.target.value }, mode)}
+          onChange={(e) => void setSubtitlesProps(clip.id, { ...style, color: e.target.value }, mode, maxWords)}
         />
         <span className="font-[var(--font-mono)] text-[10px] text-ink-faint">{style.color}</span>
       </Row>
@@ -961,7 +1065,19 @@ function SubtitlesPanel({ clip }: { clip: Clip }) {
           max={500}
           step={5}
           unit=" px"
-          onChange={(v) => void setSubtitlesProps(clip.id, { ...style, y_offset: v }, mode)}
+          onChange={(v) => void setSubtitlesProps(clip.id, { ...style, y_offset: v }, mode, maxWords)}
+        />
+      </Row>
+      <Row label="Line height">
+        <Slider
+          value={style.line_height ?? 1.2}
+          min={0.8}
+          max={2}
+          step={0.05}
+          unit="×"
+          onChange={(v) =>
+            void setSubtitlesProps(clip.id, { ...style, line_height: v }, mode, maxWords)
+          }
         />
       </Row>
     </Section>

@@ -46,8 +46,15 @@ pub enum Param {
 impl Param {
     /// Curves must be strictly increasing in `t` (a project invariant).
     /// UI gestures (dragging a key past/onto another) can emit unsorted or
-    /// duplicated keys, so every write path sanitizes: sort by t, keep the
-    /// LAST value for duplicate times, and collapse ≤1 key to a constant.
+    /// duplicated keys, so every write path sanitizes: sort by t and keep the
+    /// LAST value for duplicate times.
+    ///
+    /// A ONE-key curve is kept as a curve. It used to collapse back to a
+    /// constant, which quietly broke the whole animation feature: enabling
+    /// animation on a constant property creates exactly one key at the
+    /// playhead (the AE behaviour PLAN §6.11 asks for), the engine turned it
+    /// straight back into a constant, and the diamond button did nothing at
+    /// all. Only an EMPTY curve is a constant.
     pub fn sanitized(self) -> Param {
         let Param::Curve(mut c) = self else { return self };
         c.keys.sort_by_key(|k| k.t);
@@ -59,11 +66,10 @@ impl Param {
                 false
             }
         });
-        match c.keys.len() {
-            0 => Param::Const(0.0),
-            1 => Param::Const(c.keys[0].value),
-            _ => Param::Curve(c),
+        if c.keys.is_empty() {
+            return Param::Const(0.0);
         }
+        Param::Curve(c)
     }
 
     pub fn eval(&self, t: TimeUs) -> f64 {
@@ -246,5 +252,31 @@ mod tests {
         assert_eq!(back, c);
         let n: Param = serde_json::from_str("3.5").unwrap();
         assert_eq!(n, p);
+    }
+}
+
+#[cfg(test)]
+mod first_key_tests {
+    use super::*;
+
+    /// Enabling animation on a constant creates exactly ONE key. If sanitize
+    /// collapses it back to a constant, the diamond button in the Inspector
+    /// does nothing at all and NOTHING can ever be animated (field bug).
+    #[test]
+    fn one_key_curve_survives_sanitize() {
+        let p = Param::Curve(KeyframeCurve {
+            keys: vec![Keyframe { t: 500_000, value: 42.0, interp: Interp::Linear }],
+        });
+        let s = p.sanitized();
+        assert!(matches!(s, Param::Curve(_)), "a one-key curve stays animatable, got {s:?}");
+        assert_eq!(s.eval(0), 42.0);
+        assert_eq!(s.eval(10_000_000), 42.0);
+    }
+
+    /// Removing the last key is how animation is switched OFF.
+    #[test]
+    fn empty_curve_becomes_a_constant() {
+        let p = Param::Curve(KeyframeCurve { keys: vec![] });
+        assert!(matches!(p.sanitized(), Param::Const(_)));
     }
 }

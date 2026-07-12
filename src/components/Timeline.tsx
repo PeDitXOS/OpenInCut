@@ -208,8 +208,14 @@ function roundedRect(
   h: number,
   r: number,
 ) {
-  const rr = Math.min(r, w / 2, h / 2);
+  // sub-pixel clips (a 1-frame blade cut) make w/2 negative — arcTo with a
+  // negative radius throws IndexSizeError in WebKit and unmounts the app
+  const rr = Math.max(0, Math.min(r, w / 2, h / 2));
   ctx.beginPath();
+  if (w <= 0 || h <= 0) {
+    ctx.rect(x, y, Math.max(w, 0.5), Math.max(h, 0.5));
+    return;
+  }
   ctx.moveTo(x + rr, y);
   ctx.arcTo(x + w, y, x + w, y + h, rr);
   ctx.arcTo(x + w, y + h, x, y + h, rr);

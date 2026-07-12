@@ -66,12 +66,16 @@ export function withKeyAt(p: Param, tUs: TimeUs, value: number, epsUs = 20_000):
   return { keys };
 }
 
-/** Removes the keyframe within ±eps of tUs; if ≤1 remain, reverts to Const. */
+/**
+ * Removes the keyframe within ±eps of tUs. Only an EMPTY curve reverts to a
+ * constant (= animation switched off). A one-key curve stays a curve: it is
+ * how a freshly animated property starts, and collapsing it was what made the
+ * diamond button appear to do nothing (see Param::sanitized in ue-core).
+ */
 export function removeKeyAt(p: Param, tUs: TimeUs, epsUs = 20_000): Param {
   if (typeof p === "number") return p;
   const keys = p.keys.filter((k) => Math.abs(k.t - tUs) > epsUs);
   if (keys.length === 0) return paramValue(p, tUs);
-  if (keys.length === 1) return keys[0].value;
   return { keys };
 }
 
@@ -183,6 +187,8 @@ export interface TextStyle {
   x_offset: number;
   y_offset: number;
   align: TextAlign;
+  /** Line spacing as a multiple of the font size (wrapped captions). */
+  line_height: number;
 }
 
 export const DEFAULT_TEXT_STYLE: TextStyle = {
@@ -196,12 +202,20 @@ export const DEFAULT_TEXT_STYLE: TextStyle = {
   x_offset: 0,
   y_offset: 0,
   align: "center",
+  line_height: 1.2,
 };
 
 export type ClipPayload =
   | { type: "media"; asset_id: Id; src_in: TimeUs; src_out: TimeUs }
   | { type: "text"; content: string; style: TextStyle }
-  | { type: "subtitles"; transcript_id: Id; style: TextStyle; mode: SubtitleMode }
+  | {
+      type: "subtitles";
+      transcript_id: Id;
+      style: TextStyle;
+      mode: SubtitleMode;
+      /** Hard cap on the words a caption holds; null = fit to the frame width. */
+      max_words?: number | null;
+    }
   | {
       type: "generator";
       generator_id: string;
@@ -414,25 +428,31 @@ export function captionMaxChars(canvasW: number, fontPx: number): number {
 export function captionPhrases(
   doc: TranscriptDoc,
   maxChars: number,
+  maxWords?: number | null,
 ): { text: string; words: TranscriptWord[]; s: TimeUs; e: TimeUs }[] {
   const words = doc.words.filter((w) => !w.rejected);
   if (!words.length) {
     return doc.segments.map((s) => ({ text: s.text, words: [], s: s.start_us, e: s.end_us }));
   }
+  const cap = maxWords ? Math.min(20, Math.max(1, Math.round(maxWords))) : null;
   const cuts = [0];
   let chars = wordLabel(words[0]).length;
+  let count = 1;
   let chunkStart = words[0].start_us;
   for (let i = 1; i < words.length; i++) {
     const w = words[i];
     const gap = w.start_us - words[i - 1].end_us;
-    const tooLong = chars + 1 + wordLabel(w).length > maxChars;
+    // an explicit word cap REPLACES the width heuristic (mirror of graph.rs)
+    const full = cap ? count >= cap : chars + 1 + wordLabel(w).length > maxChars;
     const tooSlow = w.end_us - chunkStart > CAPTION_MAX_DUR_US;
-    if (tooLong || gap > CAPTION_GAP_US || tooSlow) {
+    if (full || gap > CAPTION_GAP_US || tooSlow) {
       cuts.push(i);
       chars = wordLabel(w).length;
+      count = 1;
       chunkStart = w.start_us;
     } else {
       chars += 1 + wordLabel(w).length;
+      count += 1;
     }
   }
   cuts.push(words.length);
@@ -463,14 +483,14 @@ export function activeSubtitleText(
   spans?: { text: string; active: boolean }[];
 } | null {
   if (clip.payload.type !== "subtitles") return null;
-  const { transcript_id, style, mode } = clip.payload;
+  const { transcript_id, style, mode, max_words } = clip.payload;
   const doc = project.transcripts.find((t) => t.id === transcript_id);
   if (!doc) return null;
   const seq = activeSequence(project);
   const fontPx = style.size * (seq.resolution[1] / 1080);
 
   if (mode === "phrase" || mode === "karaoke") {
-    const phrases = captionPhrases(doc, captionMaxChars(seq.resolution[0], fontPx));
+    const phrases = captionPhrases(doc, captionMaxChars(seq.resolution[0], fontPx), max_words);
     for (const ph of phrases) {
       const tlStart = assetTimeToTimeline(project, doc.asset_id, ph.s);
       if (tlStart === null) continue;
