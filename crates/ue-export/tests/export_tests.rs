@@ -3786,11 +3786,13 @@ fn exit_transition_runs_on_base_and_layers() {
     let _ = std::fs::remove_file(dir.join("exit-prev.jpg"));
 }
 
-/// TEMP repro: Héctor's exact clip — layer with position transform + chroma
-/// key + circleopen entrance. Dumps the paused frame for visual inspection.
+/// Manual repro: layer with position transform + chroma key + circleopen
+/// entrance. Point UE_REPRO_AVATAR at a real avatar .mov to run it; it dumps
+/// the paused frame for visual inspection and is skipped otherwise.
 #[test]
 fn repro_positioned_layer_circle_entrance() {
-    let av = Path::new("/Users/hectorpulido/Library/Caches/net.pequesoft.ubereditor/avatar_01KXA7TPXXT51EFZN0BEPH5C5J_01KXA7PRYRRVJMA058S8F9RDT1.mov");
+    let Ok(av_path) = std::env::var("UE_REPRO_AVATAR") else { return };
+    let av = Path::new(&av_path);
     if !av.exists() { return; }
     let Some(dir) = media_dir() else { return };
     let mut project = Project::new("repro");
@@ -3826,6 +3828,7 @@ fn repro_positioned_layer_circle_entrance() {
     let jpeg = ue_export::preview::render_preview_frame(&store.project, seq_id, dir, 650_000, 1280, &[])
         .unwrap()
         .unwrap();
-    std::fs::write("/tmp/ue_repro_circle.jpg", &jpeg).unwrap();
-    eprintln!("wrote /tmp/ue_repro_circle.jpg ({} bytes)", jpeg.len());
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ue_repro_circle.jpg");
+    std::fs::write(&out, &jpeg).unwrap();
+    eprintln!("wrote {} ({} bytes)", out.display(), jpeg.len());
 }

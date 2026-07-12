@@ -1028,42 +1028,52 @@ export function demoProject(): Project {
     ],
   };
 
-  // demo transcript of the voiceover (for the Text panel)
-  const phrases = [
+  // demo transcripts (for the Text panel)
+  const demoTranscript = (
+    asset: Project["assets"][number],
+    phrases: string[],
+  ): Project["transcripts"][number] => {
+    const words: Project["transcripts"][number]["words"] = [];
+    const segments: Project["transcripts"][number]["segments"] = [];
+    let t = 300_000;
+    for (const phrase of phrases) {
+      const from = words.length;
+      for (const word of phrase.split(" ")) {
+        const dur = 180_000 + word.length * 30_000;
+        words.push({ text: word, start_us: t, end_us: t + dur, confidence: 0.95, rejected: false });
+        t += dur + 60_000;
+      }
+      segments.push({
+        text: phrase,
+        start_us: words[from].start_us,
+        end_us: words[words.length - 1].end_us,
+        word_range: [from, words.length],
+        emotion: null,
+        volume_rms: 0,
+      });
+      t += 1_200_000; // pause between phrases
+    }
+    const doc: Project["transcripts"][number] = {
+      id: newId("tr"),
+      asset_id: asset.id,
+      language: "en",
+      model: "base",
+      words,
+      segments,
+      global_avg_volume: 0,
+    };
+    asset.transcript = doc.id;
+    return doc;
+  };
+  const voiceTranscript = demoTranscript(voice, [
     "hey everyone welcome back to another devlog",
     "today we're building a physics engine from scratch",
     "um so first let's talk about collisions",
-  ];
-  const words: Project["transcripts"][number]["words"] = [];
-  const segments: Project["transcripts"][number]["segments"] = [];
-  let t = 300_000;
-  for (const phrase of phrases) {
-    const from = words.length;
-    for (const word of phrase.split(" ")) {
-      const dur = 180_000 + word.length * 30_000;
-      words.push({ text: word, start_us: t, end_us: t + dur, confidence: 0.95, rejected: false });
-      t += dur + 60_000;
-    }
-    segments.push({
-      text: phrase,
-      start_us: words[from].start_us,
-      end_us: words[words.length - 1].end_us,
-      word_range: [from, words.length],
-      emotion: null,
-      volume_rms: 0,
-    });
-    t += 1_200_000; // pause between phrases
-  }
-  const voiceTranscript: Project["transcripts"][number] = {
-    id: newId("tr"),
-    asset_id: voice.id,
-    language: "en",
-    model: "base",
-    words,
-    segments,
-    global_avg_volume: 0,
-  };
-  voice.transcript = voiceTranscript.id;
+  ]);
+  const camTranscript = demoTranscript(cam, [
+    "what's up guys quick intro before we start",
+    "grab a coffee this one is a long one",
+  ]);
 
   return {
     schema_version: 1,
@@ -1087,7 +1097,7 @@ export function demoProject(): Project {
         api_key: "",
       },
     ],
-    transcripts: [voiceTranscript],
+    transcripts: [voiceTranscript, camTranscript],
     sequences: [seq],
     active_sequence: seq.id,
   };

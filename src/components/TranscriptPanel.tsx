@@ -1,10 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { TranscriptWord } from "../engine/types";
 import {
+  activeSequence,
   assetName,
-  timelineDocument,
-  tokenRunRange,
   wordLabel,
   wordTimelineRange,
   wordsToCutRanges,
@@ -12,17 +11,31 @@ import {
 import { useStore } from "../state/store";
 
 /**
- * Text-based editing. Two views:
- * - Words: mark words → cut/move (click marks, double-click renames).
- * - Document: the timeline projected as text; select and Backspace deletes,
- *   ⌘X + ⌘V moves material — the video follows the text.
+ * Text-based editing: click a word to mark it (and jump there), then cut or
+ * move the marked words — the video follows the text.
  */
 export function TranscriptPanel() {
   const project = useStore((s) => s.project);
+  const selection = useStore((s) => s.selection);
   const [assetSel, setAssetSel] = useState<string | null>(null);
-  const [view, setView] = useState<"words" | "document">("words");
 
   const transcripts = project.transcripts;
+
+  // Selecting a clip on the timeline shows its transcript, when it has one.
+  useEffect(() => {
+    for (const id of selection) {
+      for (const track of activeSequence(project).tracks) {
+        const clip = track.clips.find((c) => c.id === id);
+        if (!clip || clip.payload.type !== "media") continue;
+        const assetId = clip.payload.asset_id;
+        if (transcripts.some((t) => t.asset_id === assetId)) {
+          setAssetSel(assetId);
+          return;
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selection]);
   if (!transcripts.length) {
     return (
       <div className="px-3 py-4 text-[11px] leading-relaxed text-ink-faint">
@@ -53,25 +66,9 @@ export function TranscriptPanel() {
             </option>
           ))}
         </select>
-        {(["words", "document"] as const).map((v) => (
-          <button
-            key={v}
-            className={`focus-ring rounded-md px-2 py-1 text-[11px] ${
-              view === v ? "bg-bg3 text-ink" : "text-ink-faint hover:text-ink"
-            }`}
-            onClick={() => setView(v)}
-            title={
-              v === "words"
-                ? "Mark words to cut or move them"
-                : "Edit the text like a document: the video follows"
-            }
-          >
-            {v === "words" ? "Words" : "Document"}
-          </button>
-        ))}
       </div>
       <ReplaceBar transcriptId={doc.id} />
-      {view === "words" ? <WordsView docId={doc.id} /> : <DocumentView docId={doc.id} />}
+      <WordsView docId={doc.id} />
     </div>
   );
 }
@@ -136,6 +133,8 @@ function WordsView({ docId }: { docId: string }) {
   const playheadUs = useStore((s) => s.playheadUs);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [editing, setEditing] = useState<number | null>(null);
+  // ⌘X stashes the marked block's timeline range; ⌘V moves it to the playhead
+  const [moveStash, setMoveStash] = useState<[number, number] | null>(null);
 
   const doc = project.transcripts.find((t) => t.id === docId);
   if (!doc) return null;
@@ -169,9 +168,54 @@ function WordsView({ docId }: { docId: string }) {
     setSelected(new Set());
   };
 
+  const stashForMove = () => {
+    const words = [...selected].sort((a, b) => a - b).map((i) => doc.words[i]);
+    const ranges = wordsToCutRanges(project, doc.asset_id, words, 0, 150_000);
+    if (ranges.length !== 1) {
+      useStore.setState({
+        lastActionLabel: "⚠ to move, mark contiguous words (a single block)",
+      });
+      return;
+    }
+    setMoveStash(ranges[0]);
+    setSelected(new Set());
+    useStore.setState({
+      lastActionLabel: `✂ ${words.length} word(s) ready to move — place the playhead and ⌘V`,
+    });
+  };
+
+  const pasteStash = async () => {
+    if (!moveStash) return;
+    await moveTimelineRange(moveStash[0], moveStash[1], playheadUs);
+    setMoveStash(null);
+  };
+
   return (
     <>
-      <div className="min-h-0 flex-1 select-text overflow-y-auto px-3 pb-2 text-[13px] leading-[1.9]">
+      <div
+        tabIndex={0}
+        className="min-h-0 flex-1 select-text overflow-y-auto px-3 pb-2 text-[13px] leading-[1.9] outline-none"
+        onKeyDown={(e) => {
+          if ((e.target as HTMLElement).tagName === "INPUT") return; // WordEditor
+          const mod = e.metaKey || e.ctrlKey;
+          if ((e.key === "Backspace" || e.key === "Delete") && selected.size > 0) {
+            e.preventDefault();
+            e.stopPropagation(); // the global Backspace deletes timeline clips
+            void cutSelected();
+          } else if (mod && e.key.toLowerCase() === "x" && selected.size > 0) {
+            e.preventDefault();
+            e.stopPropagation();
+            stashForMove();
+          } else if (mod && e.key.toLowerCase() === "v" && moveStash) {
+            e.preventDefault();
+            e.stopPropagation();
+            void pasteStash();
+          } else if (e.key === "Escape") {
+            setSelected(new Set());
+            setMoveStash(null);
+          }
+        }}
+      >
         <p className="mb-2">
           {doc.words.map((w, i) =>
             editing === i ? (
@@ -232,7 +276,8 @@ function WordsView({ docId }: { docId: string }) {
           </button>
         </div>
         <p className="mt-1.5 text-[10px] leading-snug text-ink-faint">
-          Click jumps to the word · ⌥click marks for cutting · double-click renames
+          Click marks the word and jumps to it · double-click renames · <b>Backspace</b> cuts the
+          marked words · <b>⌘X</b>, place the playhead, <b>⌘V</b> moves them · <b>Esc</b> clears
         </p>
       </div>
     </>
@@ -277,9 +322,9 @@ function WordSpan({
               : "text-ink-dim hover:bg-bg3 hover:text-ink",
       ].join(" ")}
       title={word.display ? `Corrected (was “${word.text}”)` : undefined}
-      onClick={(e) => {
-        if (e.altKey) onToggle();
-        else onSeek();
+      onClick={() => {
+        onToggle();
+        onSeek();
       }}
       onDoubleClick={(e) => {
         e.preventDefault();
@@ -312,142 +357,5 @@ function WordEditor({
         if (e.key === "Escape") onDone(null);
       }}
     />
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Document view: the timeline as text; editing it edits the video
-// ---------------------------------------------------------------------------
-
-function DocumentView({ docId }: { docId: string }) {
-  const project = useStore((s) => s.project);
-  const version = useStore((s) => s.version);
-  const seek = useStore((s) => s.seek);
-  const playheadUs = useStore((s) => s.playheadUs);
-  const cutTimelineRanges = useStore((s) => s.cutTimelineRanges);
-  const moveTimelineRange = useStore((s) => s.moveTimelineRange);
-  const [anchor, setAnchor] = useState<number | null>(null);
-  const [focusIdx, setFocusIdx] = useState<number | null>(null);
-  const [clipboard, setClipboard] = useState<[number, number] | null>(null);
-
-  const doc = project.transcripts.find((t) => t.id === docId);
-  const tokens = useMemo(
-    () => (doc ? timelineDocument(project, doc) : []),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [project, version, docId],
-  );
-  if (!doc) return null;
-
-  const sel: [number, number] | null =
-    anchor !== null && focusIdx !== null
-      ? [Math.min(anchor, focusIdx), Math.max(anchor, focusIdx)]
-      : null;
-
-  /** Contiguous runs of the selection (deleting may span several clips). */
-  const selectionRanges = (): [number, number][] => {
-    if (!sel) return [];
-    return [[sel[0], sel[1]]];
-  };
-
-  const clearSel = () => {
-    setAnchor(null);
-    setFocusIdx(null);
-  };
-
-  const deleteSelection = async () => {
-    if (!sel) return;
-    const ranges = selectionRanges().map(([a, b]) => tokenRunRange(tokens, a, b));
-    await cutTimelineRanges(ranges);
-    clearSel();
-    setClipboard(null);
-  };
-
-  const cutToClipboard = () => {
-    if (!sel) return;
-    setClipboard(sel);
-    useStore.setState({
-      lastActionLabel: `✂ ${sel[1] - sel[0] + 1} word(s) on the clipboard — click a spot and ⌘V`,
-    });
-  };
-
-  const pasteAtCaret = async () => {
-    if (!clipboard || focusIdx === null) return;
-    const [a, b] = clipboard;
-    if (focusIdx >= a && focusIdx <= b) {
-      useStore.setState({ lastActionLabel: "⚠ paste outside the cut block" });
-      return;
-    }
-    const [from, to] = tokenRunRange(tokens, a, b);
-    // paste BEFORE the caret token
-    const dest = focusIdx > b ? tokens[focusIdx].tlStart : tokens[focusIdx].tlStart;
-    await moveTimelineRange(from, to, dest);
-    setClipboard(null);
-    clearSel();
-  };
-
-  return (
-    <>
-      <div
-        tabIndex={0}
-        className="focus-ring m-1 min-h-0 flex-1 cursor-text select-none overflow-y-auto rounded-md px-2 pb-2 text-[13px] leading-[1.9] outline-none"
-        onKeyDown={(e) => {
-          const mod = e.metaKey || e.ctrlKey;
-          if (e.key === "Backspace" || e.key === "Delete") {
-            e.preventDefault();
-            void deleteSelection();
-          } else if (mod && e.key.toLowerCase() === "x") {
-            e.preventDefault();
-            cutToClipboard();
-          } else if (mod && e.key.toLowerCase() === "v") {
-            e.preventDefault();
-            void pasteAtCaret();
-          } else if (e.key === "Escape") {
-            clearSel();
-            setClipboard(null);
-          }
-        }}
-      >
-        {tokens.length === 0 && (
-          <p className="pt-2 text-[11px] text-ink-faint">
-            No material of this transcript on the timeline.
-          </p>
-        )}
-        {tokens.map((t, i) => {
-          const inSel = sel !== null && i >= sel[0] && i <= sel[1];
-          const inClipboard = clipboard !== null && i >= clipboard[0] && i <= clipboard[1];
-          const under = playheadUs >= t.tlStart && playheadUs < t.tlEnd;
-          return (
-            <span
-              key={t.key}
-              className={[
-                "rounded px-0.5",
-                inClipboard
-                  ? "bg-accent/15 text-accent/70 italic"
-                  : inSel
-                    ? "bg-accent/30 text-ink"
-                    : under
-                      ? "bg-accent/20 text-ink"
-                      : "text-ink-dim hover:bg-bg3 hover:text-ink",
-              ].join(" ")}
-              onClick={(e) => {
-                if (e.shiftKey && anchor !== null) setFocusIdx(i);
-                else {
-                  setAnchor(i);
-                  setFocusIdx(i);
-                  seek(t.tlStart);
-                }
-              }}
-            >
-              {wordLabel(t.word)}{" "}
-            </span>
-          );
-        })}
-      </div>
-      <div className="border-t border-line-soft p-2 text-[10px] leading-snug text-ink-faint">
-        Click places the caret (and seeks) · ⇧click selects · <b>Backspace</b> deletes the
-        selection from the video · <b>⌘X</b> then click + <b>⌘V</b> moves it — everything is one
-        undo step.
-      </div>
-    </>
   );
 }

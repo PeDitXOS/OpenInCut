@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
 import type { Clip, Id, Project } from "../engine/types";
 import { activeSequence, activeSubtitleText, assetName } from "../engine/types";
@@ -210,8 +210,6 @@ export function Preview() {
   );
   const exactQueuedRef = useRef<string | null>(null);
   const exactTimerRef = useRef<number>(0);
-  const exactLiveRef = useRef(false);
-  const [exactLive, setExactLive] = useState(false);
 
   const project = useStore((s) => s.project);
   const playheadUs = useStore((s) => s.playheadUs);
@@ -264,13 +262,6 @@ export function Preview() {
     let lastW = 0;
     let lastH = 0;
     let lastDpr = 0;
-
-    const markExact = (v: boolean) => {
-      if (exactLiveRef.current !== v) {
-        exactLiveRef.current = v;
-        setExactLive(v);
-      }
-    };
 
     // Debounced fetch of the export-exact frame: fires once the playhead /
     // project / size stop changing. The approximation stays on screen until
@@ -342,14 +333,12 @@ export function Preview() {
           if (hit?.key === key && hit.bitmap) {
             ctx.drawImage(hit.bitmap, 0, 0, w, h);
             drawOverlays(ctx, w, h, [], [], true); // guides only: text is burned in
-            markExact(true);
             return;
           }
           if (hit?.key !== key || (!hit.bitmap && performance.now() > hit.retryAt)) {
             scheduleExact(key, s.playheadUs, Math.round(w * dpr));
           }
         }
-        markExact(false);
         const any = await compositeFrame(ctx, w, h, s.project, seq, s.playheadUs, frameSources);
         if (!running) return;
         if (!any && !texts.length && !subtitles.length && !styled.length) {
@@ -481,26 +470,6 @@ export function Preview() {
         <div className="flex items-center gap-2 text-[11px] text-ink-faint">
           <ShuttleBadge />
           {engine.kind === "tauri" && <AudioMeters />}
-          {engine.kind === "tauri" && !playing && (
-            <span
-              className={
-                exactLive
-                  ? "rounded-md border border-(--color-accent) px-2 py-1 text-(--color-accent)"
-                  : "rounded-md border border-line px-2 py-1"
-              }
-              title={
-                exactLive
-                  ? "This frame was rendered with the export's ffmpeg graph: what you see is exactly what exports"
-                  : "Live approximation; the export-exact frame is rendering"
-              }
-            >
-              {exactLive ? "1:1" : "≈"}
-            </span>
-          )}
-          <span className="rounded-md border border-line px-2 py-1">
-            {engine.kind === "tauri" ? "Engine: desktop" : "Engine: browser"}
-          </span>
-          <span className="font-[var(--font-mono)]">0 drops</span>
         </div>
       </div>
     </div>
