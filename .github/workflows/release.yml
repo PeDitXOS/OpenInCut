@@ -20,11 +20,8 @@ jobs:
       matrix:
         include:
           - platform: 'windows-latest'
-            args: ''
           - platform: 'ubuntu-latest'
-            args: ''
           - platform: 'macos-latest'
-            args: ''
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -50,7 +47,7 @@ jobs:
           brew install ffmpeg
       - run: npm ci
       - run: npm run build
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
