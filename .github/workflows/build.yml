@@ -8,7 +8,7 @@ jobs:
       - name: Debug Startup
         run: |
           echo "Runner is alive"
-          node -v || echo "node not found yet"
+          node -v
 
       - uses: actions/checkout@v4
       
@@ -17,8 +17,7 @@ jobs:
           node-version: 22.x
           
       - uses: dtolnay/rust-toolchain@stable
-      # rust-cache暂时注释 - 可能导致silent hang
-      # - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
       
       - uses: FedericoCarboni/setup-ffmpeg@v3
       
@@ -34,3 +33,4 @@ jobs:
           releaseBody: 'Automated Windows build'
           releaseDraft: true
           prerelease: false
+          args: '--bundles nsis,msi'
