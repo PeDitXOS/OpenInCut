@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Tauri app
+        run: npm run tauri build -- --bundles nsis,msi
+
+      - name: Rename artifacts
+        run: |
+          $version = "0.2.1"
+          $files = Get-ChildItem -Path "src-tauri\target\release\bundle" -Recurse -File | Where-Object { $_.Extension -in @('.exe', '.msi') }
+          foreach ($file in $files) {
+            $newName = $file.BaseName + "_v0.2.1" + $file.Extension
+            $newPath = Join-Path $file.DirectoryName $newName
+            Move-Item -Path $file.FullName -Destination $newPath
+            echo "Renamed: $($file.Name) -> $newName"
+          }
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.2.1
+          name: 'OpenInCut v0.2.1'
+          body: |
+            ## OpenInCut v0.2.1
+
+            ### ✨ New Features
+            - **analyze_frame MCP tool**: Extract video frames as base64 JPEG for AI vision analysis
+            - **perspective_correct effect**: Auto horizon leveling with angle and auto-zoom
+
+            ### 🌐 Multilingual Support
+            - README translations: Persian (fa), Arabic (ar), Russian (ru), Chinese (zh)
+            - RTL support for Persian/Arabic/Hebrew in UI and subtitles
+
+            ### 🔧 Improvements
+            - Restored `call_tool()` from upstream
+            - Path handling fixes for Windows (String paths)
+            - Version bump to 0.2.1
+
+            ### 📦 Assets
+            - `OpenInCut_0.2.1_x64-setup.exe` — NSIS installer (5 MB)
+            - `OpenInCut_0.2.1_x64_en-US.msi` — MSI installer (7 MB)
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
