@@ -1586,10 +1586,12 @@ fn call_tool(state: &AppState, app: Option<&tauri::AppHandle>, name: &str, raw: 
             drop(store);
 
             let time_sec = time_us as f64 / 1_000_000.0;
+            let ss_str = format!("{:.6}", time_sec);
+            let path_str = path.to_str().unwrap_or("").to_string();
             let output = std::process::Command::new("ffmpeg")
                 .args([
-                    "-ss", &format!("{:.6}", time_sec),
-                    "-i", path.to_str().unwrap_or(""),
+                    "-ss", &ss_str,
+                    "-i", &path_str,
                     "-frames:v", "1",
                     "-f", "image2",
                     "-c:v", "mjpeg",
