@@ -869,16 +869,18 @@ fn tool_defs() -> Value {
             &["job_id"], Kind::Destructive,
         ),
 
-        // AI vision tools
+
+        // ------------------------------------------------------------- AI vision
         tool(
             "analyze_frame",
-            "Extract a frame from a video asset at a given time and return it as base64 JPEG.\\
-             Use with a vision model to analyze colors, brightness, contrast, perspective.\\
+            "Extract a frame from a video/image asset at a given time and return it\
+             as base64 JPEG for AI analysis. Use this with a vision-capable model to\
+             analyze colors, brightness, contrast, perspective, or any visual property.\
              Returns {frame_base64, mime_type, prompt, time_us}.",
             json!({
                 "asset_id": str_("asset id from get_media_pool"),
                 "time_us": int("time in microseconds (default 0)"),
-                "prompt": str_("what to analyze (default: full description)"),
+                "prompt": str_("what to analyze (default: 'Describe the image in detail')"),
             }),
             &["asset_id"], Kind::Read,
         ),
@@ -1556,22 +1558,30 @@ fn call_tool(state: &AppState, app: Option<&tauri::AppHandle>, name: &str, raw: 
             &["asset_id"], Kind::Read,
         ),
 
-        // AI vision
-        "analyze_frame" => {
-            let asset_id = if let Ok(Some(id)) = args.opt_id("asset_id") {
-                id
-            } else {
-                return tool_error("asset_id is required");
-            };
+
+        // ------------------------------------------------------------- AI vision
+        tool(
+            "analyze_frame",
+            "Extract a frame from a video/image asset at a given time and return it\
+             as base64 JPEG for AI analysis. Use this with a vision-capable model to\
+             analyze colors, brightness, contrast, perspective, or any visual property.\
+             Returns {frame_base64, mime_type, prompt, time_us}.",
+            json!({
+                "asset_id": str_("asset id from get_media_pool"),
+                "time_us": int("time in microseconds (default 0)"),
+                "prompt": str_("what to analyze (default: 'Describe the image in detail')"),
+            }),
+            &["asset_id"], Kind::Read,
+        ),
+
+        // ------------------------------------------------------------- AI vision
+        "analyze_frame" => finish((|| {
+            let asset_id = args.id("asset_id")?;
             let time_us = args.i64("time_us").unwrap_or(0);
             let prompt = args.str("prompt").unwrap_or("Describe the image in detail: colors, brightness, contrast, sharpness, any issues.");
 
             let store = state.store.lock().unwrap();
-            let asset = if let Some(a) = store.project.asset(asset_id) {
-                a
-            } else {
-                return tool_error("asset not found");
-            };
+            let asset = store.project.asset(asset_id).ok_or("asset not found")?;
             let path = asset.path.clone();
             drop(store);
 
@@ -1579,7 +1589,7 @@ fn call_tool(state: &AppState, app: Option<&tauri::AppHandle>, name: &str, raw: 
             let output = std::process::Command::new("ffmpeg")
                 .args([
                     "-ss", &format!("{:.6}", time_sec),
-                    "-i", &path,
+                    "-i", path.to_str().unwrap_or(""),
                     "-frames:v", "1",
                     "-f", "image2",
                     "-c:v", "mjpeg",
@@ -1589,25 +1599,25 @@ fn call_tool(state: &AppState, app: Option<&tauri::AppHandle>, name: &str, raw: 
                 ])
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::null())
-                .output();
+                .output()
+                .map_err(|e| format!("ffmpeg failed: {e}"))?;
 
-            match output {
-                Ok(o) if o.status.success() => {
-                    let b64 = base64::Engine::encode(
-                        &base64::engine::general_purpose::STANDARD,
-                        &o.stdout,
-                    );
-                    text_result(json!({
-                        "frame_base64": b64,
-                        "mime_type": "image/jpeg",
-                        "prompt": prompt,
-                        "time_us": time_us,
-                    }))
-                }
-                _ => tool_error("ffmpeg frame extraction failed"),
+            if !output.status.success() {
+                return Err("ffmpeg frame extraction failed".into());
             }
-        },
 
+            let b64 = base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                &output.stdout,
+            );
+
+            Ok(json!({
+                "frame_base64": b64,
+                "mime_type": "image/jpeg",
+                "prompt": prompt,
+                "time_us": time_us,
+            }))
+        })()),
         // ------------------------------------------------------------- history
         "undo" => finish(
             state
