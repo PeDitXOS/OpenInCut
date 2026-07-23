@@ -179,14 +179,14 @@ export class TauriEngine implements EngineClient {
     return save({
       title: "Save project",
       defaultPath: defaultName,
-      filters: [{ name: "UberEditor project", extensions: ["uep"] }],
+      filters: [{ name: "OpenInCut project", extensions: ["uep"] }],
     });
   }
   async pickProjectOpenPath(): Promise<string | null> {
     const picked = await open({
       title: "Open project",
       multiple: false,
-      filters: [{ name: "UberEditor project", extensions: ["uep"] }],
+      filters: [{ name: "OpenInCut project", extensions: ["uep"] }],
     });
     return typeof picked === "string" ? picked : null;
   }

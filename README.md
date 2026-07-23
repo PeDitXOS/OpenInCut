@@ -1,4 +1,4 @@
-# UberEditor
+# OpenInCut
 
 Cross-platform desktop video editor (Tauri 2 + Rust + React) built for content creators, with AI superpowers: **text-based editing** (word-by-word Whisper), **silences gone with one click**, **automatic verticals**, **emotion-reactive avatar**, **karaoke subtitles**, **voiceover from text**, and an **embedded MCP server** so an agent (Claude, etc.) can edit your project for you.
 
@@ -173,7 +173,7 @@ Avatar setups are saved in the project and can be imported/exported (Youtubers-t
 On startup, the app brings up an MCP server at `http://127.0.0.1:4599/mcp` (loopback only) **protected with a token** (generated at startup; find it in the «MCP» pill in the header, which includes the connection command ready to copy):
 
 ```bash
-claude mcp add --transport http ubereditor http://127.0.0.1:4599/mcp \
+claude mcp add --transport http opencut http://127.0.0.1:4599/mcp \
   --header "Authorization: Bearer <token>"
 ```
 
@@ -200,3 +200,21 @@ npx tauri dev                 # the real app
 
 Nine crates (pure model, media, audio, render, text, export, AI, whisper, Tauri shell), one compositor shared by preview and export, microseconds everywhere.
 📖 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+
+---
+
+## Language Support
+
+### Whisper Transcription
+- **English**, **Persian (فارسی)**, **Arabic (العربية)**, Spanish, Portuguese, French, German
+- Auto-detect mode available
+- Word-level timestamps for all supported languages
+
+### TTS (Text-to-Speech)
+- Kokoro-82M: English (US/GB), Spanish
+- Persian/Arabic: Coming soon (requires espeak-ng phonemizer)
+
+### Text Direction
+- **LTR** (Left-to-Right): English, Spanish, French, German, Portuguese
+- **RTL** (Right-to-Left): Persian, Arabic, Hebrew
+- RTL support for titles and subtitles

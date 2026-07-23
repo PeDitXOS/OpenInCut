@@ -73,7 +73,7 @@ fn initialize_and_tools_list() {
     let state = AppState::new_default();
     let init = rpc(&state, "initialize", json!({ "protocolVersion": "2025-06-18" }));
     assert_eq!(init.pointer("/result/protocolVersion").unwrap(), "2025-06-18");
-    assert_eq!(init.pointer("/result/serverInfo/name").unwrap(), "ubereditor");
+    assert_eq!(init.pointer("/result/serverInfo/name").unwrap(), "opencut");
 
     let tools = rpc(&state, "tools/list", json!({}));
     let list = tools.pointer("/result/tools").unwrap().as_array().unwrap();

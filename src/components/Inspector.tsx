@@ -1470,8 +1470,10 @@ export function Inspector() {
               >
                 {[
                   ["auto", "Detect"],
-                  ["es", "Spanish"],
                   ["en", "English"],
+                  ["fa", "فارسی (Persian)"],
+                  ["ar", "العربية (Arabic)"],
+                  ["es", "Spanish"],
                   ["pt", "Portuguese"],
                   ["fr", "French"],
                   ["de", "German"],

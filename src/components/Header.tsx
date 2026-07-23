@@ -81,7 +81,7 @@ function McpPill() {
 
   const url = mcpPort ? `http://127.0.0.1:${mcpPort}/mcp` : "";
   const command = mcpPort
-    ? `claude mcp add --transport http ubereditor ${url} --header "Authorization: Bearer ${mcpToken ?? ""}"`
+    ? `claude mcp add --transport http opencut ${url} --header "Authorization: Bearer ${mcpToken ?? ""}"`
     : "";
 
   return (
@@ -161,7 +161,7 @@ export function Header() {
           UE
         </div>
         <span className="font-[var(--font-display)] text-[15px] font-semibold tracking-tight">
-          UberEditor
+          OpenInCut
         </span>
       </div>
 

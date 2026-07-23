@@ -7,7 +7,7 @@
 //! testable without HTTP (see `tests/mcp_tests.rs`).
 //!
 //! Connecting from Claude Code (the token is shown in the app's MCP pill):
-//!   claude mcp add --transport http ubereditor http://127.0.0.1:4599/mcp \
+//!   claude mcp add --transport http opencut http://127.0.0.1:4599/mcp \
 //!     --header "Authorization: Bearer <token>"
 //!
 //! # Design rules for the tools
@@ -39,7 +39,7 @@ pub const MCP_PORT: u16 = 4599;
 
 /// Read by the agent right after `initialize`: the map of the territory.
 const INSTRUCTIONS: &str = "\
-UberEditor — a video editor you can drive end to end.
+OpenInCut — a video editor you can drive end to end.
 
 MODEL
   Project → sequences → tracks (video/audio) → clips. A clip's payload is
@@ -2355,8 +2355,8 @@ pub fn handle_rpc(state: &AppState, app: Option<&tauri::AppHandle>, req: &Value)
                 "protocolVersion": requested,
                 "capabilities": { "tools": {} },
                 "serverInfo": {
-                    "name": "ubereditor",
-                    "title": "UberEditor",
+                    "name": "opencut",
+                    "title": "OpenInCut",
                     "version": env!("CARGO_PKG_VERSION"),
                 },
                 "instructions": INSTRUCTIONS,

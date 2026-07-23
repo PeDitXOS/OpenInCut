@@ -1,6 +1,6 @@
 # MCP server — agentic editing
 
-UberEditor embeds an [MCP](https://modelcontextprotocol.io) server so an agent
+OpenInCut embeds an [MCP](https://modelcontextprotocol.io) server so an agent
 (Claude Code, or anything that speaks MCP) can drive the editor: import
 footage, transcribe it, cut it, animate it, subtitle it and render it — without
 touching the GUI.
@@ -19,7 +19,7 @@ The server starts with the app on `http://127.0.0.1:4599/mcp`. It is
 and shown in the **MCP** pill in the app header (click it to copy the command):
 
 ```bash
-claude mcp add --transport http ubereditor http://127.0.0.1:4599/mcp \
+claude mcp add --transport http opencut http://127.0.0.1:4599/mcp \
   --header "Authorization: Bearer <token>"
 ```
 
@@ -30,7 +30,7 @@ HTTP POST (`initialize`, `ping`, `tools/list`, `tools/call`); notifications get
 Quick check without an agent:
 
 ```bash
-TOKEN=$(cat ~/Library/Application\ Support/net.pequesoft.ubereditor/mcp_token)   # macOS
+TOKEN=$(cat ~/Library/Application\ Support/net.pequesoft.opencut/mcp_token)   # macOS
 curl -s http://127.0.0.1:4599/mcp \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",

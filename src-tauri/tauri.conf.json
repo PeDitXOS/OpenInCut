@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "UberEditor",
+  "productName": "OpenInCut",
   "version": "0.1.0",
-  "identifier": "net.pequesoft.ubereditor",
+  "identifier": "net.pequesoft.opencut",
   "build": {
     "devUrl": "http://localhost:5175",
     "frontendDist": "../dist",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "UberEditor",
+        "title": "OpenInCut",
         "width": 1600,
         "height": 980,
         "minWidth": 1100,

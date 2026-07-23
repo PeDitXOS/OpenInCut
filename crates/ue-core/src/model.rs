@@ -558,6 +558,9 @@ pub struct TextStyle {
     pub y_offset: f32,
     #[serde(default)]
     pub align: TextAlign,
+    /// Text direction for RTL languages (Persian, Arabic, Hebrew).
+    #[serde(default)]
+    pub direction: TextDirection,
     /// Line spacing as a multiple of the font size, for wrapped captions.
     /// Old projects deserialize to 1.2.
     #[serde(default = "default_line_height")]
@@ -603,6 +606,13 @@ pub enum TextAlign {
     #[default]
     Center,
     Right,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum TextDirection {
+    #[default]
+    LTR,
+    RTL,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

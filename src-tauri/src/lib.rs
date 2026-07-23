@@ -2924,7 +2924,7 @@ pub fn run() {
             new_project,
         ])
         .run(tauri::generate_context!())
-        .expect("failed to start UberEditor");
+        .expect("failed to start OpenInCut");
 }
 
 #[cfg(test)]
