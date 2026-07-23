@@ -1558,12 +1558,16 @@ fn call_tool(state: &AppState, app: Option<&tauri::AppHandle>, name: &str, raw: 
 
         // AI vision
         "analyze_frame" => {
-            let asset_id = args.id("asset_id")?;
+            let Ok(Some(asset_id)) = args.opt_id("asset_id") else {
+                return tool_error("asset_id is required");
+            };
             let time_us = args.i64("time_us").unwrap_or(0);
             let prompt = args.str("prompt").unwrap_or("Describe the image in detail: colors, brightness, contrast, sharpness, any issues.");
 
             let store = state.store.lock().unwrap();
-            let asset = store.project.asset(asset_id).ok_or("asset not found")?;
+            let Some(asset) = store.project.asset(asset_id) else {
+                return tool_error("asset not found");
+            };
             let path = asset.path.clone();
             drop(store);
 
@@ -1571,7 +1575,7 @@ fn call_tool(state: &AppState, app: Option<&tauri::AppHandle>, name: &str, raw: 
             let output = std::process::Command::new("ffmpeg")
                 .args([
                     "-ss", &format!("{:.6}", time_sec),
-                    "-i", path.to_str().unwrap_or(""),
+                    "-i", &path,
                     "-frames:v", "1",
                     "-f", "image2",
                     "-c:v", "mjpeg",
