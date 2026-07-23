@@ -4559,7 +4559,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "ue-ai"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "hound",
  "serde",
@@ -4572,7 +4572,7 @@ dependencies = [
 
 [[package]]
 name = "ue-audio"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "cpal",
  "hound",
@@ -4584,7 +4584,7 @@ dependencies = [
 
 [[package]]
 name = "ue-core"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "proptest",
  "serde",
@@ -4595,7 +4595,7 @@ dependencies = [
 
 [[package]]
 name = "ue-export"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "fontdb 0.16.2",
  "serde",
@@ -4610,7 +4610,7 @@ dependencies = [
 
 [[package]]
 name = "ue-media"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4622,7 +4622,7 @@ dependencies = [
 
 [[package]]
 name = "ue-render"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -4631,7 +4631,7 @@ dependencies = [
 
 [[package]]
 name = "ue-tauri"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.22.1",
  "reqwest 0.12.28",
@@ -4653,7 +4653,7 @@ dependencies = [
 
 [[package]]
 name = "ue-text"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "cosmic-text",
  "png 0.17.16",
@@ -4663,7 +4663,7 @@ dependencies = [
 
 [[package]]
 name = "ue-whisper"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
