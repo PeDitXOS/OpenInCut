@@ -1,0 +1,10 @@
+{
+  "id": "core.perspective_correct",
+  "name": "Perspective correction",
+  "category": "transform",
+  "params": [
+    { "key": "angle", "label": "Horizon angle", "type": "float", "default": 0.0, "min": -45.0, "max": 45.0 },
+    { "key": "scale", "label": "Auto zoom", "type": "float", "default": 1.15, "min": 1.0, "max": 2.0 }
+  ],
+  "ffmpeg": "rotate={angle}*PI/180:ow=rotw(iw):oh=roth(ih),scale=trunc(({scale}*iw)/2)*2:trunc(({scale}*ih)/2)*2"
+}

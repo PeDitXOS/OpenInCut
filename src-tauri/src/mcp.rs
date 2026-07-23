@@ -869,6 +869,20 @@ fn tool_defs() -> Value {
             &["job_id"], Kind::Destructive,
         ),
 
+        // AI vision tools
+        tool(
+            "analyze_frame",
+            "Extract a frame from a video asset at a given time and return it as base64 JPEG.\\
+             Use with a vision model to analyze colors, brightness, contrast, perspective.\\
+             Returns {frame_base64, mime_type, prompt, time_us}.",
+            json!({
+                "asset_id": str_("asset id from get_media_pool"),
+                "time_us": int("time in microseconds (default 0)"),
+                "prompt": str_("what to analyze (default: full description)"),
+            }),
+            &["asset_id"], Kind::Read,
+        ),
+
         // ------------------------------------------------------------- history
         tool(
             "undo",
@@ -1527,6 +1541,64 @@ fn call_tool(state: &AppState, app: Option<&tauri::AppHandle>, name: &str, raw: 
             jobs.sort_by(|a, b| b["job_id"].as_str().cmp(&a["job_id"].as_str()));
             text_result(json!({ "jobs": jobs }))
         }
+
+        // AI vision tools
+        tool(
+            "analyze_frame",
+            "Extract a frame from a video asset at a given time and return it as base64 JPEG.\\
+             Use with a vision model to analyze colors, brightness, contrast, perspective.\\
+             Returns {frame_base64, mime_type, prompt, time_us}.",
+            json!({
+                "asset_id": str_("asset id from get_media_pool"),
+                "time_us": int("time in microseconds (default 0)"),
+                "prompt": str_("what to analyze (default: full description)"),
+            }),
+            &["asset_id"], Kind::Read,
+        ),
+
+        // AI vision
+        "analyze_frame" => {
+            let asset_id = args.id("asset_id").map_err(|e| tool_error(&e))?;
+            let time_us = args.i64("time_us").unwrap_or(0);
+            let prompt = args.str("prompt").unwrap_or("Describe the image in detail: colors, brightness, contrast, sharpness, any issues.");
+
+            let store = state.store.lock().unwrap();
+            let asset = store.project.asset(asset_id).map_err(|e| tool_error(&e))?;
+            let path = asset.path.clone();
+            drop(store);
+
+            let time_sec = time_us as f64 / 1_000_000.0;
+            let output = std::process::Command::new("ffmpeg")
+                .args([
+                    "-ss", &format!("{:.6}", time_sec),
+                    "-i", path.to_str().unwrap_or(""),
+                    "-frames:v", "1",
+                    "-f", "image2",
+                    "-c:v", "mjpeg",
+                    "-q:v", "5",
+                    "-vf", "scale=512:-1",
+                    "pipe:1",
+                ])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .output();
+
+            match output {
+                Ok(o) if o.status.success() => {
+                    let b64 = base64::Engine::encode(
+                        &base64::engine::general_purpose::STANDARD,
+                        &o.stdout,
+                    );
+                    text_result(json!({
+                        "frame_base64": b64,
+                        "mime_type": "image/jpeg",
+                        "prompt": prompt,
+                        "time_us": time_us,
+                    }))
+                }
+                _ => tool_error("ffmpeg frame extraction failed"),
+            }
+        },
 
         // ------------------------------------------------------------- history
         "undo" => finish(
