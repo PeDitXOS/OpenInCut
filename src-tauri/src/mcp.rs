@@ -1558,12 +1558,12 @@ fn call_tool(state: &AppState, app: Option<&tauri::AppHandle>, name: &str, raw: 
 
         // AI vision
         "analyze_frame" => {
-            let asset_id = args.id("asset_id").map_err(|e| tool_error(&e))?;
+            let asset_id = args.id("asset_id")?;
             let time_us = args.i64("time_us").unwrap_or(0);
             let prompt = args.str("prompt").unwrap_or("Describe the image in detail: colors, brightness, contrast, sharpness, any issues.");
 
             let store = state.store.lock().unwrap();
-            let asset = store.project.asset(asset_id).map_err(|e| tool_error(&e))?;
+            let asset = store.project.asset(asset_id).ok_or("asset not found")?;
             let path = asset.path.clone();
             drop(store);
 
