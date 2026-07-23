@@ -27,8 +27,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install Tauri CLI
+        run: npm install -D @tauri-apps/cli@2
+
       - name: Build Tauri app
-        run: npm run tauri build -- --bundles nsis,msi
+        run: npx tauri build --bundles nsis,msi
 
       - name: Rename artifacts
         run: |
@@ -48,20 +51,20 @@ jobs:
           name: 'OpenInCut v0.2.1'
           body: |
             ## OpenInCut v0.2.1
-
+            
             ### ✨ New Features
             - **analyze_frame MCP tool**: Extract video frames as base64 JPEG for AI vision analysis
             - **perspective_correct effect**: Auto horizon leveling with angle and auto-zoom
-
+            
             ### 🌐 Multilingual Support
             - README translations: Persian (fa), Arabic (ar), Russian (ru), Chinese (zh)
             - RTL support for Persian/Arabic/Hebrew in UI and subtitles
-
+            
             ### 🔧 Improvements
             - Restored `call_tool()` from upstream
             - Path handling fixes for Windows (String paths)
             - Version bump to 0.2.1
-
+            
             ### 📦 Assets
             - `OpenInCut_0.2.1_x64-setup.exe` — NSIS installer (5 MB)
             - `OpenInCut_0.2.1_x64_en-US.msi` — MSI installer (7 MB)
