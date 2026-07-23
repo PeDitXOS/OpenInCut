@@ -57,10 +57,13 @@ function CopyRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+import McpChat from "./McpChat";
+import McpSettings from "./McpSettings";
+
 function McpPill() {
   const mcpPort = useStore((s) => s.mcpPort);
-  const mcpToken = useStore((s) => s.mcpToken);
   const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<"info" | "chat" | "settings">("info");
   const wrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -70,7 +73,6 @@ function McpPill() {
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
     };
     window.addEventListener("keydown", onKey);
-    // capture so it fires before inner handlers, but after this tick
     const t = setTimeout(() => window.addEventListener("mousedown", onClick), 0);
     return () => {
       window.removeEventListener("keydown", onKey);
@@ -79,10 +81,11 @@ function McpPill() {
     };
   }, [open]);
 
-  const url = mcpPort ? `http://127.0.0.1:${mcpPort}/mcp` : "";
-  const command = mcpPort
-    ? `claude mcp add --transport http opencut ${url} --header "Authorization: Bearer ${mcpToken ?? ""}"`
-    : "";
+  const tabs = [
+    { id: "info" as const, label: "Info" },
+    { id: "chat" as const, label: "Chat" },
+    { id: "settings" as const, label: "Settings" },
+  ];
 
   return (
     <div className="relative" ref={wrapRef}>
@@ -99,45 +102,67 @@ function McpPill() {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-2 w-[380px] rounded-xl border border-line bg-bg1 p-3.5 shadow-2xl">
-          <div className="mb-2 flex items-center gap-2">
-            <span
-              className={`h-2 w-2 rounded-full ${mcpPort ? "bg-clip-audio-hi" : "bg-ink-faint"}`}
-            />
-            <h3 className="font-[var(--font-display)] text-[13px] font-semibold text-ink">
-              MCP server {mcpPort ? "active" : "inactive"}
-            </h3>
+        <div className="absolute right-0 top-full z-50 mt-2 w-[420px] rounded-xl border border-line bg-bg1 shadow-2xl">
+          <div className="flex border-b border-line">
+            {tabs.map((t) => (
+              <button
+                key={t.id}
+                className={`flex-1 px-3 py-2 text-[11px] font-medium ${
+                  tab === t.id ? "border-b-2 border-accent text-ink" : "text-ink-faint hover:text-ink"
+                }`}
+                onClick={() => setTab(t.id)}
+              >
+                {t.label}
+              </button>
+            ))}
           </div>
-
-          {mcpPort ? (
-            <>
-              <p className="mb-3 text-[11px] leading-relaxed text-ink-dim">
-                An agent (Claude Code, etc.) can edit this project through the editor. The
-                server is <b>loopback-only</b> and needs the token below. Run this once to
-                connect it:
-              </p>
-              <div className="space-y-2.5">
-                <CopyRow label="Connect command" value={command} />
-                <CopyRow label="Token" value={mcpToken ?? ""} />
-                <CopyRow label="URL" value={url} />
-              </div>
-              <p className="mt-3 text-[10px] leading-relaxed text-ink-faint">
-                A new token is generated every time the app starts. Keep it private: anyone
-                with it can edit your project. 53 tools available — see <b>docs/MCP.md</b>.
-              </p>
-            </>
-          ) : (
-            <p className="text-[11px] leading-relaxed text-ink-dim">
-              The MCP server runs inside the desktop app. Launch it with{" "}
-              <span className="font-[var(--font-mono)] text-ink">npx tauri dev</span> to expose
-              it on <span className="font-[var(--font-mono)] text-ink">127.0.0.1:4599</span>.
-            </p>
-          )}
+          <div className="max-h-[500px] overflow-auto">
+            {tab === "info" && <McpInfo />}
+            {tab === "chat" && <McpChat />}
+            {tab === "settings" && <McpSettings onClose={() => setOpen(false)} />}
+          </div>
         </div>
       )}
     </div>
   );
 }
+
+function McpInfo() {
+  const mcpPort = useStore((s) => s.mcpPort);
+  const mcpToken = useStore((s) => s.mcpToken);
+  const url = mcpPort ? `http://127.0.0.1:${mcpPort}/mcp` : "";
+  const command = mcpPort
+    ? `claude mcp add --transport http opencut ${url} --header "Authorization: Bearer ${mcpToken}"`
+    : "";
+
+  if (!mcpPort) {
+    return (
+      <div className="p-4">
+        <p className="text-[11px] leading-relaxed text-ink-dim">
+          The MCP server runs inside the desktop app. Launch it with{" "}
+          <span className="font-[var(--font-mono)] text-ink">npx tauri dev</span> to expose
+          it on <span className="font-[var(--font-mono)] text-ink">127.0.0.1:4599</span>.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-4 space-y-3">
+      <p className="text-[11px] leading-relaxed text-ink-dim">
+        An agent (Claude Code, etc.) can edit this project through the editor. The
+        server is <b>loopback-only</b> and needs the token below.
+      </p>
+      <CopyRow label="Connect command" value={command} />
+      <CopyRow label="Token" value={mcpToken ?? ""} />
+      <CopyRow label="URL" value={url} />
+      <p className="text-[10px] leading-relaxed text-ink-faint">
+        A new token is generated every time the app starts. 53 tools available — see <b>docs/MCP.md</b>.
+      </p>
+    </div>
+  );
+}
+
 
 export function Header() {
   const project = useStore((s) => s.project);
