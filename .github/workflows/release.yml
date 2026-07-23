@@ -33,14 +33,15 @@ jobs:
       - name: Build Tauri app
         run: npx tauri build --bundles nsis,msi
 
-      - name: Rename artifacts
+      - name: Find and rename artifacts
         run: |
           $version = "0.2.1"
-          $files = Get-ChildItem -Path "src-tauri\target\release\bundle" -Recurse -File | Where-Object { $_.Extension -in @('.exe', '.msi') }
+          # Find artifacts recursively
+          $files = Get-ChildItem -Path "src-tauri" -Recurse -File | Where-Object { $_.Extension -in @('.exe', '.msi') }
           foreach ($file in $files) {
             $newName = $file.BaseName + "_v0.2.1" + $file.Extension
             $newPath = Join-Path $file.DirectoryName $newName
-            Move-Item -Path $file.FullName -Destination $newPath
+            Move-Item -Path $file.FullName -Destination $newPath -Force
             echo "Renamed: $($file.Name) -> $newName"
           }
 
