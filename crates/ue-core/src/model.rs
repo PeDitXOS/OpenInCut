@@ -608,7 +608,7 @@ pub enum TextAlign {
     Right,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum TextDirection {
     #[default]
     LTR,
