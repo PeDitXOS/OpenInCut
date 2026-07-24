@@ -164,7 +164,7 @@ function McpInfo() {
 }
 
 
-export function Header() {
+export function Header({ onSettings }: { onSettings?: () => void }) {
   const project = useStore((s) => s.project);
   const dirty = useStore((s) => s.dirty);
   const canUndo = useStore((s) => s.canUndo);
@@ -243,6 +243,13 @@ export function Header() {
       <div className="mx-1 h-5 w-px bg-line" />
 
       <McpPill />
+      <button
+        className="focus-ring rounded-md border border-line px-2.5 py-1.5 text-[12px] text-ink-dim hover:text-ink hover:bg-bg2"
+        onClick={() => onSettings?.()}
+        title="Open settings"
+      >
+        ⚙ Settings
+      </button>
 
       {exporting && (
         <button

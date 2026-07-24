@@ -1,3 +1,4 @@
+import SettingsPanel from "./SettingsPanel";
 import { useEffect, useState } from "react";
 
 import { activeSequence } from "../engine/types";
@@ -183,10 +184,11 @@ export function App() {
   usePlayback();
   useNativeFileDrop();
   useErrorBridge();
+  const [showSettings, setShowSettings] = useState(false);
 
   return (
     <div className="flex h-full flex-col bg-bg0">
-      <Header />
+      <Header onSettings={() => setShowSettings(true)} />
       <main className="flex min-h-0 flex-1">
         <aside className="flex w-[264px] shrink-0 flex-col border-r border-line-soft bg-bg1">
           <div className="flex gap-1 px-2 pt-2">
@@ -224,6 +226,7 @@ export function App() {
       <StatusBar />
       <ExportDialog />
       <AvatarDialog />
+      {showSettings && <SettingsPanel onClose={() => setShowSettings(false)} />}
     </div>
   );
 }
