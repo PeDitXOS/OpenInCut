@@ -30,6 +30,8 @@ export interface UiState {
   canUndo: boolean;
   canRedo: boolean;
   selection: Id[];
+  activeTool: "select" | "blade" | "trim" | "position" | "hand" | "zoom";
+  setTool: (tool: "select" | "blade" | "trim" | "position" | "hand" | "zoom") => void;
   playheadUs: TimeUs;
   playing: boolean;
   /** true = the position is dictated by the backend audio clock */
@@ -218,6 +220,7 @@ export const useStore = create<UiState>((set, get) => {
     canUndo: false,
     canRedo: false,
     selection: [],
+    activeTool: "select",
     playheadUs: 12_400_000,
     playing: false,
     engineClock: false,
@@ -297,6 +300,7 @@ export const useStore = create<UiState>((set, get) => {
 
     select: (ids, additive = false) =>
       set((s) => ({ selection: additive ? [...new Set([...s.selection, ...ids])] : ids })),
+    setTool: (tool) => set({ activeTool: tool }),
 
     shuttleRate: 1,
     shuttle: (direction) => {

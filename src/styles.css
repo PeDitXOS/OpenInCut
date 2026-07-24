@@ -10,51 +10,69 @@
 @import "@fontsource/jetbrains-mono/700.css";
 
 @theme {
-  /* Professional dark theme - inspired by DaVinci Resolve & Premiere Pro */
-  --color-bg0: #0d0d0d;
-  --color-bg1: #141414;
-  --color-bg2: #1c1c1c;
-  --color-bg3: #252525;
-  --color-line: #2a2a2a;
-  --color-line-soft: #1f1f1f;
-  --color-ink: #e8e8e8;
-  --color-ink-dim: #999999;
-  --color-ink-faint: #555555;
-  
-  /* Accent colors */
-  --color-accent: #3b82f6;
-  --color-accent-deep: #2563eb;
-  --color-accent-glow: rgba(59, 130, 246, 0.15);
-  
-  /* Status colors */
-  --color-success: #22c55e;
-  --color-warning: #eab308;
-  --color-danger: #ef4444;
-  --color-info: #3b82f6;
-  
-  /* Clip colors */
-  --color-clip-video: #2563eb;
-  --color-clip-video-hi: #60a5fa;
-  --color-clip-audio: #22c55e;
-  --color-clip-audio-hi: #4ade80;
-  --color-clip-text: #a855f7;
-  --color-clip-text-hi: #c084fc;
-  --color-clip-effects: #f59e0b;
-  --color-clip-effects-hi: #fbbf24;
-  
-  /* Typography */
-  --font-display: "Space Grotesk", system-ui, sans-serif;
-  --font-sans: "Inter", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
-  
+  /* ═══════════════════════════════════════════════
+     FINAL CUT PRO INSPIRED — Deep Dark Theme
+     Low contrast, minimal blue accent, eye-friendly
+     for hours of editing
+     ═══════════════════════════════════════════════ */
+
+  /* Backgrounds — deep charcoal, NOT brown */
+  --color-bg0: #1a1a1e;
+  --color-bg1: #1e1e22;
+  --color-bg2: #252529;
+  --color-bg3: #2c2c31;
+  --color-bg4: #333338;
+
+  /* Borders — subtle, not heavy */
+  --color-line: #2a2a2e;
+  --color-line-soft: #222226;
+  --color-line-accent: #3a3a40;
+
+  /* Text — low contrast for eye comfort */
+  --color-ink: #c8c8cc;
+  --color-ink-bright: #e0e0e4;
+  --color-ink-dim: #888890;
+  --color-ink-faint: #55555a;
+  --color-ink-muted: #3a3a40;
+
+  /* Accent — FCP blue, not too bright */
+  --color-accent: #0a84ff;
+  --color-accent-deep: #0070e0;
+  --color-accent-glow: rgba(10, 132, 255, 0.12);
+  --color-accent-dim: rgba(10, 132, 255, 0.25);
+
+  /* Status — muted, not shouting */
+  --color-success: #30d158;
+  --color-warning: #ffd60a;
+  --color-danger: #ff453a;
+  --color-info: #64d2ff;
+
+  /* Clip colors — FCP style, muted on dark */
+  --color-clip-video: #0a84ff;
+  --color-clip-video-hi: #409cff;
+  --color-clip-audio: #30d158;
+  --color-clip-audio-hi: #5ce07a;
+  --color-clip-text: #bf5af2;
+  --color-clip-text-hi: #d480f0;
+  --color-clip-effects: #ff9f0a;
+  --color-clip-effects-hi: #ffb340;
+
+  /* Typography — clean, professional */
+  --font-display: "Space Grotesk", -apple-system, system-ui, sans-serif;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+
   /* Spacing */
+  --radius-xs: 3px;
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
   --radius-xl: 12px;
 }
 
-/* Global styles */
+/* ═══════════════════════════════════════════════
+   GLOBAL STYLES
+   ═══════════════════════════════════════════════ */
 html, body, #root {
   height: 100%;
   overflow: hidden;
@@ -64,60 +82,91 @@ html, body, #root {
   font-size: 13px;
   user-select: none;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-thumb { background: var(--color-line); border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: var(--color-ink-faint); }
+/* ═══════════════════════════════════════════════
+   SCROLLBAR — Minimal, almost invisible
+   ═══════════════════════════════════════════════ */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-thumb {
+  background: var(--color-line-accent);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-ink-faint);
+}
 ::-webkit-scrollbar-track { background: transparent; }
 
-/* Panel label */
+/* ═══════════════════════════════════════════════
+   PANEL LABELS — FCP style
+   ═══════════════════════════════════════════════ */
 .panel-label {
   font-family: var(--font-display);
   font-size: 10px;
   font-weight: 600;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--color-ink-faint);
 }
 
-/* Focus ring */
+/* ═══════════════════════════════════════════════
+   FOCUS — Minimal blue ring
+   ═══════════════════════════════════════════════ */
 .focus-ring:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 1px;
 }
 
-/* Button styles */
+/* ═══════════════════════════════════════════════
+   BUTTONS — FCP style
+   ═══════════════════════════════════════════════ */
 .btn-primary {
   background: var(--color-accent);
   color: white;
   font-weight: 500;
-  padding: 6px 12px;
+  padding: 5px 12px;
   border-radius: var(--radius-md);
   font-size: 12px;
-  transition: all 150ms;
+  border: none;
+  cursor: pointer;
+  transition: background 150ms;
 }
 .btn-primary:hover { background: var(--color-accent-deep); }
-.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .btn-secondary {
-  background: var(--color-bg2);
+  background: var(--color-bg3);
   color: var(--color-ink);
   border: 1px solid var(--color-line);
-  padding: 6px 12px;
+  padding: 5px 12px;
   border-radius: var(--radius-md);
   font-size: 12px;
-  transition: all 150ms;
+  cursor: pointer;
+  transition: background 150ms;
 }
-.btn-secondary:hover { background: var(--color-bg3); }
+.btn-secondary:hover { background: var(--color-bg4); }
 
-/* Input styles */
+.btn-ghost {
+  background: none;
+  color: var(--color-ink-dim);
+  padding: 5px 10px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  border: none;
+  cursor: pointer;
+  transition: color 150ms, background 150ms;
+}
+.btn-ghost:hover { color: var(--color-ink); background: var(--color-bg3); }
+
+/* ═══════════════════════════════════════════════
+   INPUTS — FCP style
+   ═══════════════════════════════════════════════ */
 .input {
-  background: var(--color-bg1);
+  background: var(--color-bg0);
   border: 1px solid var(--color-line);
   color: var(--color-ink);
-  padding: 6px 10px;
+  padding: 5px 10px;
   border-radius: var(--radius-md);
   font-size: 12px;
   width: 100%;
@@ -126,39 +175,59 @@ html, body, #root {
 .input:focus {
   outline: none;
   border-color: var(--color-accent);
-  box-shadow: 0 0 0 2px var(--color-accent-glow);
+  box-shadow: 0 0 0 1px var(--color-accent-glow);
 }
 
-/* Card styles */
+select.input {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2355555a'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 28px;
+}
+
+/* ═══════════════════════════════════════════════
+   CARDS
+   ═══════════════════════════════════════════════ */
 .card {
   background: var(--color-bg1);
   border: 1px solid var(--color-line);
   border-radius: var(--radius-lg);
-  padding: 12px;
 }
 
-/* Status indicator */
+/* ═══════════════════════════════════════════════
+   STATUS DOT
+   ═══════════════════════════════════════════════ */
 .status-dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   display: inline-block;
+  flex-shrink: 0;
 }
-.status-dot.online { background: var(--color-success); box-shadow: 0 0 6px var(--color-success); }
+.status-dot.online { background: var(--color-success); }
 .status-dot.offline { background: var(--color-danger); }
 .status-dot.warning { background: var(--color-warning); }
 
-/* Tooltip */
-.tooltip {
-  position: relative;
+/* ═══════════════════════════════════════════════
+   PANEL DIVIDERS — FCP uses very subtle lines
+   ═══════════════════════════════════════════════ */
+.panel-divider {
+  height: 1px;
+  background: var(--color-line);
 }
+
+/* ═══════════════════════════════════════════════
+   TOOLTIPS
+   ═══════════════════════════════════════════════ */
+.tooltip { position: relative; }
 .tooltip::after {
   content: attr(data-tooltip);
   position: absolute;
   bottom: 100%;
   left: 50%;
   transform: translateX(-50%);
-  background: var(--color-bg3);
+  background: var(--color-bg4);
   color: var(--color-ink);
   padding: 4px 8px;
   border-radius: var(--radius-sm);
@@ -167,10 +236,13 @@ html, body, #root {
   opacity: 0;
   pointer-events: none;
   transition: opacity 150ms;
+  z-index: 100;
 }
 .tooltip:hover::after { opacity: 1; }
 
-/* Reduced motion */
+/* ═══════════════════════════════════════════════
+   REDUCED MOTION
+   ═══════════════════════════════════════════════ */
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }

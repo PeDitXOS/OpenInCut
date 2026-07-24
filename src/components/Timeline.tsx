@@ -689,6 +689,8 @@ export function Timeline() {
   const moveClip = useStore((s) => s.moveClip);
   const trimClip = useStore((s) => s.trimClip);
   const splitAtPlayhead = useStore((s) => s.splitAtPlayhead);
+  const activeTool = useStore((s) => s.activeTool);
+  const setTool = useStore((s) => s.setTool);
   const deleteSelection = useStore((s) => s.deleteSelection);
   const addTextClip = useStore((s) => s.addTextClip);
   const generateVertical = useStore((s) => s.generateVertical);
@@ -1015,6 +1017,28 @@ export function Timeline() {
         >
           📱 Vertical
         </button>
+        <div className="mx-1 h-5 w-px bg-line-soft" />
+        {[
+          ["select", "↖", "Select (A)"],
+          ["blade", "✂", "Blade (B)"],
+          ["trim", "⇔", "Trim (T)"],
+          ["position", "⊞", "Position (P)"],
+          ["hand", "✋", "Hand (H)"],
+          ["zoom", "🔍", "Zoom (Z)"],
+        ].map(([tool, icon, label]) => (
+          <button
+            key={tool}
+            className={`focus-ring rounded-md px-2 py-1 text-[11.5px] ${
+              activeTool === tool
+                ? "bg-accent text-white"
+                : "text-ink-dim hover:bg-bg3 hover:text-ink"
+            }`}
+            onClick={() => setTool(tool as any)}
+            title={label}
+          >
+            {icon}
+          </button>
+        ))}
         <button
           className={`focus-ring rounded-md px-2 py-1 text-[11.5px] ${
             rangeInUs != null && rangeOutUs != null && rangeOutUs > rangeInUs

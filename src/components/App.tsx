@@ -68,6 +68,14 @@ function useKeyboard() {
         s.setRangeOut(null);
       } else if (e.key === "Home") {
         s.seek(0);
+      } else if (!mod && !e.shiftKey) {
+        // Tool shortcuts (FCP-style)
+        if (e.key.toLowerCase() === "a") s.setTool("select");
+        else if (e.key.toLowerCase() === "b") s.setTool("blade");
+        else if (e.key.toLowerCase() === "t") s.setTool("trim");
+        else if (e.key.toLowerCase() === "p") s.setTool("position");
+        else if (e.key.toLowerCase() === "h") s.setTool("hand");
+        else if (e.key.toLowerCase() === "z") s.setTool("zoom");
       }
     };
     window.addEventListener("keydown", onKey);
