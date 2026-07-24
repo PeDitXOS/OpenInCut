@@ -2919,7 +2919,7 @@ pub fn run() {
                     }
                 }
             }
-            match mcp::start(app.handle().clone()) {
+            match mcp::start(app.handle().clone(), false) {
                 Some(port) => {
                     *state.mcp_port.lock().unwrap() = Some(port);
                     let token = state.mcp_token.lock().unwrap().clone();

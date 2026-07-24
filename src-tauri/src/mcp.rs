@@ -2467,8 +2467,10 @@ pub fn is_authorized(authorization: Option<&str>, token: &str) -> bool {
 }
 
 /// Starts the server on a thread. Returns the port if it could listen.
-pub fn start(app: tauri::AppHandle) -> Option<u16> {
-    let server = tiny_http::Server::http(("127.0.0.1", MCP_PORT)).ok()?;
+/// When `remote` is true, binds to 0.0.0.0 (all interfaces) instead of 127.0.0.1.
+pub fn start(app: tauri::AppHandle, remote: bool) -> Option<u16> {
+    let bind_addr = if remote { "0.0.0.0" } else { "127.0.0.1" };
+    let server = tiny_http::Server::http((bind_addr, MCP_PORT)).ok()?;
     std::thread::Builder::new()
         .name("ue-mcp".into())
         .spawn(move || {
