@@ -19,7 +19,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       
-      - uses: FedericoCarboni/setup-ffmpeg@v3
+      - name: Install FFmpeg
+        run: choco install ffmpeg -y
       
       - run: npm ci
       - run: npm run build
