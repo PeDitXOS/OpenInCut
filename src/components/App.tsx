@@ -5,6 +5,12 @@ import { activeSequence } from "../engine/types";
 import { MEDIA_EXTENSIONS } from "../lib/media";
 import { frameToUs } from "../lib/time";
 import { engine, useStore } from "../state/store";
+import {
+  requestMidiAccess,
+  parseMidiMessage,
+  matchMapping,
+  type MidiAction,
+} from "../lib/midi";
 import { Header } from "./Header";
 import { MediaPool } from "./MediaPool";
 import { Preview } from "./Preview";
@@ -181,6 +187,57 @@ function useErrorBridge() {
   }, []);
 }
 
+/** Persistent MIDI controller listener. Reads deviceId + mappings from store. */
+function useMidi() {
+  const deviceId = useStore((s) => s.midiDeviceId);
+  useEffect(() => {
+    if (!deviceId) return;
+    let cleanup: (() => void) | undefined;
+    void requestMidiAccess().then((access) => {
+      if (!access) return;
+      const input = access.inputs.get(deviceId);
+      if (!input) return;
+      input.onmidimessage = (e: MIDIMessageEvent) => {
+        if (!e.data) return;
+        const msg = parseMidiMessage(e.data);
+        if (!msg) return;
+        const mappings = useStore.getState().midiMappings;
+        for (const m of mappings) {
+          if (matchMapping(msg, m)) {
+            dispatchMidi(m.action, msg.data2);
+            break;
+          }
+        }
+      };
+      cleanup = () => { input.onmidimessage = null; };
+    });
+    return () => { cleanup?.(); };
+  }, [deviceId]);
+}
+
+function dispatchMidi(action: MidiAction, value: number) {
+  const s = useStore.getState();
+  switch (action.kind) {
+    case "togglePlay": s.togglePlay(); break;
+    case "split": void s.splitAtPlayhead(); break;
+    case "delete": void s.deleteSelection(false); break;
+    case "undo": void s.undo(); break;
+    case "redo": void s.redo(); break;
+    case "seek": {
+      const viewLen = Math.max(1, s.pxPerSec * 10);
+      const target = s.viewStartUs + (value / 127) * viewLen * 1_000_000 / s.pxPerSec;
+      s.seek(target);
+      break;
+    }
+    case "shuttle": {
+      const dir = value > 64 ? action.direction : value < 63 ? -action.direction : 0;
+      s.shuttle(dir as -1 | 0 | 1);
+      break;
+    }
+    case "tool": s.setTool(action.tool); break;
+  }
+}
+
 export function App() {
   const init = useStore((s) => s.init);
   const [leftTab, setLeftTab] = useState<"media" | "text">("media");
@@ -189,6 +246,7 @@ export function App() {
     void init();
   }, [init]);
   useKeyboard();
+  useMidi();
   usePlayback();
   useNativeFileDrop();
   useErrorBridge();

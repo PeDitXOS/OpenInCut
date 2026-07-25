@@ -17,6 +17,7 @@ import {
 } from "../engine/compositor";
 import { frameToUs, hash32, usToTimecode } from "../lib/time";
 import { videoCache } from "../engine/video-cache";
+import { TransformOverlay } from "./TransformOverlay";
 import { engine, useStore } from "../state/store";
 
 /** RMS → position 0..1 on a dB scale (-60..0). */
@@ -214,6 +215,7 @@ export function Preview() {
   const project = useStore((s) => s.project);
   const playheadUs = useStore((s) => s.playheadUs);
   const playing = useStore((s) => s.playing);
+  const selection = useStore((s) => s.selection);
   const togglePlay = useStore((s) => s.togglePlay);
   const seek = useStore((s) => s.seek);
 
@@ -427,7 +429,10 @@ export function Preview() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex min-h-0 flex-1 items-center justify-center p-3">
-        <canvas ref={canvasRef} className="rounded-md shadow-[0_0_0_1px_var(--color-line)]" />
+        <div className="relative inline-block">
+          <canvas ref={canvasRef} className="rounded-md shadow-[0_0_0_1px_var(--color-line)]" />
+          {selection.length > 0 && <TransformOverlay />}
+        </div>
       </div>
 
       <div className="flex items-center gap-4 border-t border-line-soft px-4 py-2.5">

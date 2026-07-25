@@ -13,6 +13,9 @@ import { usToDuration, usToTimecode } from "../lib/time";
 import { engine, useStore } from "../state/store";
 import { Slider } from "./Slider";
 import { VoiceoverSection } from "./VoiceoverSection";
+import { ColorBoard } from "./ColorBoard";
+import { AudioRoles } from "./AudioRoles";
+import { SpeedRamp } from "./SpeedRamp";
 
 /** One denoise-availability fetch per app run (it probes for python). */
 let denoiseStatusPromise: Promise<[boolean, string]> | null = null;
@@ -672,6 +675,10 @@ function ClipInspector({ clip }: { clip: Clip }) {
       {clip.payload.type === "text" && <TextPanel clip={clip} />}
       {clip.payload.type === "generator" && <GeneratorPanel clip={clip} />}
       {clip.payload.type === "subtitles" && <SubtitlesPanel clip={clip} />}
+
+      {showVideoTools && <ColorBoard />}
+      <AudioRoles />
+      {clip.payload.type === "media" && <SpeedRamp />}
 
       {showAudioTools && clip.payload.type === "media" && asset && (
         <Section title="Silences">

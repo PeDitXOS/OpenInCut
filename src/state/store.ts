@@ -1,6 +1,8 @@
 import { create } from "zustand";
 
 import type { EngineClient, ExportUiSettings } from "../engine/client";
+import type { MidiMapping } from "../lib/midi";
+import { loadMappings as loadMidiMappings } from "../lib/midi";
 import { MockEngine, demoProject } from "../engine/mock";
 import { TauriEngine, isTauri } from "../engine/tauri";
 import type {
@@ -78,6 +80,9 @@ export interface UiState {
   relinkAsset: (assetId: Id) => Promise<void>;
   mcpPort: number | null;
   mcpToken: string | null;
+  /** MIDI controller mappings (persisted to localStorage). */
+  midiMappings: MidiMapping[];
+  midiDeviceId: string | null;
   /** RMS 0..1 per channel from the last buffer (tauri engine only). */
   meterL: number;
   meterR: number;
@@ -471,6 +476,8 @@ export const useStore = create<UiState>((set, get) => {
 
     mcpPort: null,
     mcpToken: null,
+    midiMappings: loadMidiMappings(),
+    midiDeviceId: null,
     meterL: 0,
     meterR: 0,
     visualsBump: 0,
