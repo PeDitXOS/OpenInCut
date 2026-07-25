@@ -4,7 +4,7 @@ import { engine } from "../state/store";
 
 type Tab = "ai" | "mcp" | "language" | "shortcuts" | "midi" | "export";
 
-function getSetting(key: string, fallback: string): string {
+export function getSetting(key: string, fallback: string): string {
   try { return localStorage.getItem(`opencut_$` + key + ``) ?? fallback; } catch { return fallback; }
 }
 function setSetting(key: string, value: string) {
