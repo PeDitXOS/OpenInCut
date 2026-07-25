@@ -1,16 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useStore } from "../state/store";
 import { engine } from "../state/store";
-
-/** Read/write from localStorage */
-function getSetting(key: string, fallback: string): string {
-  try { return localStorage.getItem(`opencut_${key}`) ?? fallback; } catch { return fallback; }
-}
-function setSetting(key: string, value: string) {
-  try { localStorage.setItem(`opencut_${key}`, value); } catch { /* ignore */ }
-}
-
-/** The tools we expose to the AI as function-calling schema */
+import { showToast } from "./Toast";
+import { getActiveEndpoint, getSystemPrompt } from "./SettingsPanel";
+import { activeSequence } from "../engine/types";
 
 function buildSystemPrompt(toolList: string): string {
   return `You are an AI assistant inside the OpenInCut video editor. You control the editor through MCP tools.
@@ -27,7 +20,9 @@ Rules:
 - For cutting: use split_clip or delete_clips
 - For removing silence: use remove_silences
 - For subtitles: transcribe_asset then add_subtitles_clip
-- Be concise. Prefer action over explanation.`;
+- Be concise. Prefer action over explanation.
+- When a frame image is attached, analyze it to answer questions about visual content.
+When the user asks about colors, brightness, or visual properties, you can see frames. Describe what you observe.`;
 }
 
 interface McpMessage {
@@ -37,21 +32,29 @@ interface McpMessage {
 
 export default function McpChat() {
   const mcpPort = useStore((s) => s.mcpPort);
-  const [messages, setMessages] = useState<McpMessage[]>([]);
+  const selection = useStore((s) => s.selection);
+  const project = useStore((s) => s.project);
+  const [messages, setMessages] = useState<McpMessage[]>(() => {
+    try {
+      const raw = localStorage.getItem("opencut_chat_history");
+      return raw ? (JSON.parse(raw) as McpMessage[]) : [];
+    } catch { return []; }
+  });
   const [input, setInput] = useState("");
   const [tools, setTools] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
+  const [pendingFrame, setPendingFrame] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
-
-  // Settings
-  const [apiUrl, setApiUrl] = useState(() => getSetting("ai_url", "https://9router.peditx.ir/v1"));
-  const [apiKey, setApiKey] = useState(() => getSetting("ai_key", ""));
-  const [model, setModel] = useState(() => getSetting("ai_model", "hermes-3-llama-3.1-70b"));
-  const [aiEnabled, setAiEnabled] = useState(() => getSetting("ai_enabled", "") === "true");
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  // Persist chat history to localStorage (cap at 50)
+  useEffect(() => {
+    const capped = messages.length > 50 ? messages.slice(-50) : messages;
+    try { localStorage.setItem("opencut_chat_history", JSON.stringify(capped)); } catch { /* ignore */ }
+    if (messages.length > 50) setMessages(capped);
   }, [messages]);
 
   const loadTools = useCallback(async () => {
@@ -66,36 +69,39 @@ export default function McpChat() {
     if (mcpPort) void loadTools();
   }, [mcpPort, loadTools]);
 
-  const saveSettings = useCallback(() => {
-    setSetting("ai_url", apiUrl);
-    setSetting("ai_key", apiKey);
-    setSetting("ai_model", model);
-    setSetting("ai_enabled", String(aiEnabled));
-    setShowSettings(false);
-  }, [apiUrl, apiKey, model, aiEnabled]);
-
-  /** Call the AI API with OpenAI-compatible format */
-  const callAI = useCallback(async (userMessage: string, history: McpMessage[]): Promise<string> => {
+  /** Call the AI API with OpenAI-compatible format (supports vision) */
+  const callAI = useCallback(async (userMessage: string, history: McpMessage[], frameBase64?: string | null): Promise<string> => {
+    const ep = getActiveEndpoint();
     const toolList = tools.join(", ");
-    const systemMsg = buildSystemPrompt(toolList);
+    const customPrompt = getSystemPrompt();
+    const defaultPrompt = buildSystemPrompt(toolList);
+    const fullSystem = customPrompt ? `${customPrompt}\n\n${defaultPrompt}` : defaultPrompt;
+
+    // Build user message content (text only, or text + image for vision)
+    const userContent: Array<{ type: string; text?: string; image_url?: { url: string } }> = [
+      { type: "text", text: userMessage },
+    ];
+    if (frameBase64) {
+      userContent.push({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${frameBase64}` } });
+    }
 
     const chatMessages = [
-      { role: "system", content: systemMsg },
+      { role: "system", content: fullSystem },
       ...history.map((m) => ({
         role: m.role === "user" ? "user" as const : "assistant" as const,
         content: m.text,
       })),
-      { role: "user" as const, content: userMessage },
+      { role: "user" as const, content: userContent },
     ];
 
-    const resp = await fetch(`${apiUrl}/chat/completions`, {
+    const resp = await fetch(`${ep.url}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`,
+        "Authorization": `Bearer ${ep.key}`,
       },
       body: JSON.stringify({
-        model,
+        model: ep.model,
         messages: chatMessages,
         temperature: 0.3,
         max_tokens: 2048,
@@ -105,12 +111,11 @@ export default function McpChat() {
     if (!resp.ok) throw new Error(`API error: ${resp.status}`);
     const data = await resp.json();
     return data.choices?.[0]?.message?.content ?? "";
-  }, [apiUrl, apiKey, model, tools]);
+  }, [tools]);
 
   /** Parse AI response for tool_call or plain text */
   const parseAIResponse = useCallback((response: string): { toolCall?: { name: string; arguments: Record<string, unknown> }; text?: string } => {
     const trimmed = response.trim();
-    // Try to find JSON tool_call in the response
     const jsonMatch = trimmed.match(/\{[\s\S]*"tool_call"[\s\S]*\}/);
     if (jsonMatch) {
       try {
@@ -120,7 +125,6 @@ export default function McpChat() {
         }
       } catch { /* fall through */ }
     }
-    // Also handle format: {"name": "...", "arguments": {...}} directly
     const directMatch = trimmed.match(/\{[\s\S]*"name"[\s\S]*"arguments"[\s\S]*\}/);
     if (directMatch) {
       try {
@@ -133,34 +137,55 @@ export default function McpChat() {
     return { text: trimmed };
   }, []);
 
+  /** Attach the current frame from the selected clip for the next message */
+  const attachFrame = useCallback(async () => {
+    if (!selection.length) { showToast("Select a clip first", "error"); return; }
+    const clipId = selection[0];
+    const seq = activeSequence(project);
+    const clip = seq.tracks.flatMap((t) => t.clips).find((c) => c.id === clipId);
+    if (!clip || clip.payload.type !== "media") { showToast("Selected clip has no media", "error"); return; }
+    try {
+      const result = (await engine.mcpCall("analyze_frame", { asset_id: clip.payload.asset_id, time_us: 0, prompt: "frame capture" })) as { frame_base64?: string };
+      if (result?.frame_base64) {
+        setPendingFrame(result.frame_base64);
+        showToast("Frame attached for next message", "success");
+      } else {
+        showToast("Failed to extract frame", "error");
+      }
+    } catch (e) {
+      showToast(`Frame error: ${e instanceof Error ? e.message : String(e)}`, "error");
+    }
+  }, [selection, project]);
+
   const handleSend = useCallback(async () => {
     if (!input.trim() || loading) return;
     const text = input.trim();
     setInput("");
-    setMessages((m) => [...m, { role: "user", text }]);
+    const frameForThisMsg = pendingFrame;
+    setPendingFrame(null);
+    setMessages((m) => [...m, { role: "user", text: frameForThisMsg ? `${text} [📸 frame attached]` : text }]);
     setLoading(true);
 
     try {
-      if (aiEnabled && apiKey) {
+      const ep = getActiveEndpoint();
+      if (ep.key) {
         // AI mode: send to LLM, parse tool_call, execute
-        setMessages((m) => [...m, { role: "assistant", text: "Thinking..." }]);
-        const aiResponse = await callAI(text, messages);
+        setMessages((m) => [...m, { role: "assistant", text: "Thinking…" }]);
+        const aiResponse = await callAI(text, messages, frameForThisMsg);
         const parsed = parseAIResponse(aiResponse);
 
         if (parsed.toolCall) {
-          // Show what AI decided to do
           setMessages((m) => {
             const updated = [...m];
             updated[updated.length - 1] = { role: "assistant", text: `Executing: ${parsed.toolCall!.name}(${JSON.stringify(parsed.toolCall!.arguments)})` };
             return updated;
           });
 
-          // Execute the tool
           const result = await engine.mcpCall(parsed.toolCall.name, parsed.toolCall.arguments);
           const formatted = typeof result === "string" ? result : JSON.stringify(result, null, 2);
           setMessages((m) => [...m, { role: "tool", text: formatted }]);
+          showToast(`Tool executed: ${parsed.toolCall.name}`, "success");
         } else {
-          // Plain text response from AI
           setMessages((m) => {
             const updated = [...m];
             updated[updated.length - 1] = { role: "assistant", text: parsed.text ?? aiResponse };
@@ -168,7 +193,7 @@ export default function McpChat() {
           });
         }
       } else {
-        // Manual mode: parse "toolName {jsonArgs}"
+        // Manual mode
         const parts = text.split(/\s+/);
         const toolName = parts[0];
         let args: Record<string, unknown> = {};
@@ -181,10 +206,11 @@ export default function McpChat() {
       }
     } catch (err) {
       setMessages((m) => [...m, { role: "error", text: String(err) }]);
+      showToast(`Error: ${err instanceof Error ? err.message : String(err)}`, "error");
     } finally {
       setLoading(false);
     }
-  }, [input, loading, messages, aiEnabled, apiKey, callAI, parseAIResponse]);
+  }, [input, loading, messages, callAI, parseAIResponse, pendingFrame]);
 
   if (!mcpPort) {
     return (
@@ -194,80 +220,35 @@ export default function McpChat() {
     );
   }
 
+  const ep = getActiveEndpoint();
+  const hasAI = !!ep.key;
+
   return (
     <div className="flex h-full flex-col">
-      {/* Header with settings button */}
       <div className="flex items-center justify-between border-b border-line px-3 py-1.5">
         <div className="flex items-center gap-2">
-          <span className={`h-2 w-2 rounded-full ${aiEnabled ? "bg-green-500" : "bg-yellow-500"}`} />
+          <span className={`h-2 w-2 rounded-full ${hasAI ? "bg-green-500" : "bg-yellow-500"}`} />
           <span className="text-[10px] text-ink-faint">
-            {aiEnabled ? `AI: ${model}` : "Manual mode"}
+            {hasAI ? `AI: ${ep.model}` : "Manual mode"}
           </span>
         </div>
-        <button
-          className="text-[10px] text-ink-faint hover:text-ink"
-          onClick={() => setShowSettings(!showSettings)}
-        >
-          ⚙ Settings
-        </button>
-      </div>
-
-      {/* Settings panel */}
-      {showSettings && (
-        <div className="border-b border-line bg-bg0 p-3 space-y-2">
-          <div>
-            <label className="mb-0.5 block text-[10px] text-ink-faint">API URL</label>
-            <input
-              type="text"
-              className="w-full rounded border border-line bg-bg1 px-2 py-1 text-[11px] text-ink"
-              value={apiUrl}
-              onChange={(e) => setApiUrl(e.target.value)}
-              placeholder="https://9router.peditx.ir/v1"
-            />
-          </div>
-          <div>
-            <label className="mb-0.5 block text-[10px] text-ink-faint">API Key</label>
-            <input
-              type="password"
-              className="w-full rounded border border-line bg-bg1 px-2 py-1 text-[11px] text-ink"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="sk-..."
-            />
-          </div>
-          <div>
-            <label className="mb-0.5 block text-[10px] text-ink-faint">Model</label>
-            <input
-              type="text"
-              className="w-full rounded border border-line bg-bg1 px-2 py-1 text-[11px] text-ink"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              placeholder="hermes-3-llama-3.1-70b"
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              id="ai-enabled"
-              checked={aiEnabled}
-              onChange={(e) => setAiEnabled(e.target.checked)}
-            />
-            <label htmlFor="ai-enabled" className="text-[11px] text-ink">Enable AI assistant</label>
-          </div>
-          <button
-            className="rounded bg-accent px-3 py-1 text-[11px] text-bg0 hover:bg-accent/80"
-            onClick={saveSettings}
-          >
-            Save
-          </button>
+        <div className="flex items-center gap-2">
+          {messages.length > 0 && (
+            <button
+              className="text-[10px] text-ink-faint hover:text-red-400"
+              onClick={() => { setMessages([]); localStorage.removeItem("opencut_chat_history"); }}
+            >
+              Clear History
+            </button>
+          )}
         </div>
-      )}
+      </div>
 
       {/* Messages */}
       <div className="flex-1 overflow-auto p-3 space-y-2">
         {messages.length === 0 && (
           <div className="text-center text-[11px] text-ink-faint mt-8">
-            {aiEnabled ? "Ask the AI to edit your project..." : "Type tool_name {json} to call MCP tools"}
+            {hasAI ? "Ask the AI to edit your project..." : "Type tool_name {json} to call MCP tools"}
           </div>
         )}
         {messages.map((msg, i) => (
@@ -290,11 +271,23 @@ export default function McpChat() {
 
       {/* Input */}
       <div className="border-t border-line p-2">
+        {pendingFrame && (
+          <div className="mb-1 flex items-center gap-1 text-[10px] text-green-400">
+            📸 Frame attached — will be sent with next message
+            <button className="ml-1 text-ink-faint hover:text-ink" onClick={() => setPendingFrame(null)}>✕</button>
+          </div>
+        )}
         <div className="flex gap-2">
+          <button
+            className="shrink-0 rounded-md border border-line bg-bg0 px-2 py-1.5 text-[12px] hover:bg-bg2 disabled:opacity-40"
+            onClick={() => void attachFrame()}
+            disabled={loading || !selection.length}
+            title="Attach current frame from selected clip"
+          >📸</button>
           <input
             type="text"
             className="flex-1 rounded-md border border-line bg-bg0 px-3 py-1.5 text-[12px] text-ink placeholder:text-ink-faint focus:outline-none focus:ring-1 focus:ring-(--color-accent)"
-            placeholder={aiEnabled ? "Describe what you want to do..." : "tool_name {json args}"}
+            placeholder={hasAI ? "Describe what you want to do..." : "tool_name {json args}"}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && void handleSend()}
@@ -305,7 +298,7 @@ export default function McpChat() {
             onClick={() => void handleSend()}
             disabled={loading || !input.trim()}
           >
-            {loading ? "..." : "Send"}
+            {loading ? <span className="inline-flex gap-0.5"><span className="animate-[dot_1s_infinite_0s]">.</span><span className="animate-[dot_1s_infinite_0.2s]">.</span><span className="animate-[dot_1s_infinite_0.4s]">.</span></span> : "Send"}
           </button>
         </div>
       </div>

@@ -5,6 +5,10 @@ import { usToDuration } from "../lib/time";
 import { useStore } from "../state/store";
 import { Slider } from "./Slider";
 
+function getSetting(key: string, fallback: string): string {
+  try { return localStorage.getItem(`opencut_$` + key + ``) ?? fallback; } catch { return fallback; }
+}
+
 interface Preset {
   name: string;
   hint: string;
@@ -48,11 +52,19 @@ export function ExportDialog() {
   const addExportRange = useStore((s) => s.addExportRange);
 
   const [presetIdx, setPresetIdx] = useState(0);
-  const [maxHeight, setMaxHeight] = useState<number | null>(1080);
-  const [crf, setCrf] = useState(18);
+  const [maxHeight, setMaxHeight] = useState<number | null>(() => {
+    const res = getSetting("export_resolution", "1080");
+    return res === "native" ? null : Number(res);
+  });
+  const [crf, setCrf] = useState(() => {
+    const q = getSetting("export_quality", "high");
+    if (q === "draft") return 26;
+    if (q === "standard") return 22;
+    return 18; // high
+  });
   const [codecPreset, setCodecPreset] = useState("veryfast");
   const [audioK, setAudioK] = useState(256);
-  const [format, setFormat] = useState<"mp4" | "m4a" | "gif">("mp4");
+  const [format, setFormat] = useState<"mp4" | "m4a" | "gif">(() => getSetting("export_format", "mp4") as "mp4" | "m4a" | "gif");
   const [loudnorm, setLoudnorm] = useState(false);
   const [scope, setScope] = useState<"all" | "range" | "pieces">("all");
 

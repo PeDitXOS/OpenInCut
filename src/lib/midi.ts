@@ -126,3 +126,58 @@ export const DEFAULT_MAPPINGS: MidiMapping[] = [
   { type: "cc", channel: -1, number: 7, action: { kind: "seek" } },
   { type: "cc", channel: -1, number: 1, action: { kind: "shuttle", direction: 1 } },
 ];
+
+/** Dispatch a MIDI action to the store. */
+export function dispatchMidi(
+  action: MidiAction,
+  value: number,
+  getState: () => { midiMappings: MidiMapping[]; midiDeviceId: string | null; playheadUs: number; viewStartUs: number; pxPerSec: number; togglePlay(): void; splitAtPlayhead(): Promise<void>; deleteSelection(ripple: boolean): Promise<void>; undo(): Promise<void>; redo(): Promise<void>; seek(us: number): void; shuttle(direction: -1 | 0 | 1): void; setTool(tool: string): void },
+): void {
+  const s = getState();
+  switch (action.kind) {
+    case "togglePlay": s.togglePlay(); break;
+    case "split": void s.splitAtPlayhead(); break;
+    case "delete": void s.deleteSelection(false); break;
+    case "undo": void s.undo(); break;
+    case "redo": void s.redo(); break;
+    case "seek": {
+      const viewLen = Math.max(1, s.pxPerSec * 10);
+      const target = s.viewStartUs + (value / 127) * viewLen * 1_000_000 / s.pxPerSec;
+      s.seek(target);
+      break;
+    }
+    case "shuttle": {
+      const dir = value > 64 ? action.direction : value < 63 ? -action.direction : 0;
+      s.shuttle(dir as -1 | 0 | 1);
+      break;
+    }
+    case "tool": s.setTool(action.tool); break;
+  }
+}
+
+/** Initialize MIDI controller listener. Returns cleanup function. */
+export function initMidi(
+  getState: () => { midiDeviceId: string | null; midiMappings: MidiMapping[] },
+): () => void {
+  let cleanup: (() => void) | undefined;
+  void requestMidiAccess().then((access) => {
+    if (!access) return;
+    const { midiDeviceId } = getState();
+    if (!midiDeviceId) return;
+    const input = access.inputs.get(midiDeviceId);
+    if (!input) return;
+    input.onmidimessage = (e: MIDIMessageEvent) => {
+      if (!e.data) return;
+      const msg = parseMidiMessage(e.data);
+      if (!msg) return;
+      for (const m of getState().midiMappings) {
+        if (matchMapping(msg, m)) {
+          dispatchMidi(m.action, msg.data2, getState as () => any);
+          break;
+        }
+      }
+    };
+    cleanup = () => { input.onmidimessage = null; };
+  });
+  return () => { cleanup?.(); };
+}

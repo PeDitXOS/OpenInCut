@@ -11,6 +11,19 @@ function setSetting(key: string, value: string) {
   try { localStorage.setItem(`opencut_$` + key + ``, value); } catch { /* ignore */ }
 }
 
+type Endpoint = { name: string; url: string; key: string; model: string };
+export function getActiveEndpoint(): Endpoint {
+  try {
+    const list: Endpoint[] = JSON.parse(localStorage.getItem("opencut_ai_endpoints") ?? "[]");
+    const idx = parseInt(localStorage.getItem("opencut_ai_active_endpoint") ?? "0", 10);
+    if (list.length) return list[Math.min(idx, list.length - 1)];
+  } catch {}
+  return { name: "Default", url: localStorage.getItem("opencut_ai_url") ?? "", key: localStorage.getItem("opencut_ai_key") ?? "", model: localStorage.getItem("opencut_ai_model") ?? "" };
+}
+export function getSystemPrompt(): string {
+  try { return localStorage.getItem("opencut_ai_system_prompt") ?? ""; } catch { return ""; }
+}
+
 export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<Tab>("ai");
   const mcpPort = useStore((s) => s.mcpPort);
@@ -67,97 +80,142 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
 }
 
 function AISettings() {
-  const [apiUrl, setApiUrl] = useState(() => getSetting("ai_url", ""));
-  const [apiKey, setApiKey] = useState(() => getSetting("ai_key", ""));
-  const [model, setModel] = useState(() => getSetting("ai_model", ""));
+  const [endpoints, setEndpoints] = useState<Endpoint[]>(() => {
+    try { return JSON.parse(localStorage.getItem("opencut_ai_endpoints") ?? "[]"); } catch { return []; }
+  });
+  const [activeIdx, setActiveIdx] = useState(() => {
+    try { return Math.max(0, parseInt(localStorage.getItem("opencut_ai_active_endpoint") ?? "0", 10)); } catch { return 0; }
+  });
+  const [editIdx, setEditIdx] = useState<number | null>(null);
+  const [draft, setDraft] = useState<Endpoint>({ name: "", url: "", key: "", model: "" });
+  const [systemPrompt, setSystemPrompt] = useState(() => getSystemPrompt());
   const [enabled, setEnabled] = useState(() => getSetting("ai_enabled", "") === "true");
   const [saved, setSaved] = useState(false);
 
-  const save = useCallback(() => {
-    setSetting("ai_url", apiUrl);
-    setSetting("ai_key", apiKey);
-    setSetting("ai_model", model);
+  const presets: Endpoint[] = [
+    { name: "9Router", url: "https://9router.peditx.ir/v1", key: "", model: "hermes-3-llama-3.1-70b" },
+    { name: "Ollama (Local)", url: "http://localhost:11434/v1", key: "", model: "llama3.1" },
+    { name: "OpenAI", url: "https://api.openai.com/v1", key: "", model: "gpt-4o" },
+    { name: "Anthropic", url: "https://api.anthropic.com/v1", key: "", model: "claude-3-5-sonnet" },
+  ];
+
+  const saveAll = useCallback(() => {
+    localStorage.setItem("opencut_ai_endpoints", JSON.stringify(endpoints));
+    localStorage.setItem("opencut_ai_active_endpoint", String(activeIdx));
+    setSetting("ai_system_prompt", systemPrompt);
     setSetting("ai_enabled", String(enabled));
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
-  }, [apiUrl, apiKey, model, enabled]);
+  }, [endpoints, activeIdx, systemPrompt, enabled]);
 
-  const presets = [
-    { name: "9Router", url: "https://9router.peditx.ir/v1", model: "hermes-3-llama-3.1-70b" },
-    { name: "Ollama (Local)", url: "http://localhost:11434/v1", model: "llama3.1" },
-    { name: "OpenAI", url: "https://api.openai.com/v1", model: "gpt-4o" },
-    { name: "Anthropic", url: "https://api.anthropic.com/v1", model: "claude-3-5-sonnet" },
-    { name: "Custom", url: "", model: "" },
-  ];
+  const startEdit = (idx: number | null) => {
+    if (idx === null) {
+      const ep = { name: "", url: "", key: "", model: "" };
+      setEndpoints((prev) => [...prev, ep]);
+      setDraft(ep);
+      // editIdx will be set after state update via effect or directly
+      setEditIdx(endpoints.length);
+    } else {
+      setEditIdx(idx);
+      setDraft({ ...endpoints[idx] });
+    }
+  };
+
+  const saveEdit = () => {
+    if (editIdx === null) return;
+    setEndpoints((prev) => {
+      const next = [...prev];
+      next[editIdx] = { ...draft };
+      return next;
+    });
+    setEditIdx(null);
+  };
+
+  const removeEndpoint = (idx: number) => {
+    setEndpoints((prev) => prev.filter((_, i) => i !== idx));
+    if (activeIdx >= endpoints.length - 1) setActiveIdx(Math.max(0, endpoints.length - 2));
+    if (editIdx === idx) setEditIdx(null);
+  };
 
   return (
     <div className="space-y-4">
-      <h3 className="panel-label">AI Backend Configuration</h3>
-      
-      <div className="space-y-3">
-        <div>
-          <label className="mb-1 block text-[11px] text-ink-faint">Preset</label>
-          <select
-            className="input"
-            onChange={(e) => {
-              const p = presets[Number(e.target.value)];
-              setApiUrl(p.url);
-              setModel(p.model);
-            }}
-          >
-            {presets.map((p, i) => (
-              <option key={i} value={i}>{p.name}</option>
-            ))}
-          </select>
-        </div>
+      <h3 className="panel-label">Agent Configuration</h3>
 
-        <div>
-          <label className="mb-1 block text-[11px] text-ink-faint">API URL</label>
-          <input
-            type="text"
-            className="input"
-            value={apiUrl}
-            onChange={(e) => setApiUrl(e.target.value)}
-            placeholder="https://api.openai.com/v1"
-          />
-        </div>
-
-        <div>
-          <label className="mb-1 block text-[11px] text-ink-faint">API Key</label>
-          <input
-            type="password"
-            className="input"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder="sk-..."
-          />
-        </div>
-
-        <div>
-          <label className="mb-1 block text-[11px] text-ink-faint">Model</label>
-          <input
-            type="text"
-            className="input"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            placeholder="gpt-4o"
-          />
-        </div>
-
-        <div className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            id="ai-enabled"
-            checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
-            className="w-4 h-4"
-          />
-          <label htmlFor="ai-enabled" className="text-[12px] text-ink">Enable AI Assistant</label>
-        </div>
+      <div className="flex items-center gap-2">
+        <input type="checkbox" id="ai-enabled" checked={enabled}
+          onChange={(e) => setEnabled(e.target.checked)} className="w-4 h-4" />
+        <label htmlFor="ai-enabled" className="text-[12px] text-ink">Enable AI Assistant</label>
       </div>
 
+      <div>
+        <label className="mb-1 block text-[11px] text-ink-faint">System Prompt (optional)</label>
+        <textarea
+          className="input min-h-[80px] w-full resize-y font-mono text-[11px]"
+          value={systemPrompt}
+          onChange={(e) => setSystemPrompt(e.target.value)}
+          placeholder="You are a helpful video editing assistant..."
+        />
+      </div>
+
+      <h3 className="panel-label">Endpoints</h3>
+
+      <div className="flex flex-wrap gap-1">
+        {presets.map((p, i) => (
+          <button key={i} className="btn-secondary text-[10px]"
+            onClick={() => setEndpoints((prev) => [...prev, { ...p }])}>
+            + {p.name}
+          </button>
+        ))}
+      </div>
+
+      {endpoints.length === 0 && (
+        <p className="text-[11px] text-ink-faint">No endpoints saved. Add one above or create custom.</p>
+      )}
+
+      <div className="space-y-1">
+        {endpoints.map((ep, i) => (
+          <div key={i} className="flex items-center gap-2 p-2 rounded-md bg-bg2">
+            <input type="radio" name="active-ep" checked={activeIdx === i}
+              onChange={() => setActiveIdx(i)} className="w-3 h-3" />
+            <div className="flex-1 min-w-0">
+              <div className="text-[12px] text-ink truncate">{ep.name || "Unnamed"}</div>
+              <div className="text-[10px] text-ink-faint truncate">{ep.url} · {ep.model}</div>
+            </div>
+            <button className="text-[10px] text-ink-faint hover:text-ink" onClick={() => startEdit(i)}>Edit</button>
+            <button className="text-[10px] text-red-400 hover:text-red-300" onClick={() => removeEndpoint(i)}>×</button>
+          </div>
+        ))}
+      </div>
+
+      <button className="btn-secondary text-[11px]" onClick={() => startEdit(null)}>+ Custom Endpoint</button>
+
+      {editIdx !== null && (
+        <div className="space-y-2 rounded-md border border-line p-3">
+          <div>
+            <label className="mb-1 block text-[11px] text-ink-faint">Name</label>
+            <input className="input" value={draft.name} onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} placeholder="My Backend" />
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] text-ink-faint">API URL</label>
+            <input className="input" value={draft.url} onChange={(e) => setDraft((d) => ({ ...d, url: e.target.value }))} placeholder="https://api.example.com/v1" />
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] text-ink-faint">API Key</label>
+            <input type="password" className="input" value={draft.key} onChange={(e) => setDraft((d) => ({ ...d, key: e.target.value }))} placeholder="sk-..." />
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] text-ink-faint">Model</label>
+            <input className="input" value={draft.model} onChange={(e) => setDraft((d) => ({ ...d, model: e.target.value }))} placeholder="gpt-4o" />
+          </div>
+          <div className="flex gap-2">
+            <button className="btn-primary" onClick={saveEdit}>Save Endpoint</button>
+            <button className="btn-secondary" onClick={() => setEditIdx(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center gap-2 pt-2">
-        <button className="btn-primary" onClick={save}>
+        <button className="btn-primary" onClick={saveAll}>
           {saved ? "Saved!" : "Save Settings"}
         </button>
       </div>

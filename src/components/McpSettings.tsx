@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useStore } from "../state/store";
 import { engine } from "../state/store";
+import { showToast } from "./Toast";
 import {
   type MidiMapping,
   type MidiAction,
@@ -9,6 +10,7 @@ import {
   listInputDevices,
   parseMidiMessage,
   matchMapping,
+  dispatchMidi,
   saveMappings,
   loadPresets,
   savePresets,
@@ -83,6 +85,33 @@ function McpPane() {
   const mcpToken = useStore((s) => s.mcpToken);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  // Client-side token management (for future auth use)
+  const [clientToken, setClientToken] = useState(() => {
+    try { return localStorage.getItem("opencut_hermes_token") ?? ""; } catch { return ""; }
+  });
+  const [tokenRegeneratedAt, setTokenRegeneratedAt] = useState(() => {
+    try { return localStorage.getItem("opencut_hermes_token_ts") ?? ""; } catch { return ""; }
+  });
+
+  const copyToClipboard = useCallback((text: string, field: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedField(field);
+      setTimeout(() => setCopiedField(null), 1500);
+    }).catch(() => {});
+  }, []);
+
+  const regenerateToken = useCallback(() => {
+    const newToken = crypto.randomUUID();
+    setClientToken(newToken);
+    const ts = new Date().toLocaleString();
+    setTokenRegeneratedAt(ts);
+    try {
+      localStorage.setItem("opencut_hermes_token", newToken);
+      localStorage.setItem("opencut_hermes_token_ts", ts);
+    } catch { /* ignore */ }
+  }, []);
 
   const testConnection = useCallback(async () => {
     setTesting(true);
@@ -90,45 +119,106 @@ function McpPane() {
     try {
       await engine.mcpListTools();
       setTestResult("Connected successfully!");
+      showToast("MCP connected successfully", "success");
     } catch (err) {
       setTestResult(`Connection failed: ${err}`);
+      showToast(`MCP connection failed`, "error");
     } finally {
       setTesting(false);
     }
   }, []);
 
+  const mcpUrl = mcpPort ? `http://127.0.0.1:${mcpPort}/mcp` : "";
+  const hermesConnectionCmd = mcpPort
+    ? `claude mcp add --transport http opencut ${mcpUrl} --header "Authorization: Bearer ${mcpToken ?? ""}"`
+    : "";
+
   return (
     <div className="p-4 space-y-3">
-      <div className="space-y-3">
+      {/* ── Connection Status ── */}
+      <div className="space-y-2">
         <div>
           <label className="mb-1 block text-[10.5px] font-medium uppercase tracking-wide text-ink-faint">Status</label>
           <div className="flex items-center gap-2">
             <span className={`h-2 w-2 rounded-full ${mcpPort ? "bg-green-500" : "bg-red-500"}`} />
             <span className="text-[12px] text-ink">{mcpPort ? `Active on port ${mcpPort}` : "Inactive"}</span>
+            <span className={`ml-auto text-[10px] px-1.5 py-0.5 rounded-full ${mcpPort ? "bg-green-900/40 text-green-400" : "bg-red-900/40 text-red-400"}`}>
+              {mcpPort ? "Connected" : "Disconnected"}
+            </span>
           </div>
         </div>
-        {mcpPort && (
-          <>
+      </div>
+
+      {mcpPort && (
+        <>
+          {/* ── Hermes WebUI Connection ── */}
+          <div className="border-t border-line pt-2 space-y-2">
+            <label className="mb-1 block text-[10.5px] font-medium uppercase tracking-wide text-ink-faint">Hermes WebUI Connection</label>
             <div>
-              <label className="mb-1 block text-[10.5px] font-medium uppercase tracking-wide text-ink-faint">URL</label>
-              <div className="rounded-md border border-line bg-bg0 px-2 py-1.5 font-[var(--font-mono)] text-[11px] text-ink">http://127.0.0.1:{mcpPort}/mcp</div>
+              <label className="mb-0.5 block text-[10px] text-ink-faint">MCP URL</label>
+              <div className="flex items-center gap-1">
+                <div className="flex-1 rounded-md border border-line bg-bg0 px-2 py-1.5 font-[var(--font-mono)] text-[11px] text-ink truncate">{mcpUrl}</div>
+                <button className="rounded border border-line bg-bg2 px-2 py-1 text-[10px] text-ink hover:bg-bg3" onClick={() => copyToClipboard(mcpUrl, "url")}>
+                  {copiedField === "url" ? "✓" : "Copy"}
+                </button>
+              </div>
             </div>
             <div>
-              <label className="mb-1 block text-[10.5px] font-medium uppercase tracking-wide text-ink-faint">Token</label>
-              <div className="rounded-md border border-line bg-bg0 px-2 py-1.5 font-[var(--font-mono)] text-[11px] text-ink select-all break-all">{mcpToken}</div>
+              <label className="mb-0.5 block text-[10px] text-ink-faint">Auth Token</label>
+              <div className="flex items-center gap-1">
+                <div className="flex-1 rounded-md border border-line bg-bg0 px-2 py-1.5 font-[var(--font-mono)] text-[11px] text-ink truncate select-all">{mcpToken}</div>
+                <button className="rounded border border-line bg-bg2 px-2 py-1 text-[10px] text-ink hover:bg-bg3" onClick={() => copyToClipboard(mcpToken ?? "", "token")}>
+                  {copiedField === "token" ? "✓" : "Copy"}
+                </button>
+              </div>
             </div>
+            <button
+              className="w-full rounded-md border border-line bg-bg2 px-3 py-1.5 text-[11px] text-ink hover:bg-bg3"
+              onClick={() => copyToClipboard(hermesConnectionCmd, "cmd")}
+            >
+              {copiedField === "cmd" ? "✓ Copied!" : "Copy Hermes Connection"}
+            </button>
+          </div>
+
+          {/* ── Token Auth ── */}
+          <div className="border-t border-line pt-2 space-y-2">
+            <label className="mb-1 block text-[10.5px] font-medium uppercase tracking-wide text-ink-faint">Token Auth</label>
+            <div>
+              <label className="mb-0.5 block text-[10px] text-ink-faint">Client Token</label>
+              <div className="flex items-center gap-1">
+                <div className="flex-1 rounded-md border border-line bg-bg0 px-2 py-1.5 font-[var(--font-mono)] text-[11px] text-ink truncate select-all">
+                  {clientToken || "No token generated"}
+                </div>
+                <button className="rounded border border-line bg-bg2 px-2 py-1 text-[10px] text-ink hover:bg-bg3" onClick={() => copyToClipboard(clientToken, "clientToken")}>
+                  {copiedField === "clientToken" ? "✓" : "Copy"}
+                </button>
+              </div>
+            </div>
+            {tokenRegeneratedAt && (
+              <div className="text-[10px] text-ink-faint">Last regenerated: {tokenRegeneratedAt}</div>
+            )}
+            <button
+              className="rounded-md border border-line bg-bg2 px-3 py-1.5 text-[12px] text-ink hover:bg-bg3"
+              onClick={regenerateToken}
+            >
+              Regenerate Token
+            </button>
+          </div>
+
+          {/* ── Test ── */}
+          <div className="border-t border-line pt-2 space-y-2">
             <button className="rounded-md border border-line bg-bg2 px-3 py-1.5 text-[12px] text-ink hover:bg-bg3 disabled:opacity-50" onClick={() => void testConnection()} disabled={testing}>
               {testing ? "Testing..." : "Test Connection"}
             </button>
             {testResult && <div className={`text-[11px] ${testResult.startsWith("Connected") ? "text-green-400" : "text-red-400"}`}>{testResult}</div>}
-          </>
-        )}
-        {!mcpPort && (
-          <p className="text-[11px] text-ink-dim">
-            The MCP server starts automatically when the desktop app launches. Run <code className="font-[var(--font-mono)] text-ink">npx tauri dev</code> to start the app.
-          </p>
-        )}
-      </div>
+          </div>
+        </>
+      )}
+      {!mcpPort && (
+        <p className="text-[11px] text-ink-dim">
+          The MCP server starts automatically when the desktop app launches. Run <code className="font-[var(--font-mono)] text-ink">npx tauri dev</code> to start the app.
+        </p>
+      )}
     </div>
   );
 }
@@ -181,7 +271,7 @@ function MidiPane() {
         const currentMappings = useStore.getState().midiMappings;
         for (const m of currentMappings) {
           if (matchMapping(msg, m)) {
-            dispatchMidiAction(m.action, msg.data2);
+             dispatchMidi(m.action, msg.data2, () => useStore.getState());
             break;
           }
         }
@@ -289,27 +379,3 @@ function MidiPane() {
   );
 }
 
-function dispatchMidiAction(action: MidiAction, value: number) {
-  const s = useStore.getState();
-  switch (action.kind) {
-    case "togglePlay": s.togglePlay(); break;
-    case "split": void s.splitAtPlayhead(); break;
-    case "delete": void s.deleteSelection(false); break;
-    case "undo": void s.undo(); break;
-    case "redo": void s.redo(); break;
-    case "seek": {
-      const viewLen = Math.max(1, s.pxPerSec * 10);
-      const target = s.viewStartUs + (value / 127) * viewLen * 1_000_000 / s.pxPerSec;
-      s.seek(target);
-      break;
-    }
-    case "shuttle": {
-      const dir = value > 64 ? action.direction : value < 63 ? -action.direction : 0;
-      s.shuttle(dir as -1 | 0 | 1);
-      break;
-    }
-    case "tool":
-      s.setTool(action.tool);
-      break;
-  }
-}

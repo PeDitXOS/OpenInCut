@@ -1,16 +1,11 @@
-import SettingsPanel from "./SettingsPanel";
+import SettingsPanel, { getSetting, getActiveEndpoint, getSystemPrompt } from "./SettingsPanel";
 import { useEffect, useState } from "react";
 
 import { activeSequence } from "../engine/types";
 import { MEDIA_EXTENSIONS } from "../lib/media";
 import { frameToUs } from "../lib/time";
 import { engine, useStore } from "../state/store";
-import {
-  requestMidiAccess,
-  parseMidiMessage,
-  matchMapping,
-  type MidiAction,
-} from "../lib/midi";
+import { initMidi } from "../lib/midi";
 import { Header } from "./Header";
 import { MediaPool } from "./MediaPool";
 import { Preview } from "./Preview";
@@ -20,6 +15,7 @@ import { StatusBar } from "./StatusBar";
 import { ExportDialog } from "./ExportDialog";
 import { AvatarDialog } from "./AvatarDialog";
 import { TranscriptPanel } from "./TranscriptPanel";
+import { ToastContainer } from "./Toast";
 
 function useKeyboard() {
   useEffect(() => {
@@ -29,25 +25,38 @@ function useKeyboard() {
       const el = e.target as HTMLElement;
       if (el?.tagName === "INPUT" || el?.tagName === "TEXTAREA") return;
 
-      if (e.code === "Space") {
+      // Read shortcuts from global settings
+      const shortcuts = (window as any).__opencut_settings?.shortcuts ?? {};
+      const keyMatch = (action: string) => {
+        const mapped = shortcuts[action];
+        if (!mapped) return false;
+        const parts = mapped.toLowerCase().split("+");
+        const key = parts.pop()?.trim() ?? "";
+        const needsCtrl = parts.includes("ctrl");
+        const needsShift = parts.includes("shift");
+        const needsMeta = parts.includes("meta");
+        return e.key.toLowerCase() === key.toLowerCase() &&
+               (!needsCtrl || e.ctrlKey) &&
+               (!needsShift || e.shiftKey) &&
+               (!needsMeta || e.metaKey);
+      };
+
+      if (e.code === "Space" || keyMatch("Play/Pause")) {
         e.preventDefault();
         s.togglePlay();
-      } else if (mod && e.key.toLowerCase() === "s") {
+      } else if (keyMatch("Save") || (mod && e.key.toLowerCase() === "s")) {
         e.preventDefault();
         void s.saveProject();
-      } else if (mod && e.key.toLowerCase() === "o") {
+      } else if (keyMatch("Open") || (mod && e.key.toLowerCase() === "o")) {
         e.preventDefault();
         void s.openProject();
-      } else if (mod && e.key.toLowerCase() === "z" && e.shiftKey) {
+      } else if (keyMatch("Redo") || (mod && e.key.toLowerCase() === "z" && e.shiftKey)) {
         e.preventDefault();
         void s.redo();
-      } else if (mod && e.key.toLowerCase() === "z") {
+      } else if (keyMatch("Undo") || (mod && e.key.toLowerCase() === "z" && !e.shiftKey)) {
         e.preventDefault();
         void s.undo();
-      } else if (e.key.toLowerCase() === "k" && mod) {
-        e.preventDefault();
-        void s.splitAtPlayhead();
-      } else if (e.key.toLowerCase() === "s" && !mod) {
+      } else if (keyMatch("Split") || (e.key.toLowerCase() === "k" && mod) || (e.key.toLowerCase() === "s" && !mod)) {
         void s.splitAtPlayhead();
       } else if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
@@ -57,15 +66,15 @@ function useKeyboard() {
         const fps = activeSequence(s.project).fps;
         const step = frameToUs(1, fps) * (e.shiftKey ? 10 : 1);
         s.seek(s.playheadUs + (e.key === "ArrowLeft" ? -step : step));
-      } else if (e.key.toLowerCase() === "j" && !mod) {
+      } else if (keyMatch("Shuttle Back") || (e.key.toLowerCase() === "j" && !mod)) {
         s.shuttle(-1);
-      } else if (e.key.toLowerCase() === "k" && !mod) {
+      } else if (keyMatch("Shuttle Stop") || (e.key.toLowerCase() === "k" && !mod)) {
         s.shuttle(0);
-      } else if (e.key.toLowerCase() === "l" && !mod) {
+      } else if (keyMatch("Shuttle Forward") || (e.key.toLowerCase() === "l" && !mod)) {
         s.shuttle(1);
-      } else if (e.key.toLowerCase() === "i" && !mod) {
+      } else if (keyMatch("Mark In") || (e.key.toLowerCase() === "i" && !mod)) {
         s.setRangeIn(Math.round(s.playheadUs));
-      } else if (e.key.toLowerCase() === "o" && !mod) {
+      } else if (keyMatch("Mark Out") || (e.key.toLowerCase() === "o" && !mod)) {
         s.setRangeOut(Math.round(s.playheadUs));
       } else if (e.key.toLowerCase() === "p" && !mod) {
         s.addExportRange();
@@ -192,58 +201,30 @@ function useMidi() {
   const deviceId = useStore((s) => s.midiDeviceId);
   useEffect(() => {
     if (!deviceId) return;
-    let cleanup: (() => void) | undefined;
-    void requestMidiAccess().then((access) => {
-      if (!access) return;
-      const input = access.inputs.get(deviceId);
-      if (!input) return;
-      input.onmidimessage = (e: MIDIMessageEvent) => {
-        if (!e.data) return;
-        const msg = parseMidiMessage(e.data);
-        if (!msg) return;
-        const mappings = useStore.getState().midiMappings;
-        for (const m of mappings) {
-          if (matchMapping(msg, m)) {
-            dispatchMidi(m.action, msg.data2);
-            break;
-          }
-        }
-      };
-      cleanup = () => { input.onmidimessage = null; };
-    });
-    return () => { cleanup?.(); };
+    return initMidi(() => useStore.getState());
   }, [deviceId]);
 }
 
-function dispatchMidi(action: MidiAction, value: number) {
-  const s = useStore.getState();
-  switch (action.kind) {
-    case "togglePlay": s.togglePlay(); break;
-    case "split": void s.splitAtPlayhead(); break;
-    case "delete": void s.deleteSelection(false); break;
-    case "undo": void s.undo(); break;
-    case "redo": void s.redo(); break;
-    case "seek": {
-      const viewLen = Math.max(1, s.pxPerSec * 10);
-      const target = s.viewStartUs + (value / 127) * viewLen * 1_000_000 / s.pxPerSec;
-      s.seek(target);
-      break;
-    }
-    case "shuttle": {
-      const dir = value > 64 ? action.direction : value < 63 ? -action.direction : 0;
-      s.shuttle(dir as -1 | 0 | 1);
-      break;
-    }
-    case "tool": s.setTool(action.tool); break;
-  }
-}
 
 export function App() {
   const init = useStore((s) => s.init);
   const [leftTab, setLeftTab] = useState<"media" | "text">("media");
   const transcriptCount = useStore((s) => s.project.transcripts.length);
   useEffect(() => {
-    void init();
+    // Load settings from localStorage and expose globally
+    const ai_enabled = getSetting("ai_enabled", "false") === "true";
+    const ep = getActiveEndpoint();
+    const ai_system_prompt = getSystemPrompt();
+    const export_format = getSetting("export_format", "mp4");
+    const export_quality = getSetting("export_quality", "high");
+    const export_resolution = getSetting("export_resolution", "1080");
+    let shortcuts: Record<string, string> = {};
+    try { shortcuts = JSON.parse(getSetting("shortcuts", "{}")); } catch {}
+    (window as any).__opencut_settings = {
+      ai_enabled, ai_url: ep.url, ai_key: ep.key, ai_model: ep.model, ai_system_prompt,
+      export_format, export_quality, export_resolution,
+      shortcuts,
+    };
   }, [init]);
   useKeyboard();
   useMidi();
@@ -255,15 +236,14 @@ export function App() {
   return (
     <div className="flex h-full flex-col bg-bg0">
       <Header onSettings={() => setShowSettings(true)} />
+      <ToastContainer />
       <main className="flex min-h-0 flex-1">
         <aside className="flex w-[264px] shrink-0 flex-col border-r border-line-soft bg-bg1">
           <div className="flex gap-1 px-2 pt-2">
-            {(
-              [
-                ["media", "Media"],
-                ["text", `Text${transcriptCount ? ` (${transcriptCount})` : ""}`],
-              ] as const
-            ).map(([key, label]) => (
+            {([
+              ["media", "Media"],
+              ["text", `Text${transcriptCount ? ` (${transcriptCount})` : ""}`],
+            ] as const).map(([key, label]) => (
               <button
                 key={key}
                 className={`focus-ring rounded-md px-2.5 py-1 text-[11px] font-medium ${
