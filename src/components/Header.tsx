@@ -200,23 +200,23 @@ export function Header({ onSettings }: { onSettings?: () => void }) {
       <div className="flex-1" />
 
       <button
-        className="focus-ring rounded-md px-2.5 py-1.5 text-[12px] text-ink-dim hover:bg-bg3 hover:text-ink"
+        className="tooltip focus-ring rounded-md px-2.5 py-1.5 text-[12px] text-ink-dim hover:bg-bg3 hover:text-ink"
         onClick={() => void newProject()}
-        title="New project (discards the current one if unsaved)"
+        data-tooltip="New project (discards the current one if unsaved)"
       >
         New
       </button>
       <button
-        className="focus-ring rounded-md px-2.5 py-1.5 text-[12px] text-ink-dim hover:bg-bg3 hover:text-ink"
+        className="tooltip focus-ring rounded-md px-2.5 py-1.5 text-[12px] text-ink-dim hover:bg-bg3 hover:text-ink"
         onClick={() => void openProject()}
-        title="Open project (⌘O)"
+        data-tooltip="Open project (⌘O)"
       >
         Open…
       </button>
       <button
-        className="focus-ring rounded-md px-2.5 py-1.5 text-[12px] text-ink-dim hover:bg-bg3 hover:text-ink"
+        className="tooltip focus-ring rounded-md px-2.5 py-1.5 text-[12px] text-ink-dim hover:bg-bg3 hover:text-ink"
         onClick={() => void saveProject()}
-        title="Save project (⌘S)"
+        data-tooltip="Save project (⌘S)"
       >
         Save
       </button>
@@ -224,18 +224,18 @@ export function Header({ onSettings }: { onSettings?: () => void }) {
       <div className="mx-1 h-5 w-px bg-line" />
 
       <button
-        className="focus-ring rounded-md px-2.5 py-1.5 text-[12px] text-ink-dim enabled:hover:bg-bg3 enabled:hover:text-ink disabled:opacity-40"
+        className="tooltip focus-ring rounded-md px-2.5 py-1.5 text-[12px] text-ink-dim enabled:hover:bg-bg3 enabled:hover:text-ink disabled:opacity-40"
         onClick={() => void undo()}
         disabled={!canUndo}
-        title="Undo (⌘Z)"
+        data-tooltip="Undo (⌘Z)"
       >
         ↶ Undo
       </button>
       <button
-        className="focus-ring rounded-md px-2.5 py-1.5 text-[12px] text-ink-dim enabled:hover:bg-bg3 enabled:hover:text-ink disabled:opacity-40"
+        className="tooltip focus-ring rounded-md px-2.5 py-1.5 text-[12px] text-ink-dim enabled:hover:bg-bg3 enabled:hover:text-ink disabled:opacity-40"
         onClick={() => void redo()}
         disabled={!canRedo}
-        title="Redo (⇧⌘Z)"
+        data-tooltip="Redo (⇧⌘Z)"
       >
         ↷ Redo
       </button>
@@ -244,27 +244,27 @@ export function Header({ onSettings }: { onSettings?: () => void }) {
 
       <McpPill />
       <button
-        className="focus-ring rounded-md border border-line px-2.5 py-1.5 text-[12px] text-ink-dim hover:text-ink hover:bg-bg2"
+        className="tooltip focus-ring rounded-md border border-line px-2.5 py-1.5 text-[12px] text-ink-dim hover:text-ink hover:bg-bg2"
         onClick={() => onSettings?.()}
-        title="Open settings"
+        data-tooltip="Open settings"
       >
         ⚙ Settings
       </button>
 
       {exporting && (
         <button
-          className="focus-ring rounded-md border border-line px-2 py-1.5 text-[12px] text-ink-dim hover:text-danger"
+          className="tooltip focus-ring rounded-md border border-line px-2 py-1.5 text-[12px] text-ink-dim hover:text-danger"
           onClick={() => void cancelExport()}
-          title="Cancel the export"
+          data-tooltip="Cancel the export"
         >
           Cancel
         </button>
       )}
       <button
-        className="focus-ring relative overflow-hidden rounded-md bg-accent px-3.5 py-1.5 text-[12px] font-semibold text-bg0 enabled:hover:bg-accent-deep disabled:opacity-80"
+        className="tooltip focus-ring relative overflow-hidden rounded-md bg-accent px-3.5 py-1.5 text-[12px] font-semibold text-bg0 enabled:hover:bg-accent-deep disabled:opacity-80"
         onClick={() => setShowExportDialog(true)}
         disabled={exporting}
-        title="Export the sequence to MP4"
+        data-tooltip="Export the sequence to MP4"
       >
         {exporting && (
           <span

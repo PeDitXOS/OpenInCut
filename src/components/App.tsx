@@ -210,6 +210,12 @@ export function App() {
   const init = useStore((s) => s.init);
   const [leftTab, setLeftTab] = useState<"media" | "text">("media");
   const transcriptCount = useStore((s) => s.project.transcripts.length);
+  const [isRtl, setIsRtl] = useState(() => localStorage.getItem("ui_rtl") === "true");
+  useEffect(() => {
+    const rtl = localStorage.getItem("ui_rtl") === "true";
+    setIsRtl(rtl);
+    document.documentElement.classList.toggle("rtl", rtl);
+  }, []);
   useEffect(() => {
     // Load settings from localStorage and expose globally
     const ai_enabled = getSetting("ai_enabled", "false") === "true";
@@ -234,7 +240,7 @@ export function App() {
   const [showSettings, setShowSettings] = useState(false);
 
   return (
-    <div className="flex h-full flex-col bg-bg0">
+    <div className={`flex h-full flex-col bg-bg0 ${isRtl ? "rtl" : ""}`}>
       <Header onSettings={() => setShowSettings(true)} />
       <ToastContainer />
       <main className="flex min-h-0 flex-1">

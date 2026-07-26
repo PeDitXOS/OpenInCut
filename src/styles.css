@@ -241,6 +241,30 @@ select.input {
 .tooltip:hover::after { opacity: 1; }
 
 /* ═══════════════════════════════════════════════
+   RTL SUPPORT
+   ═══════════════════════════════════════════════ */
+.rtl {
+  direction: rtl;
+  text-align: right;
+}
+.rtl .tooltip::after { left: auto; right: 50%; transform: translateX(50%); }
+.rtl .tooltip::before { left: auto; right: 50%; transform: translateX(50%); }
+.rtl .panel-divider { margin-left: 0; margin-right: 0; }
+.rtl .flex { flex-direction: row-reverse; }
+.rtl .flex-col { flex-direction: column; }
+.rtl .text-left { text-align: right; }
+.rtl .text-right { text-align: left; }
+.rtl .mr-auto { margin-right: auto; margin-left: 0; }
+.rtl .ml-auto { margin-left: auto; margin-right: 0; }
+.rtl .mr-1, .rtl .mr-2, .rtl .mr-3, .rtl .mr-4 { margin-right: 0; }
+.rtl .ml-1, .rtl .ml-2, .rtl .ml-3, .rtl .ml-4 { margin-left: 0; }
+.rtl .gap-1, .rtl .gap-2, .rtl .gap-3 { }
+.rtl [class*="mx-"] { margin-left: auto; margin-right: auto; }
+.rtl .mx-1 { margin-left: 0.25rem; margin-right: 0.25rem; }
+.rtl .mx-2 { margin-left: 0.5rem; margin-right: 0.5rem; }
+.rtl .mx-auto { margin-left: auto; margin-right: auto; }
+
+/* ═══════════════════════════════════════════════
    REDUCED MOTION
    ═══════════════════════════════════════════════ */
 @media (prefers-reduced-motion: reduce) {

@@ -983,37 +983,37 @@ export function Timeline() {
       <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-line-soft px-2">
         <h2 className="panel-eyebrow mr-2">Timeline</h2>
         <button
-          className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
+          className="tooltip focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
           onClick={() => void splitAtPlayhead()}
-          title="Split at the playhead (S)"
+          data-tooltip="Split at the playhead (S)"
         >
           ✂ Split
         </button>
         <button
-          className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
+          className="tooltip focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
           onClick={() => void deleteSelection(false)}
-          title="Delete selection (Del)"
+          data-tooltip="Delete selection (Del)"
         >
           Delete
         </button>
         <button
-          className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
+          className="tooltip focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
           onClick={() => void deleteSelection(true)}
-          title="Delete and close gap (⇧Del)"
+          data-tooltip="Delete and close gap (⇧Del)"
         >
           Delete and close
         </button>
         <button
-          className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
+          className="tooltip focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
           onClick={() => void addTextClip()}
-          title="Add a title at the playhead"
+          data-tooltip="Add a title at the playhead"
         >
           + Title
         </button>
         <button
-          className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
+          className="tooltip focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
           onClick={() => void generateVertical()}
-          title="Generate a vertical copy (1080x1920) with a blurred background (Shorts/Reels)"
+          data-tooltip="Generate a vertical copy (1080x1920) with a blurred background (Shorts/Reels)"
         >
           📱 Vertical
         </button>
@@ -1028,25 +1028,25 @@ export function Timeline() {
         ].map(([tool, icon, label]) => (
           <button
             key={tool}
-            className={`focus-ring rounded-md px-2 py-1 text-[11.5px] ${
+            className={`tooltip focus-ring rounded-md px-2 py-1 text-[11.5px] ${
               activeTool === tool
                 ? "bg-accent text-white"
                 : "text-ink-dim hover:bg-bg3 hover:text-ink"
             }`}
             onClick={() => setTool(tool as any)}
-            title={label}
+            data-tooltip={label}
           >
             {icon}
           </button>
         ))}
         <button
-          className={`focus-ring rounded-md px-2 py-1 text-[11.5px] ${
+          className={`tooltip focus-ring rounded-md px-2 py-1 text-[11.5px] ${
             rangeInUs != null && rangeOutUs != null && rangeOutUs > rangeInUs
               ? "text-clip-audio-hi hover:bg-bg3"
               : "text-ink-dim hover:bg-bg3 hover:text-ink"
           }`}
           onClick={() => addExportRange()}
-          title={
+          data-tooltip={
             rangeInUs != null && rangeOutUs != null && rangeOutUs > rangeInUs
               ? "Save this I–O range as an export piece (P). Export → Scope: Pieces renders them concatenated."
               : "Mark a range first with I (in) and O (out), then press P to save it as an export piece"
@@ -1055,52 +1055,52 @@ export function Timeline() {
           + Piece{exportRanges.length > 0 ? ` (${exportRanges.length})` : ""}
         </button>
         <button
-          className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
+          className="tooltip focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
           onClick={() => void addGeneratorClip("core.solid")}
-          title="Add a color rectangle at the playhead (Inspector: color, size, gradient)"
+          data-tooltip="Add a color rectangle at the playhead (Inspector: color, size, gradient)"
         >
           ▦ Shape
         </button>
         <button
-          className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
+          className="tooltip focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
           onClick={() => openAvatarDialog()}
-          title="Reactive avatar: expressions, look and classifier — driven by your voice"
+          data-tooltip="Reactive avatar: expressions, look and classifier — driven by your voice"
         >
           🧑‍🎤 Avatar
         </button>
         <button
-          className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
+          className="tooltip focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
           onClick={() => void addTrack("video")}
-          title="Add video track"
+          data-tooltip="Add video track"
         >
           +V
         </button>
         <button
-          className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
+          className="tooltip focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
           onClick={() => void addTrack("audio")}
-          title="Add audio track"
+          data-tooltip="Add audio track"
         >
           +A
         </button>
         {project.sequences.length > 1 && (
           <button
-            className="focus-ring rounded-md px-1.5 py-1 text-[11.5px] text-ink-faint hover:bg-bg3 hover:text-danger"
+            className="tooltip focus-ring rounded-md px-1.5 py-1 text-[11.5px] text-ink-faint hover:bg-bg3 hover:text-danger"
             onClick={() => {
               const seq = activeSequence(project);
               if (window.confirm(`Delete the sequence "${seq.name}"? (undoable)`))
                 void removeSequence(seq.id);
             }}
-            title="Delete the active sequence (undoable)"
+            data-tooltip="Delete the active sequence (undoable)"
           >
             ✕
           </button>
         )}
         {project.sequences.length > 1 && (
           <select
-            className="focus-ring cursor-pointer rounded-md border border-line bg-bg2 px-1.5 py-0.5 text-[11px] text-ink"
+            className="tooltip focus-ring cursor-pointer rounded-md border border-line bg-bg2 px-1.5 py-0.5 text-[11px] text-ink"
             value={activeSequence(project).id}
             onChange={(e) => void setActiveSequence(e.target.value)}
-            title="Active sequence"
+            data-tooltip="Active sequence"
           >
             {project.sequences.map((sq) => (
               <option key={sq.id} value={sq.id}>
@@ -1111,9 +1111,9 @@ export function Timeline() {
         )}
         <div className="flex-1" />
         <button
-          className="focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
+          className="tooltip focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
           onClick={zoomFit}
-          title="Fit the whole timeline to the view"
+          data-tooltip="Fit the whole timeline to the view"
         >
           Fit
         </button>
@@ -1124,7 +1124,7 @@ export function Timeline() {
           value={pxPerSec}
           onChange={(e) => setView(viewStartUs, Number(e.target.value))}
           className="h-1 w-28 cursor-pointer appearance-none rounded-full bg-bg3 accent-(--color-accent)"
-          title="Zoom"
+          data-tooltip="Zoom"
         />
       </div>
 

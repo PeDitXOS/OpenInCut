@@ -283,6 +283,7 @@ function MCPSettings({ port, token }: { port: number | null; token: string | nul
 
 function LanguageSettings() {
   const [lang, setLang] = useState(() => getSetting("ui_lang", "en"));
+  const [rtl, setRtl] = useState(() => localStorage.getItem("ui_rtl") === "true");
   const [saved, setSaved] = useState(false);
 
   const langs = [
@@ -296,6 +297,21 @@ function LanguageSettings() {
     { code: "de", name: "German", native: "Deutsch" },
   ];
 
+  const saveLanguage = (code: string) => {
+    setLang(code);
+    setSetting("ui_lang", code);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  const saveRtl = (value: boolean) => {
+    setRtl(value);
+    localStorage.setItem("ui_rtl", String(value));
+    document.documentElement.classList.toggle("rtl", value);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
   return (
     <div className="space-y-4">
       <h3 className="panel-label">Language</h3>
@@ -306,7 +322,7 @@ function LanguageSettings() {
               type="radio"
               name="lang"
               checked={lang === l.code}
-              onChange={() => { setLang(l.code); setSetting("ui_lang", l.code); setSaved(true); setTimeout(() => setSaved(false), 2000); }}
+              onChange={() => saveLanguage(l.code)}
               className="w-4 h-4"
             />
             <div>
@@ -319,7 +335,22 @@ function LanguageSettings() {
           </label>
         ))}
       </div>
-      {saved && <div className="text-[11px] text-green-400">Language saved!</div>}
+      <div className="border-t border-line pt-4 space-y-3">
+        <h4 className="panel-label">RTL Layout</h4>
+        <label className="flex items-center gap-3 p-2 rounded-md hover:bg-bg2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={rtl}
+            onChange={(e) => saveRtl(e.target.checked)}
+            className="w-4 h-4"
+          />
+          <div>
+            <div className="text-[12px] text-ink">Right-to-Left Layout</div>
+            <div className="text-[10px] text-ink-faint">For RTL languages (Arabic, Persian, Hebrew)</div>
+          </div>
+        </label>
+      </div>
+      {saved && <div className="text-[11px] text-green-400">Settings saved!</div>}
     </div>
   );
 }

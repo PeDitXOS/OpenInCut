@@ -17,18 +17,31 @@ export interface MidiMapping {
   /** "cc" for control change, "note" for note on/off */
   type: "cc" | "note";
   /** CC number (0-127) for type=cc, note number (0-127) for type=note */
-  channel: number; // MIDI channel 0-15 (-1 = any)
-  number: number; // CC or note number
+  number: number;
+  /** MIDI channel 0-15 (-1 = any) */
+  channel: number;
   action: MidiAction;
+}
+
+export interface MidiDevice {
+  id: string;
+  name: string;
+  manufacturer?: string;
+  enabled: boolean;
 }
 
 export interface MidiPreset {
   name: string;
   mappings: MidiMapping[];
+  devices: MidiDevice[];
+  backlightCc?: number;
+  backlightChannel?: number;
+  backlightValue?: number;
 }
 
 const STORAGE_KEY = "opencut.midi.mappings";
 const PRESET_KEY = "opencut.midi.presets";
+const DEVICE_KEY = "opencut.midi.devices";
 
 /** Try to get MIDI access. Returns null if unavailable (non-HTTPS, no browser support). */
 export async function requestMidiAccess(): Promise<MIDIAccess | null> {
@@ -43,6 +56,11 @@ export async function requestMidiAccess(): Promise<MIDIAccess | null> {
 /** List connected MIDI input devices. */
 export function listInputDevices(access: MIDIAccess): MIDIInput[] {
   return [...access.inputs.values()];
+}
+
+/** List connected MIDI output devices. */
+export function listOutputDevices(access: MIDIAccess): MIDIOutput[] {
+  return [...access.outputs.values()];
 }
 
 /** Parse raw MIDI message bytes into a structured object. */
@@ -101,6 +119,21 @@ export function saveMappings(mappings: MidiMapping[]): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(mappings));
 }
 
+/** Load saved device configs from localStorage. */
+export function loadDevices(): MidiDevice[] {
+  try {
+    const raw = localStorage.getItem(DEVICE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Save device configs to localStorage. */
+export function saveDevices(devices: MidiDevice[]): void {
+  localStorage.setItem(DEVICE_KEY, JSON.stringify(devices));
+}
+
 /** Load preset list from localStorage. */
 export function loadPresets(): MidiPreset[] {
   try {
@@ -114,6 +147,25 @@ export function loadPresets(): MidiPreset[] {
 /** Save preset list to localStorage. */
 export function savePresets(presets: MidiPreset[]): void {
   localStorage.setItem(PRESET_KEY, JSON.stringify(presets));
+}
+
+/** Save a preset with current mappings and device config. */
+export function savePreset(name: string, mappings: MidiMapping[], devices: MidiDevice[], backlight?: { cc: number; channel: number; value: number }): void {
+  const presets = loadPresets();
+  const next = [...presets.filter((p) => p.name !== name), { name, mappings, devices, ...backlight }];
+  savePresets(next);
+}
+
+/** Load a preset by name, returning mappings and device config. */
+export function loadPreset(name: string): MidiPreset | undefined {
+  const presets = loadPresets();
+  return presets.find((p) => p.name === name);
+}
+
+/** Delete a preset by name. */
+export function deletePreset(name: string): void {
+  const presets = loadPresets().filter((p) => p.name !== name);
+  savePresets(presets);
 }
 
 /** Default mapping: CC7 → volume-like seek, Note 36 (C2) → play/pause. */
@@ -131,7 +183,21 @@ export const DEFAULT_MAPPINGS: MidiMapping[] = [
 export function dispatchMidi(
   action: MidiAction,
   value: number,
-  getState: () => { midiMappings: MidiMapping[]; midiDeviceId: string | null; playheadUs: number; viewStartUs: number; pxPerSec: number; togglePlay(): void; splitAtPlayhead(): Promise<void>; deleteSelection(ripple: boolean): Promise<void>; undo(): Promise<void>; redo(): Promise<void>; seek(us: number): void; shuttle(direction: -1 | 0 | 1): void; setTool(tool: string): void },
+  getState: () => {
+    midiMappings: MidiMapping[];
+    midiDeviceId: string | null;
+    playheadUs: number;
+    viewStartUs: number;
+    pxPerSec: number;
+    togglePlay(): void;
+    splitAtPlayhead(): Promise<void>;
+    deleteSelection(ripple: boolean): Promise<void>;
+    undo(): Promise<void>;
+    redo(): Promise<void>;
+    seek(us: number): void;
+    shuttle(direction: -1 | 0 | 1): void;
+    setTool(tool: string): void;
+  },
 ): void {
   const s = getState();
   switch (action.kind) {
@@ -155,29 +221,120 @@ export function dispatchMidi(
   }
 }
 
-/** Initialize MIDI controller listener. Returns cleanup function. */
+/** Send Note On for LED feedback to a MIDI output. */
+export async function sendNoteOn(output: MIDIOutput, note: number, velocity: number, channel = 0): Promise<void> {
+  try {
+    output.send([0x90 | (channel & 0x0f), note & 0x7f, velocity & 0x7f]);
+  } catch {}
+}
+
+/** Send Control Change for LED/backlight feedback to a MIDI output. */
+export async function sendCC(output: MIDIOutput, cc: number, value: number, channel = 0): Promise<void> {
+  try {
+    output.send([0xb0 | (channel & 0x0f), cc & 0x7f, value & 0x7f]);
+  } catch {}
+}
+
+/** Send backlight/brightness CC to all enabled output devices. */
+export async function sendBacklight(
+  access: MIDIAccess,
+  devices: MidiDevice[],
+  cc: number,
+  value: number,
+  channel = 0,
+): Promise<void> {
+  for (const d of devices) {
+    if (!d.enabled) continue;
+    const output = access.outputs.get(d.id);
+    if (output) {
+      await sendCC(output, cc, value, channel);
+    }
+  }
+}
+
+/** Send LED feedback (Note On) when a MIDI action is triggered. */
+export async function sendLedFeedback(
+  access: MIDIAccess,
+  devices: MidiDevice[],
+  mapping: MidiMapping,
+  value: number,
+): Promise<void> {
+  // For note mappings, send note-on with velocity based on action
+  if (mapping.type === "note") {
+    for (const d of devices) {
+      if (!d.enabled) continue;
+      const output = access.outputs.get(d.id);
+      if (output) {
+        await sendNoteOn(output, mapping.number, value > 0 ? 127 : 0, mapping.channel);
+      }
+    }
+  }
+  // For CC mappings, could send CC feedback with same value
+  if (mapping.type === "cc") {
+    for (const d of devices) {
+      if (!d.enabled) continue;
+      const output = access.outputs.get(d.id);
+      if (output) {
+        await sendCC(output, mapping.number, value, mapping.channel);
+      }
+    }
+  }
+}
+
+/** Initialize MIDI controller listener for multiple devices. Returns cleanup function. */
 export function initMidi(
-  getState: () => { midiDeviceId: string | null; midiMappings: MidiMapping[] },
+  getState: () => {
+    midiDeviceIds: string[];
+    midiMappings: MidiMapping[];
+    midiDevices: MidiDevice[];
+    playheadUs: number;
+    viewStartUs: number;
+    pxPerSec: number;
+    togglePlay(): void;
+    splitAtPlayhead(): Promise<void>;
+    deleteSelection(ripple: boolean): Promise<void>;
+    undo(): Promise<void>;
+    redo(): Promise<void>;
+    seek(us: number): void;
+    shuttle(direction: -1 | 0 | 1): void;
+    setTool(tool: string): void;
+  },
 ): () => void {
   let cleanup: (() => void) | undefined;
+
   void requestMidiAccess().then((access) => {
     if (!access) return;
-    const { midiDeviceId } = getState();
-    if (!midiDeviceId) return;
-    const input = access.inputs.get(midiDeviceId);
-    if (!input) return;
-    input.onmidimessage = (e: MIDIMessageEvent) => {
-      if (!e.data) return;
-      const msg = parseMidiMessage(e.data);
-      if (!msg) return;
-      for (const m of getState().midiMappings) {
-        if (matchMapping(msg, m)) {
-          dispatchMidi(m.action, msg.data2, getState as () => any);
-          break;
+    const { midiDeviceIds, midiMappings, midiDevices } = getState();
+    if (!midiDeviceIds.length || !midiDevices.length) return;
+
+    const cleanupFns: (() => void)[] = [];
+
+    for (const deviceId of midiDeviceIds) {
+      const deviceConfig = midiDevices.find(d => d.id === deviceId && d.enabled);
+      if (!deviceConfig) continue;
+
+      const input = access.inputs.get(deviceId);
+      if (!input) continue;
+
+      input.onmidimessage = (e: MIDIMessageEvent) => {
+        if (!e.data) return;
+        const msg = parseMidiMessage(e.data);
+        if (!msg) return;
+
+        for (const m of midiMappings) {
+          if (matchMapping(msg, m)) {
+            dispatchMidi(m.action, msg.data2, getState as () => any);
+            // Send LED feedback to all enabled output devices
+            void sendLedFeedback(access, midiDevices, m, msg.data2);
+            break;
+          }
         }
-      }
-    };
-    cleanup = () => { input.onmidimessage = null; };
+      };
+      cleanupFns.push(() => { input.onmidimessage = null; });
+    }
+
+    cleanup = () => { cleanupFns.forEach(fn => fn()); };
   });
+
   return () => { cleanup?.(); };
 }

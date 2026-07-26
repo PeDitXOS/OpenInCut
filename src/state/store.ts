@@ -1,8 +1,8 @@
 import { create } from "zustand";
 
 import type { EngineClient, ExportUiSettings } from "../engine/client";
-import type { MidiMapping } from "../lib/midi";
-import { loadMappings as loadMidiMappings } from "../lib/midi";
+import type { MidiMapping, MidiDevice, MidiPreset } from "../lib/midi";
+import { loadMappings as loadMidiMappings, loadDevices as loadMidiDevices, loadPresets as loadMidiPresets } from "../lib/midi";
 import { MockEngine, demoProject } from "../engine/mock";
 import { TauriEngine, isTauri } from "../engine/tauri";
 import type {
@@ -82,7 +82,13 @@ export interface UiState {
   mcpToken: string | null;
   /** MIDI controller mappings (persisted to localStorage). */
   midiMappings: MidiMapping[];
+  /** Array of selected MIDI device IDs (multi-device support). */
+  midiDeviceIds: string[];
   midiDeviceId: string | null;
+  /** MIDI device configurations (enabled/disabled, names). */
+  midiDevices: MidiDevice[];
+  /** MIDI presets (saved mappings + device configs). */
+  midiPresets: MidiPreset[];
   /** RMS 0..1 per channel from the last buffer (tauri engine only). */
   meterL: number;
   meterR: number;
@@ -477,7 +483,10 @@ export const useStore = create<UiState>((set, get) => {
     mcpPort: null,
     mcpToken: null,
     midiMappings: loadMidiMappings(),
+    midiDeviceIds: [],
     midiDeviceId: null,
+    midiDevices: loadMidiDevices(),
+    midiPresets: loadMidiPresets(),
     meterL: 0,
     meterR: 0,
     visualsBump: 0,
