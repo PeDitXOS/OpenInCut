@@ -3,6 +3,8 @@ import { useStore } from "../state/store";
 import { engine } from "../state/store";
 import { showToast } from "./Toast";
 import { detectCompositionRequest, createTitleComposition, createLowerThird, renderComposition } from "../lib/hyperframes";
+import { renderToTimeline } from "../lib/hyperframes";
+import { t } from "../lib/i18n";
 import { getActiveEndpoint, getSystemPrompt } from "./SettingsPanel";
 import { activeSequence } from "../engine/types";
 
@@ -35,6 +37,7 @@ export default function McpChat() {
   const mcpPort = useStore((s) => s.mcpPort);
   const selection = useStore((s) => s.selection);
   const project = useStore((s) => s.project);
+  const playheadUs = useStore((s) => s.playheadUs);
   const [messages, setMessages] = useState<McpMessage[]>(() => {
     try {
       const raw = localStorage.getItem("opencut_chat_history");
@@ -174,14 +177,17 @@ export default function McpChat() {
         if (composition.type === "title") {
           const frame = createTitleComposition(composition.args.text);
           const html = renderComposition(frame);
+          void renderToTimeline(frame, engine, playheadUs);
           setMessages((m) => [...m, { role: "assistant", text: `Composition created: ${frame.name}\n\n${html.slice(0, 200)}...` }]);
           showToast(`Composition "${frame.name}" created`, "success");
         } else if (composition.type === "lower_third") {
           const frame = createLowerThird(composition.args.title, composition.args.subtitle);
+          void renderToTimeline(frame, engine, playheadUs);
           setMessages((m) => [...m, { role: "assistant", text: `Lower third created: ${frame.name}` }]);
           showToast(`Lower third "${frame.name}" created`, "success");
         } else {
           const frame = createTitleComposition(composition.args.text ?? composition.args.title ?? "Title");
+          void renderToTimeline(frame, engine, playheadUs);
           setMessages((m) => [...m, { role: "assistant", text: `Composition created: ${frame.name}` }]);
           showToast(`Composition created`, "success");
         }
@@ -197,7 +203,7 @@ export default function McpChat() {
       const ep = getActiveEndpoint();
       if (ep.key) {
         // AI mode: send to LLM, parse tool_call, execute
-        setMessages((m) => [...m, { role: "assistant", text: "Thinking…" }]);
+        setMessages((m) => [...m, { role: "assistant", text: t("Thinking...") }]);
         const aiResponse = await callAI(text, messages, frameForThisMsg);
         const parsed = parseAIResponse(aiResponse);
 
@@ -237,7 +243,7 @@ export default function McpChat() {
     } finally {
       setLoading(false);
     }
-  }, [input, loading, messages, callAI, parseAIResponse, pendingFrame]);
+  }, [input, loading, messages, callAI, parseAIResponse, pendingFrame, playheadUs]);
 
   if (!mcpPort) {
     return (
@@ -265,7 +271,7 @@ export default function McpChat() {
               className="text-[10px] text-ink-faint hover:text-red-400"
               onClick={() => { setMessages([]); localStorage.removeItem("opencut_chat_history"); }}
             >
-              Clear History
+              {t("Clear History")}
             </button>
           )}
         </div>
@@ -325,7 +331,7 @@ export default function McpChat() {
             onClick={() => void handleSend()}
             disabled={loading || !input.trim()}
           >
-            {loading ? <span className="inline-flex gap-0.5"><span className="animate-[dot_1s_infinite_0s]">.</span><span className="animate-[dot_1s_infinite_0.2s]">.</span><span className="animate-[dot_1s_infinite_0.4s]">.</span></span> : "Send"}
+            {loading ? <span className="inline-flex gap-0.5"><span className="animate-[dot_1s_infinite_0s]">.</span><span className="animate-[dot_1s_infinite_0.2s]">.</span><span className="animate-[dot_1s_infinite_0.4s]">.</span></span> : t("Send")}
           </button>
         </div>
       </div>

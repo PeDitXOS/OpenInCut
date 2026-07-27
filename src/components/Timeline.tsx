@@ -6,6 +6,7 @@ import { hash32, mulberry32, usToDuration } from "../lib/time";
 import { clipKeyframeTimes } from "../engine/types";
 import { assetVisuals, requestVisuals, PEAKS_PER_SEC } from "../state/visuals";
 import { useStore } from "../state/store";
+import { t } from "../lib/i18n";
 
 const RULER_H = 26;
 const TRACK_GAP = 2;
@@ -704,6 +705,12 @@ export function Timeline() {
   const exportRanges = useStore((s) => s.exportRanges);
   const addExportRange = useStore((s) => s.addExportRange);
   const visualsBump = useStore((s) => s.visualsBump);
+  const setClipAudio = useStore((s) => s.setClipAudio);
+  const setClipSpeed = useStore((s) => s.setClipSpeed);
+
+  // context menu
+  interface ContextMenu { x: number; y: number; clipId: string; sub: "root" | "audio" | "speed" }
+  const [ctxMenu, setCtxMenu] = useState<ContextMenu | null>(null);
 
   // follow the playhead during playback
   useEffect(() => {
@@ -753,6 +760,15 @@ export function Timeline() {
   useEffect(() => {
     requestVisuals(project);
   }, [project, version]);
+
+  // close context menu on outside click
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const close = () => setCtxMenu(null);
+    window.addEventListener("mousedown", close);
+    window.addEventListener("contextmenu", close);
+    return () => { window.removeEventListener("mousedown", close); window.removeEventListener("contextmenu", close); };
+  }, [ctxMenu]);
 
   const xToUs = useCallback(
     (x: number) => viewStartUs + (x / pxPerSec) * 1e6,
@@ -987,7 +1003,7 @@ export function Timeline() {
           onClick={() => void splitAtPlayhead()}
           data-tooltip="Split at the playhead (S)"
         >
-          ✂ Split
+          ✂ {t("Split")}
         </button>
         <button
           className="tooltip focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
@@ -1001,21 +1017,21 @@ export function Timeline() {
           onClick={() => void deleteSelection(true)}
           data-tooltip="Delete and close gap (⇧Del)"
         >
-          Delete and close
+          {t("Delete and close")}
         </button>
         <button
           className="tooltip focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
           onClick={() => void addTextClip()}
           data-tooltip="Add a title at the playhead"
         >
-          + Title
+          + {t("Title")}
         </button>
         <button
           className="tooltip focus-ring rounded-md px-2 py-1 text-[11.5px] text-ink-dim hover:bg-bg3 hover:text-ink"
           onClick={() => void generateVertical()}
           data-tooltip="Generate a vertical copy (1080x1920) with a blurred background (Shorts/Reels)"
         >
-          📱 Vertical
+          📱 {t("Vertical")}
         </button>
         <div className="mx-1 h-5 w-px bg-line-soft" />
         {[
@@ -1153,6 +1169,17 @@ export function Timeline() {
             className="block cursor-default"
             onMouseDown={onMouseDown}
             onWheel={onWheel}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              const rect = canvasRef.current!.getBoundingClientRect();
+              const hit = hitTest(e.clientX - rect.left, e.clientY - rect.top);
+              if (hit.clip) {
+                select([hit.clip.id]);
+                setCtxMenu({ x: e.clientX - rect.left, y: e.clientY - rect.top, clipId: hit.clip.id, sub: "root" });
+              } else {
+                setCtxMenu(null);
+              }
+            }}
             onMouseMove={(e) => {
               if (dragRef.current || scrubRef.current) return;
               const rect = canvasRef.current!.getBoundingClientRect();
@@ -1171,6 +1198,57 @@ export function Timeline() {
           />
         </div>
       </div>
+
+      {/* right-click context menu */}
+      {ctxMenu && (() => {
+        const clip = activeSequence(project).tracks.flatMap(t => t.clips).find(c => c.id === ctxMenu.clipId);
+        if (!clip) return null;
+        const menuCls = "absolute z-50 min-w-[180px] rounded-md border border-line bg-bg1 shadow-lg text-[12px] text-ink-dim py-1";
+        if (ctxMenu.sub === "audio") {
+          return (
+            <div className={menuCls} style={{ left: ctxMenu.x, top: ctxMenu.y }} onClick={(e) => e.stopPropagation()}>
+              <button className="w-full px-3 py-1 text-left hover:bg-bg3 hover:text-ink" onClick={() => { setCtxMenu({ ...ctxMenu, sub: "root" }); }}>← Back</button>
+              <div className="mx-2 my-1 border-t border-line-soft" />
+              <label className="flex items-center gap-2 px-3 py-1 hover:bg-bg3 hover:text-ink">
+                <span className="w-16">Volume</span>
+                <input type="range" min={-60} max={12} step={0.5} defaultValue={typeof clip.audio.gain_db === "number" ? clip.audio.gain_db : 0}
+                  onChange={(e) => void setClipAudio(clip.id, { ...clip.audio, gain_db: Number(e.target.value) })}
+                  className="h-1 w-24 accent-(--color-accent)" />
+              </label>
+              <button className="w-full px-3 py-1 text-left hover:bg-bg3 hover:text-ink"
+                onClick={() => void setClipAudio(clip.id, { ...clip.audio, muted: !clip.audio.muted })}>
+                {clip.audio.muted ? "🔊 Unmute" : "🔇 Mute"}
+              </button>
+            </div>
+          );
+        }
+        if (ctxMenu.sub === "speed") {
+          const speeds = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
+          return (
+            <div className={menuCls} style={{ left: ctxMenu.x, top: ctxMenu.y }} onClick={(e) => e.stopPropagation()}>
+              <button className="w-full px-3 py-1 text-left hover:bg-bg3 hover:text-ink" onClick={() => setCtxMenu({ ...ctxMenu, sub: "root" })}>← Back</button>
+              <div className="mx-2 my-1 border-t border-line-soft" />
+              {speeds.map(s => (
+                <button key={s} className="w-full px-3 py-1 text-left hover:bg-bg3 hover:text-ink"
+                  onClick={() => void setClipSpeed(clip.id, s)}>
+                  {s === 1 ? "Normal" : `${s}×`}
+                </button>
+              ))}
+            </div>
+          );
+        }
+        // root menu
+        return (
+          <div className={menuCls} style={{ left: ctxMenu.x, top: ctxMenu.y }} onClick={(e) => e.stopPropagation()}>
+            <button className="w-full px-3 py-1 text-left hover:bg-bg3 hover:text-ink" onClick={() => setCtxMenu({ ...ctxMenu, sub: "audio" })}>
+              🔊 Audio ▸
+            </button>
+            <button className="w-full px-3 py-1 text-left hover:bg-bg3 hover:text-ink" onClick={() => setCtxMenu({ ...ctxMenu, sub: "speed" })}>
+              ⏱ Speed ▸
+            </button>
+          </div>
+        );
+      })()}
     </div>
   );
 }

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 
 import { useStore } from "../state/store";
+import { t } from "../lib/i18n";
 
-/** Copy text to the clipboard, falling back to a hidden textarea when the
+/** Copy text to the clipboard
  *  async Clipboard API is unavailable (older webviews / no secure context). */
 async function copyText(text: string): Promise<boolean> {
   try {
@@ -204,21 +205,21 @@ export function Header({ onSettings }: { onSettings?: () => void }) {
         onClick={() => void newProject()}
         data-tooltip="New project (discards the current one if unsaved)"
       >
-        New
+        {t("New")}
       </button>
       <button
         className="tooltip focus-ring rounded-md px-2.5 py-1.5 text-[12px] text-ink-dim hover:bg-bg3 hover:text-ink"
         onClick={() => void openProject()}
         data-tooltip="Open project (⌘O)"
       >
-        Open…
+        {t("Open")}…
       </button>
       <button
         className="tooltip focus-ring rounded-md px-2.5 py-1.5 text-[12px] text-ink-dim hover:bg-bg3 hover:text-ink"
         onClick={() => void saveProject()}
         data-tooltip="Save project (⌘S)"
       >
-        Save
+        {t("Save")}
       </button>
 
       <div className="mx-1 h-5 w-px bg-line" />
@@ -229,7 +230,7 @@ export function Header({ onSettings }: { onSettings?: () => void }) {
         disabled={!canUndo}
         data-tooltip="Undo (⌘Z)"
       >
-        ↶ Undo
+        ↶ {t("Undo")}
       </button>
       <button
         className="tooltip focus-ring rounded-md px-2.5 py-1.5 text-[12px] text-ink-dim enabled:hover:bg-bg3 enabled:hover:text-ink disabled:opacity-40"
@@ -237,7 +238,7 @@ export function Header({ onSettings }: { onSettings?: () => void }) {
         disabled={!canRedo}
         data-tooltip="Redo (⇧⌘Z)"
       >
-        ↷ Redo
+        ↷ {t("Redo")}
       </button>
 
       <div className="mx-1 h-5 w-px bg-line" />
@@ -248,7 +249,7 @@ export function Header({ onSettings }: { onSettings?: () => void }) {
         onClick={() => onSettings?.()}
         data-tooltip="Open settings"
       >
-        ⚙ Settings
+        ⚙ {t("Settings")}
       </button>
 
       {exporting && (
@@ -276,6 +277,7 @@ export function Header({ onSettings }: { onSettings?: () => void }) {
           {exporting ? `Exporting ${Math.round((exportProgress ?? 0) * 100)}%` : "Export…"}
         </span>
       </button>
+      {/* ponytail: only most-visible strings translated, add when full i18n pass needed */}
     </header>
   );
 }

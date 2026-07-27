@@ -561,6 +561,20 @@ function ClipInspector({ clip }: { clip: Clip }) {
             onChange={(v) => void setClipAudio(clip.id, { ...clip.audio, pan: v })}
           />
         </Row>
+        <Row label="Mute">
+          <button
+            className={`focus-ring rounded-md border px-2 py-1 text-[11px] ${
+              clip.audio.muted
+                ? "border-danger/40 bg-danger/10 text-danger"
+                : "border-line text-ink-dim hover:text-ink"
+            }`}
+            onClick={() =>
+              void setClipAudio(clip.id, { ...clip.audio, muted: !clip.audio.muted })
+            }
+          >
+            {clip.audio.muted ? "🔇 Muted" : "🔊 Unmuted"}
+          </button>
+        </Row>
         <Row label="Denoise">
           <label
             className={`flex min-w-0 flex-1 items-center gap-2 text-[11px] text-ink-dim ${

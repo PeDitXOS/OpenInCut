@@ -224,3 +224,92 @@ export function detectCompositionRequest(text: string): { type: string; args: Re
   
   return null;
 }
+
+/** Render a composition onto the timeline as a text clip. */
+export async function renderToTimeline(
+  frame: HyperFrame,
+  engine_: { addTextClip: (content: string, atUs: number) => Promise<unknown> },
+  atUs: number = 0,
+): Promise<void> {
+  // ponytail: simplest path — add as a rich title clip.
+  // A real impl would rasterize the HTML to a video asset first.
+  await engine_.addTextClip(frame.name, atUs);
+}
+
+/** Create a transition composition between two scenes. */
+export function createTransition(
+  type: "crossfade" | "wipe",
+  options: { duration?: number; width?: number; height?: number } = {},
+): HyperFrame {
+  const { duration = 1000, width = 1920, height = 1080 } = options;
+  const elements: HyperFrameElement[] = [];
+
+  if (type === "crossfade") {
+    elements.push({
+      type: "shape",
+      content: "rect",
+      x: 0, y: 0, width, height,
+      style: { backgroundColor: "rgba(0, 0, 0, 1)" },
+      animation: { property: "opacity", from: "0", to: "1", duration, delay: 0, easing: "linear" },
+    });
+  } else {
+    elements.push({
+      type: "shape",
+      content: "rect",
+      x: -width, y: 0, width, height,
+      style: { backgroundColor: "#000000" },
+      animation: { property: "x", from: "-1920", to: "0", duration, delay: 0, easing: "ease-in-out" },
+    });
+  }
+
+  return { id: `frame-${Date.now()}`, name: `Transition: ${type}`, duration, width, height, elements };
+}
+
+/** Create a scrolling credit sequence. */
+export function createCreditSequence(
+  credits: string[],
+  options: {
+    duration?: number;
+    width?: number;
+    height?: number;
+    scrollDuration?: number;
+  } = {},
+): HyperFrame {
+  const { duration = 10000, width = 1920, height = 1080, scrollDuration } = options;
+  const dur = scrollDuration ?? duration;
+  const text = credits.join("\n\n");
+  const totalH = credits.length * 60 + height;
+
+  return {
+    id: `frame-${Date.now()}`,
+    name: `Credits`,
+    duration: dur,
+    width,
+    height,
+    elements: [
+      {
+        type: "text",
+        content: text,
+        x: width / 2,
+        y: totalH,
+        width: width * 0.6,
+        height: totalH,
+        style: {
+          fontSize: "32px",
+          color: "#ffffff",
+          textAlign: "center",
+          fontFamily: "Arial, sans-serif",
+          lineHeight: "1.6",
+        },
+        animation: {
+          property: "y",
+          from: String(height),
+          to: String(-totalH),
+          duration: dur,
+          delay: 0,
+          easing: "linear",
+        },
+      },
+    ],
+  };
+}

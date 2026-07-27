@@ -56,6 +56,7 @@ const translations: Record<Lang, Record<string, string>> = {
     "Connected": "متصل",
     "Disconnected": "قطع",
     "Testing...": "در حال تست...",
+    "Thinking...": "در حال فکر کردن...",
     "Saved!": "ذخیره شد!",
   },
   ar: {
