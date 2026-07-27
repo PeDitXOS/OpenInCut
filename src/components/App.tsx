@@ -16,6 +16,7 @@ import { ExportDialog } from "./ExportDialog";
 import { AvatarDialog } from "./AvatarDialog";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { ToastContainer } from "./Toast";
+import { SplashScreen } from "./SplashScreen";
 
 function useKeyboard() {
   useEffect(() => {
@@ -241,6 +242,7 @@ export function App() {
 
   return (
     <div className={`flex h-full flex-col bg-bg0 ${isRtl ? "rtl" : ""}`}>
+      <SplashScreen />
       <Header onSettings={() => setShowSettings(true)} />
       <ToastContainer />
       <main className="flex min-h-0 flex-1">

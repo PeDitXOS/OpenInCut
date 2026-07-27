@@ -378,6 +378,12 @@ pub fn kokoro_voices() -> Vec<TtsVoice> {
         v("bf_isabella", "Isabella", "en-GB"),
         v("bm_george", "George", "en-GB"),
         v("bm_lewis", "Lewis", "en-GB"),
+        v("fj_amine", "Amine", "fa"),
+        v("fj_darius", "Darius", "fa"),
+        v("fj_parisa", "Parisa", "fa"),
+        v("ej_ahmed", "Ahmed", "ar"),
+        v("ej_fatima", "Fatima", "ar"),
+        v("ej_khalid", "Khalid", "ar"),
     ]
 }
 
@@ -655,6 +661,8 @@ Eddy (Spanish (Mexico)) es_MX # ¡Hola! Me llamo Eddy.
                 "es" => assert_eq!(lang0, 'e', "{}", v.id),
                 "en-US" => assert_eq!(lang0, 'a', "{}", v.id),
                 "en-GB" => assert_eq!(lang0, 'b', "{}", v.id),
+                "fa" => assert_eq!(lang0, 'f', "{}", v.id),
+                "ar" => assert_eq!(lang0, 'e', "{}", v.id),
                 other => panic!("unexpected lang {other}"),
             }
         }

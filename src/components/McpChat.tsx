@@ -199,6 +199,40 @@ export default function McpChat() {
       return;
     }
 
+    // Voice-over / dubbing: detect keyword triggers
+    const dubMatch = text.match(/\b(voice\s*over|dub(?:bing)?|نریشن|دوبلاژ)\b/i);
+    if (dubMatch) {
+      // Extract the dubbing text (everything after the trigger word)
+      const dubText = text.replace(dubMatch[0], "").trim();
+      if (!dubText) {
+        setMessages((m) => [...m, { role: "assistant", text: "Provide text to generate voice-over. Example: voice over سلام دنیا" }]);
+        setLoading(false);
+        return;
+      }
+      // Detect language from script
+      const langMatch = dubText.match(/[\u0600-\u06FF]/) ? "fa" : dubText.match(/[\u0590-\u05FF]/) ? "he" : "en-US";
+      const voiceMap: Record<string, string> = { fa: "fj_parisa", ar: "ej_fatima", "en-US": "af_heart", he: "af_heart" };
+      const engineId = "kokoro";
+      const voice = voiceMap[langMatch] ?? "af_heart";
+      try {
+        setMessages((m) => [...m, { role: "assistant", text: `Generating voice-over (${langMatch})...` }]);
+        const result = await engine.mcpCall("generate_speech", {
+          engine: engineId,
+          voice,
+          text: dubText,
+        });
+        const formatted = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+        setMessages((m) => [...m, { role: "tool", text: formatted }]);
+        showToast("Voice-over generated", "success");
+      } catch (err) {
+        setMessages((m) => [...m, { role: "error", text: String(err) }]);
+        showToast(`Voice-over error: ${err instanceof Error ? err.message : String(err)}`, "error");
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
     try {
       const ep = getActiveEndpoint();
       if (ep.key) {
