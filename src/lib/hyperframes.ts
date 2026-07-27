@@ -231,9 +231,16 @@ export async function renderToTimeline(
   engine_: { addTextClip: (content: string, atUs: number) => Promise<unknown> },
   atUs: number = 0,
 ): Promise<void> {
-  // ponytail: simplest path — add as a rich title clip.
-  // A real impl would rasterize the HTML to a video asset first.
-  await engine_.addTextClip(frame.name, atUs);
+  // Extract text content from composition elements
+  const textElements = frame.elements.filter((el) => el.type === "text");
+  let textContent = frame.name;
+  if (textElements.length > 0) {
+    // Use the first text element's content, or combine all text elements
+    textContent = textElements.map((el) => el.content).join("\n");
+  }
+  
+  // Add as a text clip on the timeline
+  await engine_.addTextClip(textContent, atUs);
 }
 
 /** Create a transition composition between two scenes. */
