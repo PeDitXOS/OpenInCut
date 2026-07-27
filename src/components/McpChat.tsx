@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useStore } from "../state/store";
 import { engine } from "../state/store";
 import { showToast } from "./Toast";
+import { detectCompositionRequest, createTitleComposition, createLowerThird, renderComposition } from "../lib/hyperframes";
 import { getActiveEndpoint, getSystemPrompt } from "./SettingsPanel";
 import { activeSequence } from "../engine/types";
 
@@ -165,6 +166,32 @@ export default function McpChat() {
     setPendingFrame(null);
     setMessages((m) => [...m, { role: "user", text: frameForThisMsg ? `${text} [📸 frame attached]` : text }]);
     setLoading(true);
+
+    // HyperFrames: detect composition requests
+    const composition = detectCompositionRequest(text);
+    if (composition) {
+      try {
+        if (composition.type === "title") {
+          const frame = createTitleComposition(composition.args.text);
+          const html = renderComposition(frame);
+          setMessages((m) => [...m, { role: "assistant", text: `Composition created: ${frame.name}\n\n${html.slice(0, 200)}...` }]);
+          showToast(`Composition "${frame.name}" created`, "success");
+        } else if (composition.type === "lower_third") {
+          const frame = createLowerThird(composition.args.title, composition.args.subtitle);
+          setMessages((m) => [...m, { role: "assistant", text: `Lower third created: ${frame.name}` }]);
+          showToast(`Lower third "${frame.name}" created`, "success");
+        } else {
+          const frame = createTitleComposition(composition.args.text ?? composition.args.title ?? "Title");
+          setMessages((m) => [...m, { role: "assistant", text: `Composition created: ${frame.name}` }]);
+          showToast(`Composition created`, "success");
+        }
+      } catch (err) {
+        setMessages((m) => [...m, { role: "error", text: String(err) }]);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
 
     try {
       const ep = getActiveEndpoint();
