@@ -16,6 +16,7 @@ import { VoiceoverSection } from "./VoiceoverSection";
 import { ColorBoard } from "./ColorBoard";
 import { AudioRoles } from "./AudioRoles";
 import { SpeedRamp } from "./SpeedRamp";
+import { showToast } from "./Toast";
 
 /** One denoise-availability fetch per app run (it probes for python). */
 let denoiseStatusPromise: Promise<[boolean, string]> | null = null;
@@ -646,6 +647,17 @@ function ClipInspector({ clip }: { clip: Clip }) {
               Unlink
             </button>
           </div>
+        </Section>
+      )}
+      {showVideoTools && clip.group && (
+        <Section title="Detach Audio">
+          <button
+            className="focus-ring w-full rounded-md border border-line bg-bg2 px-2.5 py-2 text-[12px] text-ink hover:bg-bg3"
+            onClick={() => { void unlinkClip(clip.id); showToast("Audio detached from video", "success"); }}
+            title="Separate the audio from the video clip so each can be edited independently"
+          >
+            🎵 Detach Audio
+          </button>
         </Section>
       )}
 

@@ -99,7 +99,7 @@ docs/ARCHITECTURE.md
 
 ## Credits
 
-OpenInCut is based on UberEditor by **HectorPulido**. We are grateful for the original work on the MCP server architecture, timeline engine, and AI integration framework.
+OpenInCut is based on OpenInCut by **HectorPulido**. We are grateful for the original work on the MCP server architecture, timeline engine, and AI integration framework.
 
 **License**: Apache-2.0 (same as original). Copyright 2026 PeDitXOS and contributors.
 

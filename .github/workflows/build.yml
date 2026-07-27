@@ -30,8 +30,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: app-v${{ github.run_number }}
-          releaseName: 'UberEditor Windows Build ${{ github.run_number }}'
+          releaseName: 'OpenInCut Windows Build ${{ github.run_number }}'
           releaseBody: 'Automated Windows build'
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           args: '--bundles nsis,msi'

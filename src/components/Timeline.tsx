@@ -707,6 +707,7 @@ export function Timeline() {
   const visualsBump = useStore((s) => s.visualsBump);
   const setClipAudio = useStore((s) => s.setClipAudio);
   const setClipSpeed = useStore((s) => s.setClipSpeed);
+  const unlinkClip = useStore((s) => s.unlinkClip);
 
   // context menu
   interface ContextMenu { x: number; y: number; clipId: string; sub: "root" | "audio" | "speed" }
@@ -1219,6 +1220,12 @@ export function Timeline() {
                 onClick={() => void setClipAudio(clip.id, { ...clip.audio, muted: !clip.audio.muted })}>
                 {clip.audio.muted ? "🔊 Unmute" : "🔇 Mute"}
               </button>
+              {clip.group && (
+                <button className="w-full px-3 py-1 text-left hover:bg-bg3 hover:text-ink"
+                  onClick={() => { void unlinkClip(clip.id); setCtxMenu(null); }}>
+                  🎵 Detach from video
+                </button>
+              )}
             </div>
           );
         }

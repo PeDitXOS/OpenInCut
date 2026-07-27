@@ -9,6 +9,7 @@ export type MidiAction =
   | { kind: "delete" }
   | { kind: "undo" }
   | { kind: "redo" }
+  | { kind: "detachAudio" }
   | { kind: "tool"; tool: "select" | "blade" | "trim" | "position" | "hand" | "zoom" }
   | { kind: "seek" } // CC 0..127 → proportionally across visible range
   | { kind: "shuttle"; direction: -1 | 1 };
@@ -175,6 +176,7 @@ export const DEFAULT_MAPPINGS: MidiMapping[] = [
   { type: "note", channel: -1, number: 43, action: { kind: "delete" } },
   { type: "note", channel: -1, number: 44, action: { kind: "undo" } },
   { type: "note", channel: -1, number: 45, action: { kind: "redo" } },
+  { type: "note", channel: -1, number: 46, action: { kind: "detachAudio" } },
   { type: "cc", channel: -1, number: 7, action: { kind: "seek" } },
   { type: "cc", channel: -1, number: 1, action: { kind: "shuttle", direction: 1 } },
 ];
@@ -194,6 +196,8 @@ export function dispatchMidi(
     deleteSelection(ripple: boolean): Promise<void>;
     undo(): Promise<void>;
     redo(): Promise<void>;
+    selection: string[];
+    unlinkClip(clipId: string): Promise<void>;
     seek(us: number): void;
     shuttle(direction: -1 | 0 | 1): void;
     setTool(tool: string): void;
@@ -206,6 +210,7 @@ export function dispatchMidi(
     case "delete": void s.deleteSelection(false); break;
     case "undo": void s.undo(); break;
     case "redo": void s.redo(); break;
+    case "detachAudio": if (s.selection[0]) void s.unlinkClip(s.selection[0]); break;
     case "seek": {
       const viewLen = Math.max(1, s.pxPerSec * 10);
       const target = s.viewStartUs + (value / 127) * viewLen * 1_000_000 / s.pxPerSec;
@@ -295,6 +300,8 @@ export function initMidi(
     deleteSelection(ripple: boolean): Promise<void>;
     undo(): Promise<void>;
     redo(): Promise<void>;
+    selection: string[];
+    unlinkClip(clipId: string): Promise<void>;
     seek(us: number): void;
     shuttle(direction: -1 | 0 | 1): void;
     setTool(tool: string): void;
