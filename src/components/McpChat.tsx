@@ -177,19 +177,19 @@ export default function McpChat() {
         if (composition.type === "title") {
           const frame = createTitleComposition(composition.args.text);
           const html = renderComposition(frame);
-          void renderToTimeline(frame, engine, playheadUs);
           setMessages((m) => [...m, { role: "assistant", text: `Composition created: ${frame.name}\n\n${html.slice(0, 200)}...` }]);
           showToast(`Composition "${frame.name}" created`, "success");
+          try { await renderToTimeline(frame, engine, playheadUs); showToast("Added to timeline", "success"); } catch (e) { showToast(`Timeline error: ${e instanceof Error ? e.message : String(e)}`, "error"); }
         } else if (composition.type === "lower_third") {
           const frame = createLowerThird(composition.args.title, composition.args.subtitle);
-          void renderToTimeline(frame, engine, playheadUs);
           setMessages((m) => [...m, { role: "assistant", text: `Lower third created: ${frame.name}` }]);
           showToast(`Lower third "${frame.name}" created`, "success");
+          try { await renderToTimeline(frame, engine, playheadUs); showToast("Added to timeline", "success"); } catch (e) { showToast(`Timeline error: ${e instanceof Error ? e.message : String(e)}`, "error"); }
         } else {
           const frame = createTitleComposition(composition.args.text ?? composition.args.title ?? "Title");
-          void renderToTimeline(frame, engine, playheadUs);
           setMessages((m) => [...m, { role: "assistant", text: `Composition created: ${frame.name}` }]);
           showToast(`Composition created`, "success");
+          try { await renderToTimeline(frame, engine, playheadUs); showToast("Added to timeline", "success"); } catch (e) { showToast(`Timeline error: ${e instanceof Error ? e.message : String(e)}`, "error"); }
         }
       } catch (err) {
         setMessages((m) => [...m, { role: "error", text: String(err) }]);
