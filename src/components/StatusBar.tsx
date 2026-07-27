@@ -1,6 +1,6 @@
 import { activeSequence } from "../engine/types";
 import { useStore } from "../state/store";
-import { usToTimecode, usToDuration, usToFrame } from "../lib/time";
+import { usToDuration, usToFrame } from "../lib/time";
 
 export function StatusBar() {
   const project = useStore((s) => s.project);
@@ -29,7 +29,7 @@ export function StatusBar() {
       )}
       <div className="flex-1" />
       <span className="font-[var(--font-mono)]">
-        {usToTimecode(playheadUs, seq.fps)} · F{usToFrame(playheadUs, seq.fps)} / {totalDuration > 0 ? usToFrame(totalDuration, seq.fps) : 0}
+        {usToDuration(playheadUs)} · F{usToFrame(playheadUs, seq.fps)} / {totalDuration > 0 ? usToFrame(totalDuration, seq.fps) : 0}
       </span>
       <span className="font-[var(--font-mono)]">
         {seq.resolution[0]}×{seq.resolution[1]} · {fpsRounded} fps
