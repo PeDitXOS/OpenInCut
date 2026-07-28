@@ -216,6 +216,7 @@ export function videoLayers(project: Project, seq: Sequence, playheadUs: number)
 export type SourceOp =
   | { kind: "chroma"; color: string; similarity: number; blend: number; despill: number }
   | { kind: "eq"; brightness: number; contrast: number; saturation: number; gamma: number }
+  | { kind: "luminance"; threshold: number; softness: number; invert: number }
   | { kind: "verticalFill"; width: number; height: number; blur: number }
   | { kind: "blur"; sigma: number };
 

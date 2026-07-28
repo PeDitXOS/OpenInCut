@@ -17,6 +17,7 @@ import { AvatarDialog } from "./AvatarDialog";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { ToastContainer } from "./Toast";
 import { SplashScreen } from "./SplashScreen";
+import McpChat from "./McpChat";
 
 function useKeyboard() {
   useEffect(() => {
@@ -209,7 +210,7 @@ function useMidi() {
 
 export function App() {
   const init = useStore((s) => s.init);
-  const [leftTab, setLeftTab] = useState<"media" | "text">("media");
+  const [leftTab, setLeftTab] = useState<"media" | "text" | "chat">("media");
   const transcriptCount = useStore((s) => s.project.transcripts.length);
   const [isRtl, setIsRtl] = useState(() => localStorage.getItem("ui_rtl") === "true");
   useEffect(() => {
@@ -251,6 +252,7 @@ export function App() {
             {([
               ["media", "Media"],
               ["text", `Text${transcriptCount ? ` (${transcriptCount})` : ""}`],
+              ["chat", "Chat"],
             ] as const).map(([key, label]) => (
               <button
                 key={key}
@@ -264,7 +266,7 @@ export function App() {
             ))}
           </div>
           <div className="min-h-0 flex-1">
-            {leftTab === "media" ? <MediaPool /> : <TranscriptPanel />}
+            {leftTab === "media" ? <MediaPool /> : leftTab === "text" ? <TranscriptPanel /> : <McpChat />}
           </div>
         </aside>
         <section className="flex min-w-0 flex-1 flex-col bg-bg0">

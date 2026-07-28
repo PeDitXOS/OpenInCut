@@ -473,6 +473,32 @@ function drawTimeline(
 
   drawRuler(ctx, w, view, project, range, pieces);
 
+  // range + piece bands across the tracks area (the ruler only covers the top 26 px)
+  const tracksH = h - RULER_H;
+  pieces.forEach(([a, b]) => {
+    const x0 = usToX(a);
+    const x1 = usToX(b);
+    if (x1 < 0 || x0 > w) return;
+    ctx.fillStyle = "rgba(70, 167, 88, 0.10)";
+    ctx.fillRect(x0, RULER_H, Math.max(1, x1 - x0), tracksH);
+  });
+  {
+    const [rin, rout] = range;
+    if (rin != null || rout != null) {
+      const a = usToX(rin ?? view.viewStartUs);
+      const b = usToX(rout ?? view.viewStartUs + (w / view.pxPerSec) * 1e6);
+      ctx.fillStyle = "rgba(255, 178, 36, 0.08)";
+      ctx.fillRect(a, RULER_H, Math.max(1, b - a), tracksH);
+      // thin amber guide lines at in / out
+      ctx.strokeStyle = COLORS.accent;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      if (rin != null) { ctx.moveTo(a + 0.5, RULER_H); ctx.lineTo(a + 0.5, h); }
+      if (rout != null) { ctx.moveTo(b - 0.5, RULER_H); ctx.lineTo(b - 0.5, h); }
+      ctx.stroke();
+    }
+  }
+
   // clips
   tracks.forEach((t, i) => {
     const th = trackHeight(t);

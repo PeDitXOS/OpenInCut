@@ -1,0 +1,12 @@
+{
+  "id": "core.luminance_key",
+  "name": "Luminance Key",
+  "category": "keying",
+  "params": [
+    { "key": "threshold", "label": "Threshold", "type": "float", "default": 128, "min": 0, "max": 255 },
+    { "key": "softness", "label": "Softness", "type": "float", "default": 10, "min": 0, "max": 100 },
+    { "key": "invert", "label": "Invert (1=bright key)", "type": "float", "default": 0, "min": 0, "max": 1 }
+  ],
+  "ffmpeg": "format=yuva444p,geq='a=if(gt({invert},0.5),clip(({threshold}+{softness}-lum(X,Y))*255/max(2*{softness},1),0,255),clip((lum(X,Y)-{threshold}+{softness})*255/max(2*{softness},1),0,255))'",
+  "notes": "Keys out pixels by luminance. Default (invert=0): pixels below threshold become transparent (dark key). invert=1: pixels above threshold become transparent (bright key). Softness controls the feather width around the threshold."
+}

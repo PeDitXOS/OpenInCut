@@ -224,59 +224,197 @@ function AISettings() {
   );
 }
 
+type McpServer = { name: string; url: string; token: string };
+
+function loadMcpServers(): McpServer[] {
+  try { return JSON.parse(localStorage.getItem("opencut_mcp_servers") ?? "[]"); } catch { return []; }
+}
+
 function MCPSettings({ port, token }: { port: number | null; token: string | null }) {
+  const [servers, setServers] = useState<McpServer[]>(loadMcpServers);
+  const [activeIdx, setActiveIdx] = useState(() => {
+    try { return Math.max(0, parseInt(localStorage.getItem("opencut_mcp_active") ?? "0", 10)); } catch { return 0; }
+  });
+  const [editIdx, setEditIdx] = useState<number | null>(null);
+  const [draft, setDraft] = useState<McpServer>({ name: "", url: "", token: "" });
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [saved, setSaved] = useState(false);
 
-  const test = useCallback(async () => {
+  const saveServers = useCallback(() => {
+    localStorage.setItem("opencut_mcp_servers", JSON.stringify(servers));
+    localStorage.setItem("opencut_mcp_active", String(activeIdx));
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  }, [servers, activeIdx]);
+
+  const startEdit = (idx: number | null) => {
+    if (idx === null) {
+      setDraft({ name: "", url: "", token: "" });
+      setEditIdx(servers.length);
+    } else {
+      setEditIdx(idx);
+      setDraft({ ...servers[idx] });
+    }
+  };
+
+  const saveEdit = () => {
+    if (editIdx === null) return;
+    setServers((prev) => {
+      const next = [...prev];
+      if (editIdx < prev.length) { next[editIdx] = { ...draft }; }
+      else { next.push({ ...draft }); }
+      return next;
+    });
+    setEditIdx(null);
+  };
+
+  const removeServer = (idx: number) => {
+    setServers((prev) => prev.filter((_, i) => i !== idx));
+    if (activeIdx >= servers.length - 1) setActiveIdx(Math.max(0, servers.length - 2));
+    if (editIdx === idx) setEditIdx(null);
+    setConnected(false);
+  };
+
+  const testConnection = useCallback(async () => {
     setTesting(true);
     setTestResult(null);
     try {
       await engine.mcpListTools();
       setTestResult("Connected successfully!");
+      setConnected(true);
     } catch (err) {
       setTestResult(`Failed: ${err}`);
+      setConnected(false);
     } finally {
       setTesting(false);
     }
   }, []);
 
+  const disconnect = useCallback(() => {
+    setConnected(false);
+    setTestResult(null);
+  }, []);
+
+  // Auto-populate from embedded server when it becomes active
+  const activeUrl = port ? `http://127.0.0.1:${port}/mcp` : servers[activeIdx]?.url ?? "";
+  const activeToken = port ? token : servers[activeIdx]?.token ?? "";
+
+  const presets: McpServer[] = [
+    { name: "Local Hermes", url: "http://localhost:8080/mcp", token: "" },
+    { name: "9Router MCP", url: "http://localhost:3000/mcp", token: "" },
+  ];
+
   return (
     <div className="space-y-4">
       <h3 className="panel-label">MCP Server</h3>
-      
-      <div className="space-y-3">
-        <div className="flex items-center gap-2">
-          <span className={`status-dot ${port ? "online" : "offline"}`} />
-          <span className="text-[12px] text-ink">
-            {port ? `Active on port ${port}` : "Inactive"}
-          </span>
-        </div>
 
-        {port && (
-          <>
-            <div>
-              <label className="mb-1 block text-[11px] text-ink-faint">URL</label>
-              <div className="input font-mono text-[11px]">
-                http://127.0.0.1:{port}/mcp
-              </div>
+      {/* Embedded server status */}
+      <div className="flex items-center gap-2">
+        <span className={`status-dot ${port ? "online" : "offline"}`} />
+        <span className="text-[12px] text-ink">
+          {port ? `Embedded server active on port ${port}` : "Embedded server inactive"}
+        </span>
+      </div>
+
+      {port && (
+        <div className="rounded-md bg-bg2 p-2 space-y-1">
+          <div className="text-[10px] text-ink-faint">URL</div>
+          <div className="input font-mono text-[11px]">http://127.0.0.1:{port}/mcp</div>
+          <div className="text-[10px] text-ink-faint">Token</div>
+          <div className="input font-mono text-[11px] select-all break-all">{token}</div>
+        </div>
+      )}
+
+      {/* Server list */}
+      <h3 className="panel-label">Server Configurations</h3>
+
+      <div className="flex flex-wrap gap-1">
+        {presets.map((p, i) => (
+          <button key={i} className="btn-secondary text-[10px]"
+            onClick={() => setServers((prev) => [...prev, { ...p }])}>
+            + {p.name}
+          </button>
+        ))}
+      </div>
+
+      <div className="space-y-1">
+        {servers.map((s, i) => (
+          <div key={i} className="flex items-center gap-2 p-2 rounded-md bg-bg2">
+            <input type="radio" name="mcp-active" checked={activeIdx === i}
+              onChange={() => setActiveIdx(i)} className="w-3 h-3" />
+            <div className="flex-1 min-w-0">
+              <div className="text-[12px] text-ink truncate">{s.name || "Unnamed"}</div>
+              <div className="text-[10px] text-ink-faint truncate">{s.url}</div>
             </div>
-            <div>
-              <label className="mb-1 block text-[11px] text-ink-faint">Token</label>
-              <div className="input font-mono text-[11px] select-all break-all">
-                {token}
-              </div>
-            </div>
-            <button className="btn-secondary" onClick={() => void test()} disabled={testing}>
-              {testing ? "Testing..." : "Test Connection"}
-            </button>
-            {testResult && (
-              <div className={`text-[11px] ${testResult.startsWith("Connected") ? "text-green-400" : "text-red-400"}`}>
-                {testResult}
-              </div>
-            )}
-          </>
+            <button className="text-[10px] text-ink-faint hover:text-ink" onClick={() => startEdit(i)}>Edit</button>
+            <button className="text-[10px] text-red-400 hover:text-red-300" onClick={() => removeServer(i)}>×</button>
+          </div>
+        ))}
+      </div>
+
+      <button className="btn-secondary text-[11px]" onClick={() => startEdit(null)}>+ Add Server</button>
+
+      {/* Edit form */}
+      {editIdx !== null && (
+        <div className="space-y-2 rounded-md border border-line p-3">
+          <div>
+            <label className="mb-1 block text-[11px] text-ink-faint">Name</label>
+            <input className="input" value={draft.name}
+              onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
+              placeholder="My MCP Server" />
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] text-ink-faint">Server URL</label>
+            <input className="input" value={draft.url}
+              onChange={(e) => setDraft((d) => ({ ...d, url: e.target.value }))}
+              placeholder="http://localhost:8080/mcp" />
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] text-ink-faint">Token (optional)</label>
+            <input type="password" className="input" value={draft.token}
+              onChange={(e) => setDraft((d) => ({ ...d, token: e.target.value }))}
+              placeholder="Bearer token" />
+          </div>
+          <div className="flex gap-2">
+            <button className="btn-primary" onClick={saveEdit}>Save</button>
+            <button className="btn-secondary" onClick={() => setEditIdx(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Connect / Disconnect */}
+      <div className="flex gap-2">
+        <button className="btn-primary flex-1" onClick={() => void testConnection()} disabled={testing}>
+          {testing ? "Testing..." : connected ? "Reconnect" : "Connect"}
+        </button>
+        {connected && (
+          <button className="btn-secondary flex-1" onClick={disconnect}>Disconnect</button>
         )}
+      </div>
+
+      {testResult && (
+        <div className={`text-[11px] ${testResult.startsWith("Connected") ? "text-green-400" : "text-red-400"}`}>
+          {testResult}
+        </div>
+      )}
+
+      {/* Active connection info */}
+      {activeUrl && (
+        <div className="rounded-md border border-line p-2 space-y-1">
+          <div className="text-[10px] text-ink-faint uppercase tracking-wide">Active Connection</div>
+          <div className="font-mono text-[11px] text-ink">{activeUrl}</div>
+          {activeToken && (
+            <div className="font-mono text-[11px] text-ink-faint select-all break-all">{activeToken}</div>
+          )}
+        </div>
+      )}
+
+      <div className="flex gap-2">
+        <button className="btn-primary" onClick={saveServers}>
+          {saved ? "Saved!" : "Save Configuration"}
+        </button>
       </div>
     </div>
   );
