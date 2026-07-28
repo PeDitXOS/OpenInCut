@@ -265,6 +265,13 @@ export function layerEffects(clip: Clip, rel: number): LayerFx {
         blend: paramValue(fx.params["blend"] ?? 0.1, rel),
         despill: paramValue(fx.params["despill"] ?? 0.5, rel),
       });
+    } else if (fx.effect_id === "core.luminance_key") {
+      ops.push({
+        kind: "luminance",
+        threshold: paramValue(fx.params["threshold"] ?? 128, rel),
+        softness: paramValue(fx.params["softness"] ?? 10, rel),
+        invert: paramValue(fx.params["invert"] ?? 0, rel),
+      });
     }
   }
   return { ops, shadow };
@@ -308,7 +315,7 @@ function rgbToYcc(r: number, g: number, b: number): [number, number, number] {
 }
 
 /** The ops that run as a per-pixel pass over the image data. */
-type PerPixelOp = Extract<SourceOp, { kind: "eq" } | { kind: "chroma" }>;
+type PerPixelOp = Extract<SourceOp, { kind: "eq" } | { kind: "chroma" } | { kind: "luminance" }>;
 
 /** Exposed so the parity harness can compare our eq/chroma maths against
  *  ffmpeg's on identical pixels, with no video decoder in between. */
@@ -331,7 +338,7 @@ function applyOps(d: Uint8ClampedArray, ops: PerPixelOp[]) {
         d[i + 1] = c - 0.391762 * (cb2 - 128) - 0.812968 * (cr2 - 128);
         d[i + 2] = c + 2.017232 * (cb2 - 128);
       }
-    } else {
+    } else if (op.kind === "chroma") {
       const [kr, kg, kb] = hexRgb(op.color);
       const [, kcb, kcr] = rgbToYcc(kr, kg, kb);
       const sim = Math.max(0.001, op.similarity);
@@ -353,6 +360,22 @@ function applyOps(d: Uint8ClampedArray, ops: PerPixelOp[]) {
           // suppress the key's dominant channel on semi-transparent edges
           const limit = (r + b) / 2;
           if (g > limit) d[i + 1] = g - (g - limit) * despill;
+        }
+        d[i + 3] = Math.round(d[i + 3] * a);
+      }
+    } else if (op.kind === "luminance") {
+      const threshold = Math.max(0, Math.min(255, op.threshold));
+      const softness = Math.max(0, op.softness);
+      const invert = op.invert > 0.5;
+      for (let i = 0; i < d.length; i += 4) {
+        const [y] = rgbToYcc(d[i], d[i + 1], d[i + 2]);
+        let a: number;
+        if (invert) {
+          // bright key: pixels ABOVE threshold become transparent
+          a = softness > 0 ? Math.min(1, Math.max(0, (threshold + softness - y) / Math.max(2 * softness, 1))) : (y < threshold ? 1 : 0);
+        } else {
+          // dark key: pixels BELOW threshold become transparent
+          a = softness > 0 ? Math.min(1, Math.max(0, (y - threshold + softness) / Math.max(2 * softness, 1))) : (y > threshold ? 1 : 0);
         }
         d[i + 3] = Math.round(d[i + 3] * a);
       }
@@ -686,7 +709,7 @@ export function renderSource(
     }
   };
   ops.forEach((op, i) => {
-    if (op.kind === "eq" || op.kind === "chroma") {
+    if (op.kind === "eq" || op.kind === "chroma" || op.kind === "luminance") {
       batch.push(op);
     } else if (op.kind === "verticalFill") {
       flush(i);

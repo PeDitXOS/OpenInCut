@@ -330,6 +330,7 @@ export class MockEngine implements EngineClient {
       import("../../effects/core/color_correct/manifest.json"),
       import("../../effects/core/chroma_key/manifest.json"),
       import("../../effects/core/gaussian_blur/manifest.json"),
+      import("../../effects/core/luminance_key/manifest.json"),
     ]);
     return manifests.map((m) => m.default as unknown as EffectDef);
   }

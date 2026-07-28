@@ -63,6 +63,7 @@ pub fn core_registry() -> Vec<EffectDef> {
         include_str!("../../../effects/core/gaussian_blur/manifest.json"),
         include_str!("../../../effects/core/vertical_fill/manifest.json"),
         include_str!("../../../effects/core/drop_shadow/manifest.json"),
+        include_str!("../../../effects/core/luminance_key/manifest.json"),
     ];
     MANIFESTS
         .iter()
