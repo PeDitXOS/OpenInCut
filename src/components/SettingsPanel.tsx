@@ -94,7 +94,7 @@ function AISettings() {
   const [saved, setSaved] = useState(false);
 
   const presets: Endpoint[] = [
-    { name: "9Router", url: "https://9router.peditx.ir/v1", key: "", model: "hermes-3-llama-3.1-70b" },
+    { name: "9Router", url: "http://localhost:8080/v1", key: "", model: "hermes-3-llama-3.1-70b" },
     { name: "Ollama (Local)", url: "http://localhost:11434/v1", key: "", model: "llama3.1" },
     { name: "OpenAI", url: "https://api.openai.com/v1", key: "", model: "gpt-4o" },
     { name: "Anthropic", url: "https://api.anthropic.com/v1", key: "", model: "claude-3-5-sonnet" },

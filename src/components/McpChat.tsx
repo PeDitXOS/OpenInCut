@@ -5,28 +5,9 @@ import { showToast } from "./Toast";
 import { detectCompositionRequest, createTitleComposition, createLowerThird, renderComposition } from "../lib/hyperframes";
 import { renderToTimeline } from "../lib/hyperframes";
 import { t } from "../lib/i18n";
-import { getActiveEndpoint, getSystemPrompt } from "./SettingsPanel";
+import { getActiveEndpoint } from "./SettingsPanel";
 import { activeSequence } from "../engine/types";
-
-function buildSystemPrompt(toolList: string): string {
-  return `You are an AI assistant inside the OpenInCut video editor. You control the editor through MCP tools.
-
-Available tools: ${toolList}
-
-Rules:
-- When the user asks to do something, pick the right tool and return a JSON object with tool_call
-- Always respond with EXACTLY one of these formats:
-  1. {"tool_call": {"name": "tool_name", "arguments": {arg1: val1, ...}}}
-  2. A plain text answer if no tool is needed
-- For color correction: use set_clip_properties with brightness/contrast/saturation
-- For titles: use add_text_clip
-- For cutting: use split_clip or delete_clips
-- For removing silence: use remove_silences
-- For subtitles: transcribe_asset then add_subtitles_clip
-- Be concise. Prefer action over explanation.
-- When a frame image is attached, analyze it to answer questions about visual content.
-When the user asks about colors, brightness, or visual properties, you can see frames. Describe what you observe.`;
-}
+import { callAI, parseAIResponse } from "../lib/ai";
 
 interface McpMessage {
   role: "user" | "assistant" | "tool" | "error";
@@ -45,7 +26,6 @@ export default function McpChat() {
     } catch { return []; }
   });
   const [input, setInput] = useState("");
-  const [tools, setTools] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [pendingFrame, setPendingFrame] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -61,85 +41,6 @@ export default function McpChat() {
     if (messages.length > 50) setMessages(capped);
   }, [messages]);
 
-  const loadTools = useCallback(async () => {
-    try {
-      const result = (await engine.mcpListTools()) as { tools?: { name: string }[] };
-      const names = result?.tools?.map((t) => t.name) ?? [];
-      setTools(names);
-    } catch { /* ignore */ }
-  }, []);
-
-  useEffect(() => {
-    if (mcpPort) void loadTools();
-  }, [mcpPort, loadTools]);
-
-  /** Call the AI API with OpenAI-compatible format (supports vision) */
-  const callAI = useCallback(async (userMessage: string, history: McpMessage[], frameBase64?: string | null): Promise<string> => {
-    const ep = getActiveEndpoint();
-    const toolList = tools.join(", ");
-    const customPrompt = getSystemPrompt();
-    const defaultPrompt = buildSystemPrompt(toolList);
-    const fullSystem = customPrompt ? `${customPrompt}\n\n${defaultPrompt}` : defaultPrompt;
-
-    // Build user message content (text only, or text + image for vision)
-    const userContent: Array<{ type: string; text?: string; image_url?: { url: string } }> = [
-      { type: "text", text: userMessage },
-    ];
-    if (frameBase64) {
-      userContent.push({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${frameBase64}` } });
-    }
-
-    const chatMessages = [
-      { role: "system", content: fullSystem },
-      ...history.map((m) => ({
-        role: m.role === "user" ? "user" as const : "assistant" as const,
-        content: m.text,
-      })),
-      { role: "user" as const, content: userContent },
-    ];
-
-    const resp = await fetch(`${ep.url}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${ep.key}`,
-      },
-      body: JSON.stringify({
-        model: ep.model,
-        messages: chatMessages,
-        temperature: 0.3,
-        max_tokens: 2048,
-      }),
-    });
-
-    if (!resp.ok) throw new Error(`API error: ${resp.status}`);
-    const data = await resp.json();
-    return data.choices?.[0]?.message?.content ?? "";
-  }, [tools]);
-
-  /** Parse AI response for tool_call or plain text */
-  const parseAIResponse = useCallback((response: string): { toolCall?: { name: string; arguments: Record<string, unknown> }; text?: string } => {
-    const trimmed = response.trim();
-    const jsonMatch = trimmed.match(/\{[\s\S]*"tool_call"[\s\S]*\}/);
-    if (jsonMatch) {
-      try {
-        const parsed = JSON.parse(jsonMatch[0]);
-        if (parsed.tool_call?.name) {
-          return { toolCall: parsed.tool_call };
-        }
-      } catch { /* fall through */ }
-    }
-    const directMatch = trimmed.match(/\{[\s\S]*"name"[\s\S]*"arguments"[\s\S]*\}/);
-    if (directMatch) {
-      try {
-        const parsed = JSON.parse(directMatch[0]);
-        if (parsed.name) {
-          return { toolCall: { name: parsed.name, arguments: parsed.arguments ?? {} } };
-        }
-      } catch { /* fall through */ }
-    }
-    return { text: trimmed };
-  }, []);
 
   /** Attach the current frame from the selected clip for the next message */
   const attachFrame = useCallback(async () => {
@@ -235,10 +136,11 @@ export default function McpChat() {
 
     try {
       const ep = getActiveEndpoint();
-      if (ep.key) {
+      if (ep.url) {
         // AI mode: send to LLM, parse tool_call, execute
         setMessages((m) => [...m, { role: "assistant", text: t("Thinking...") }]);
-        const aiResponse = await callAI(text, messages, frameForThisMsg);
+        const history = [...messages.map((m) => ({ role: m.role === "user" ? "user" : "assistant", text: m.text })), { role: "user" as const, text }];
+        const aiResponse = await callAI(ep, history, frameForThisMsg);
         const parsed = parseAIResponse(aiResponse);
 
         if (parsed.toolCall) {
@@ -277,7 +179,7 @@ export default function McpChat() {
     } finally {
       setLoading(false);
     }
-  }, [input, loading, messages, callAI, parseAIResponse, pendingFrame, playheadUs]);
+  }, [input, loading, messages, pendingFrame, playheadUs]);
 
   if (!mcpPort) {
     return (
@@ -288,7 +190,7 @@ export default function McpChat() {
   }
 
   const ep = getActiveEndpoint();
-  const hasAI = !!ep.key;
+  const hasAI = !!ep.url;
 
   return (
     <div className="flex h-full flex-col">

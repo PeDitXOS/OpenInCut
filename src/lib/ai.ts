@@ -43,6 +43,20 @@ Rules:
 When the user asks about colors, brightness, or visual properties, you can see frames. Describe what you observe.`;
 }
 
+/** Normalize endpoint URL: ensure it ends with the right path. */
+function normalizeUrl(url: string): string {
+  let u = url.trim().replace(/\/+$/, "");
+  // Already has /v1 → keep as-is (e.g. https://api.openai.com/v1)
+  if (/\/v1$/.test(u)) return u;
+  // Hermes / 9Router / local gateways need /v1
+  if (u.includes("9router") || u.includes("hermes") || /localhost:\d+/.test(u) || /127\.0\.0\.1:\d+/.test(u)) {
+    return u + "/v1";
+  }
+  // OpenAI-style: if it's api.openai.com without /v1, add it
+  if (u.includes("api.openai.com") && !u.includes("/v1")) return u + "/v1";
+  return u;
+}
+
 /** Call Anthropic API directly */
 async function callAnthropic(
   ep: Endpoint,
@@ -88,7 +102,7 @@ async function callHermes(
   maxTokens: number,
   temperature: number
 ): Promise<string> {
-  const resp = await fetch(`${ep.url}/v1/chat/completions`, {
+  const resp = await fetch(`${normalizeUrl(ep.url)}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -115,7 +129,7 @@ async function callOpenAI(
   maxTokens: number,
   temperature: number
 ): Promise<string> {
-  const resp = await fetch(`${ep.url}/chat/completions`, {
+  const resp = await fetch(`${normalizeUrl(ep.url)}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -191,10 +205,11 @@ export async function callAI(
   const temperature = 0.3;
 
   // Detect provider by URL
+  const url = normalizeUrl(ep.url);
   if (ep.url.includes("anthropic.com")) {
     return callAnthropic(ep, anthropicMessages, fullSystem, model, maxTokens, temperature);
   }
-  if (ep.url.includes("hermes") || ep.url.includes("9router") || ep.url.includes("localhost:8080")) {
+  if (url.includes("9router") || url.includes("hermes") || /localhost:\d+/.test(url) || /127\.0\.0\.1:\d+/.test(url)) {
     openAIMessages.push({ role: "user", content: userContent });
     return callHermes(ep, openAIMessages, model, maxTokens, temperature);
   }
