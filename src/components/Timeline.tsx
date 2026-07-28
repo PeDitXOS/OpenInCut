@@ -418,7 +418,8 @@ function drawClip(
     ctx.font = '500 9.5px "Inter", sans-serif';
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
-    ctx.fillText(label, x + 6, y + h - 7, w - 12);
+     // draw above the dark bottom bar (which ends at y + h - 14)
+     ctx.fillText(label, x + 6, y + h - 18, w - 12);
   }
   ctx.restore();
 
