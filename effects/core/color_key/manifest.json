@@ -1,0 +1,12 @@
+{
+  "id": "core.color_key",
+  "name": "Color Key",
+  "category": "keying",
+  "params": [
+    { "key": "key_color", "label": "Key color", "type": "color", "default": "#00ff00" },
+    { "key": "similarity", "label": "Similarity", "type": "float", "default": 0.3, "min": 0.01, "max": 1.0 },
+    { "key": "blend", "label": "Blend", "type": "float", "default": 0.1, "min": 0.0, "max": 0.5 }
+  ],
+  "ffmpeg": "format=rgba,split=3[ck{u}c][ck{u}a][ck{u}k];[ck{u}k]format=yuva444p,colorkey=color={key_color}:similarity={similarity}:blend={blend},alphaextract[ck{u}ka];[ck{u}a]alphaextract[ck{u}oa];[ck{u}oa][ck{u}ka]blend=all_mode=multiply[ck{u}fa];[ck{u}c][ck{u}fa]alphamerge",
+  "notes": "Keys out pixels by RGB color distance. Similar to FCP's Color Key effect. Unlike chroma_key (which works in YCbCr), this operates in RGB space. Preserves the source's own alpha: final alpha = source alpha × key alpha. No despill (use Chroma Key for green/blue screen spill removal)."
+}

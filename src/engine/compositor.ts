@@ -217,6 +217,7 @@ export type SourceOp =
   | { kind: "chroma"; color: string; similarity: number; blend: number; despill: number }
   | { kind: "eq"; brightness: number; contrast: number; saturation: number; gamma: number }
   | { kind: "luminance"; threshold: number; softness: number; invert: number }
+  | { kind: "color"; color: string; tolerance: number; feather: number; alphaOffset: number }
   | { kind: "verticalFill"; width: number; height: number; blur: number }
   | { kind: "blur"; sigma: number };
 
@@ -272,6 +273,14 @@ export function layerEffects(clip: Clip, rel: number): LayerFx {
         softness: paramValue(fx.params["softness"] ?? 10, rel),
         invert: paramValue(fx.params["invert"] ?? 0, rel),
       });
+    } else if (fx.effect_id === "core.color_key") {
+      ops.push({
+        kind: "color",
+        color: fx.color_params["key_color"] ?? "#00ff00",
+        tolerance: paramValue(fx.params["similarity"] ?? 0.3, rel),
+        feather: paramValue(fx.params["blend"] ?? 0.1, rel),
+        alphaOffset: paramValue(fx.params["alpha_offset"] ?? 0, rel),
+      });
     }
   }
   return { ops, shadow };
@@ -315,7 +324,7 @@ function rgbToYcc(r: number, g: number, b: number): [number, number, number] {
 }
 
 /** The ops that run as a per-pixel pass over the image data. */
-type PerPixelOp = Extract<SourceOp, { kind: "eq" } | { kind: "chroma" } | { kind: "luminance" }>;
+type PerPixelOp = Extract<SourceOp, { kind: "eq" } | { kind: "chroma" } | { kind: "luminance" } | { kind: "color" }>;
 
 /** Exposed so the parity harness can compare our eq/chroma maths against
  *  ffmpeg's on identical pixels, with no video decoder in between. */
@@ -378,6 +387,24 @@ function applyOps(d: Uint8ClampedArray, ops: PerPixelOp[]) {
           a = softness > 0 ? Math.min(1, Math.max(0, (y - threshold + softness) / Math.max(2 * softness, 1))) : (y > threshold ? 1 : 0);
         }
         d[i + 3] = Math.round(d[i + 3] * a);
+      }
+    } else if (op.kind === "color") {
+      // Color Key: RGB distance-based keying (like FCP's Color Key)
+      const [kr, kg, kb] = hexRgb(op.color);
+      const tol = Math.max(0.001, op.tolerance);
+      const feather = Math.max(0, op.feather);
+      const alphaOffset = op.alphaOffset;
+      for (let i = 0; i < d.length; i += 4) {
+        const r = d[i];
+        const g = d[i + 1];
+        const b = d[i + 2];
+        const diff = Math.sqrt((r - kr) ** 2 + (g - kg) ** 2 + (b - kb) ** 2) / Math.sqrt(3 * 255 ** 2);
+        let a: number;
+        if (feather > 1e-4) a = Math.min(1, Math.max(0, (diff - tol) / feather));
+        else a = diff > tol ? 1 : 0;
+        // Apply alpha offset (can expand or contract the matte)
+        const adjustedAlpha = Math.min(1, Math.max(0, a + alphaOffset));
+        d[i + 3] = Math.round(d[i + 3] * adjustedAlpha);
       }
     }
   }
@@ -709,7 +736,7 @@ export function renderSource(
     }
   };
   ops.forEach((op, i) => {
-    if (op.kind === "eq" || op.kind === "chroma" || op.kind === "luminance") {
+    if (op.kind === "eq" || op.kind === "chroma" || op.kind === "luminance" || op.kind === "color") {
       batch.push(op);
     } else if (op.kind === "verticalFill") {
       flush(i);
