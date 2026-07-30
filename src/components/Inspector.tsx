@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { Clip, EffectDef, EffectInstance, Param, Keyframe } from "../engine/types";
-import { hasKeyAt, removeKeyAt, withKeyAt, isCurve, paramValue } from "../engine/types";
-import { activeSequence, assetName, instantiateEffect } from "../engine/types";
+import { hasKeyAt, removeKeyAt, withKeyAt, isCurve, paramValue, activeSequence, assetName, instantiateEffect } from "../engine/types";
 import { usToDuration, usToTimecode } from "../lib/time";
 import { engine, useStore } from "../state/store";
 import { Slider } from "./Slider";
