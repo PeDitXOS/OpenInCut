@@ -508,6 +508,8 @@ function MidiPane() {
 }
 
 /* ── Hermes Agent Tab ── */
+const COMMON_PORTS = [8080, 3000, 11434, 8000, 8001, 5000];
+
 function HermesPane() {
   const [gatewayUrl, setGatewayUrl] = useState(() => {
     try { return localStorage.getItem("opencut_hermes_gateway_url") ?? "http://localhost:8080"; } catch { return "http://localhost:8080"; }
@@ -517,6 +519,44 @@ function HermesPane() {
   });
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [detecting, setDetecting] = useState(false);
+  const [connected, setConnected] = useState(false);
+  const [connectedModels, setConnectedModels] = useState<string[]>([]);
+
+  // Auto-detect: probe common ports on mount if stored URL fails fast
+  useEffect(() => {
+    let cancelled = false;
+    const detect = async () => {
+      // First try the stored URL
+      const storedUrl = localStorage.getItem("opencut_hermes_gateway_url") ?? "http://localhost:8080";
+      const storedKey = localStorage.getItem("opencut_hermes_api_key") ?? "";
+      try {
+        const resp = await fetch(`${storedUrl}/v1/models`, { headers: { Authorization: `Bearer ${storedKey}` } });
+        if (resp.ok && !cancelled) { setConnected(true); return; }
+      } catch { /* stored URL not reachable, probe */ }
+
+      // Probe common ports (only if nothing stored was found)
+      const alreadyConfigured = storedUrl !== "http://localhost:8080" || !!storedKey;
+      if (alreadyConfigured || cancelled) return;
+
+      setDetecting(true);
+      for (const port of COMMON_PORTS) {
+        if (cancelled) return;
+        try {
+          const resp = await fetch(`http://localhost:${port}/v1/models`, { signal: AbortSignal.timeout(800) });
+          if (resp.ok) {
+            setGatewayUrl(`http://localhost:${port}`);
+            setConnected(true);
+            showToast(`Auto-detected Hermes on port ${port}`, "success");
+            break;
+          }
+        } catch { /* not listening on this port */ }
+      }
+      if (!cancelled) setDetecting(false);
+    };
+    void detect();
+    return () => { cancelled = true; };
+  }, []);
 
   const testConnection = useCallback(async () => {
     setTesting(true);
@@ -528,14 +568,18 @@ function HermesPane() {
       });
       if (resp.ok) {
         const data = await resp.json();
-        const models = data.data?.map((m: { id: string }) => m.id).join(", ") ?? "OK";
-        setTestResult(`Connected! Models: ${models}`);
+        const models: string[] = data.data?.map((m: { id: string }) => m.id) ?? [];
+        setConnected(true);
+        setConnectedModels(models);
+        setTestResult(`Connected! Models: ${models.join(", ") || "OK"}`);
         showToast("Hermes Gateway connected", "success");
       } else {
+        setConnected(false);
         setTestResult(`Failed: ${resp.status}`);
         showToast("Hermes connection failed", "error");
       }
     } catch (err) {
+      setConnected(false);
       setTestResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
       showToast("Hermes connection error", "error");
     } finally {
@@ -551,8 +595,35 @@ function HermesPane() {
     } catch { /* ignore */ }
   }, [gatewayUrl, apiKey]);
 
+  // Add/replace this Hermes instance as an AI endpoint and activate it
+  const useAsAiEndpoint = useCallback(() => {
+    const name = "Hermes Agent";
+    const model = connectedModels[0] ?? "hermes";
+    const url = `${gatewayUrl}/v1`;
+    const ep = { name, url, key: apiKey, model };
+    try {
+      let list: { name: string; url: string; key: string; model: string }[] = [];
+      try { list = JSON.parse(localStorage.getItem("opencut_ai_endpoints") ?? "[]"); } catch { /* empty */ }
+      // Replace existing Hermes entry or add
+      const idx = list.findIndex((e) => e.name === name);
+      if (idx >= 0) list[idx] = ep; else list.push(ep);
+      localStorage.setItem("opencut_ai_endpoints", JSON.stringify(list));
+      localStorage.setItem("opencut_ai_active_endpoint", String(idx >= 0 ? idx : list.length - 1));
+      showToast("Hermes set as AI endpoint", "success");
+    } catch { /* ignore */ }
+  }, [gatewayUrl, apiKey, connectedModels]);
+
   return (
     <div className="p-4 space-y-3">
+      {detecting && (
+        <div className="text-[11px] text-ink-faint">Auto-detecting Hermes on common ports...</div>
+      )}
+
+      <div className="flex items-center gap-2">
+        <span className={`h-2 w-2 rounded-full ${connected ? "bg-green-500" : "bg-red-500"}`} />
+        <span className="text-[12px] text-ink">{connected ? "Connected" : "Not connected"}</span>
+      </div>
+
       <div className="space-y-2">
         <label className="mb-1 block text-[10.5px] font-medium uppercase tracking-wide text-ink-faint">Hermes Gateway URL</label>
         <input
@@ -591,6 +662,15 @@ function HermesPane() {
         </button>
       </div>
 
+      {connected && (
+        <button
+          className="w-full rounded-md border border-accent bg-accent/10 px-3 py-1.5 text-[12px] font-medium text-accent hover:bg-accent/20"
+          onClick={useAsAiEndpoint}
+        >
+          Use as AI Endpoint
+        </button>
+      )}
+
       {testResult && (
         <div className={`text-[11px] ${testResult.startsWith("Connected") ? "text-green-400" : "text-red-400"}`}>
           {testResult}
@@ -599,8 +679,7 @@ function HermesPane() {
 
       <div className="border-t border-line pt-2 text-[10px] text-ink-faint space-y-1">
         <p>Configure your Hermes Agent Gateway URL and API key above.</p>
-        <p>Then add it as an AI endpoint in the AI Assistant settings tab.</p>
-        <p className="font-[var(--font-mono)]">URL: {gatewayUrl}/v1/chat/completions</p>
+        <p className="font-[var(--font-mono)]">Endpoint: {gatewayUrl}/v1/chat/completions</p>
       </div>
     </div>
   );

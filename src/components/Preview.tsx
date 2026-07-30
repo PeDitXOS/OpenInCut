@@ -344,12 +344,35 @@ export function Preview() {
         const any = await compositeFrame(ctx, w, h, s.project, seq, s.playheadUs, frameSources);
         if (!running) return;
         if (!any && !texts.length && !subtitles.length && !styled.length) {
+          // Find the first active clip at playhead to show a useful placeholder
+          const activeClip = seq.tracks
+            .flatMap((t) => t.clips)
+            .find((c) => c.start <= s.playheadUs && s.playheadUs < c.start + c.duration);
           ctx.fillStyle = "#0a0908";
           ctx.fillRect(0, 0, w, h);
           ctx.fillStyle = "rgba(164,155,143,0.35)";
           ctx.font = `500 ${Math.round(h * 0.05)}px "Space Grotesk", sans-serif`;
           ctx.textAlign = "center";
-          ctx.fillText("No signal at this point", w / 2, h / 2);
+          if (activeClip) {
+            const p = activeClip.payload;
+            const label =
+              p.type === "media"
+                ? assetName(s.project.assets.find((a) => a.id === p.asset_id))
+                : p.type === "generator"
+                  ? "Generator"
+                  : p.type === "text"
+                    ? "Text"
+                    : p.type === "subtitles"
+                      ? "Subtitles"
+                      : "Clip";
+            ctx.fillText(label, w / 2, h * 0.44);
+            ctx.font = `400 ${Math.round(h * 0.03)}px "JetBrains Mono", monospace`;
+            ctx.fillStyle = "rgba(164,155,143,0.25)";
+            ctx.fillText("Frame unavailable — media may still be loading", w / 2, h * 0.56);
+            engine.uiLog("warn", `preview: no frame for clip "${label}" at ${s.playheadUs} us`);
+          } else {
+            ctx.fillText("No signal at this point", w / 2, h / 2);
+          }
         }
       } else {
         ctx.clearRect(0, 0, w, h);

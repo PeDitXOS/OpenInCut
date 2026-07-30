@@ -1,13 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 
-import type { Clip, EffectDef, EffectInstance, Param } from "../engine/types";
-import { hasKeyAt, removeKeyAt, withKeyAt } from "../engine/types";
+import type { Clip, EffectDef, EffectInstance, Param, Keyframe } from "../engine/types";
+import { hasKeyAt, removeKeyAt, withKeyAt, isCurve, paramValue, activeSequence, assetName, instantiateEffect } from "../engine/types";
 import {
   activeSequence,
   assetName,
   instantiateEffect,
-  isCurve,
-  paramValue,
 } from "../engine/types";
 import { usToDuration, usToTimecode } from "../lib/time";
 import { engine, useStore } from "../state/store";
@@ -1178,6 +1176,21 @@ function EffectRow({
   durationUs: number;
   relUs: number;
 }) {
+  // Special handling for keying effects
+  const isChromaKey = def?.id === "core.chroma_key";
+  const isLumaKey = def?.id === "core.luminance_key";
+
+  const updateParam = (key: string, value: number | { keys: Keyframe[] }) => {
+    onChange({ ...inst, params: { ...inst.params, [key]: value } });
+  };
+
+  const updateColorParam = (key: string, value: string) => {
+    onChange({
+      ...inst,
+      color_params: { ...inst.color_params, [key]: value },
+    });
+  };
+
   return (
     <div className="rounded-lg border border-line bg-bg2 p-2">
       <div className="flex items-center gap-2">
@@ -1217,15 +1230,13 @@ function EffectRow({
                     onChange={(v) => {
                       const cur = inst.params[p.key] ?? (p.default as number);
                       const next = isCurve(cur) ? withKeyAt(cur, relUs, v) : v;
-                      onChange({ ...inst, params: { ...inst.params, [p.key]: next } });
+                      updateParam(p.key, next);
                     }}
                   />
                   <KeyBtn
                     param={inst.params[p.key] ?? (p.default as number)}
                     at={relUs}
-                    onChange={(np) =>
-                      onChange({ ...inst, params: { ...inst.params, [p.key]: np } })
-                    }
+                    onChange={(np) => updateParam(p.key, np)}
                   />
                 </Row>
                 {inst.params[p.key] !== undefined && isCurve(inst.params[p.key]) && (
@@ -1235,11 +1246,106 @@ function EffectRow({
                     playheadUs={relUs}
                     min={p.min ?? 0}
                     max={p.max ?? 1}
-                    onChange={(np) =>
-                      onChange({ ...inst, params: { ...inst.params, [p.key]: np } })
-                    }
+                    onChange={(np) => updateParam(p.key, np)}
                   />
                 )}
+              </div>
+            ) : isChromaKey && p.key === "key_color" ? (
+              // Chroma Key: Color picker with eyedropper + presets
+              <div key={p.key} className="space-y-1">
+                <Row label={p.label ?? p.key}>
+                  <input
+                    type="color"
+                    className="h-6 w-10 cursor-pointer rounded border border-line bg-transparent"
+                    value={inst.color_params[p.key] ?? (p.default as string)}
+                    onChange={(e) => updateColorParam(p.key, e.target.value)}
+                  />
+                  <span className="font-[var(--font-mono)] text-[10px] text-ink-faint">
+                    {inst.color_params[p.key] ?? p.default}
+                  </span>
+                </Row>
+                {/* Eyedropper button */}
+                <Row label="">
+                  <button
+                    type="button"
+                    className="rounded border border-line bg-bg2 px-2 py-1 text-[11px] text-ink hover:bg-bg3"
+                    onClick={async () => {
+                      try {
+                        const EyeDropper = (window as any).EyeDropper;
+                        if (EyeDropper) {
+                          const result = await new EyeDropper().open();
+                          updateColorParam(p.key, result.sRGBHex);
+                        }
+                      } catch {
+                        /* user cancelled or not supported */
+                      }
+                    }}
+                    title="Pick color from preview (EyeDropper API)"
+                  >
+                    🎨 Pick from Preview
+                  </button>
+                </Row>
+                {/* Preset buttons */}
+                <Row label="">
+                  <div className="flex flex-wrap gap-1">
+                    {["#00ff00", "#0000ff", "#ff0000", "#ffff00", "#ffffff", "#000000"].map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        className="w-6 h-6 rounded border border-line cursor-pointer transition-transform hover:scale-110"
+                        style={{ backgroundColor: c }}
+                        onClick={() => updateColorParam(p.key, c)}
+                        title={`Preset: ${c.toUpperCase()}`}
+                      />
+                    ))}
+                  </div>
+                </Row>
+              </div>
+            ) : isLumaKey && p.key === "threshold" ? (
+              // Luminance Key: Threshold with visual feedback
+              <div key={p.key} className="space-y-1">
+                <Row label={p.label ?? p.key}>
+                  <Slider
+                    value={
+                      inst.params[p.key] !== undefined
+                        ? paramValue(inst.params[p.key], relUs)
+                        : (p.default as number)
+                    }
+                    min={p.min ?? 0}
+                    max={p.max ?? 255}
+                    step={1}
+                    onChange={(v) => {
+                      const cur = inst.params[p.key] ?? (p.default as number);
+                      const next = isCurve(cur) ? withKeyAt(cur, relUs, v) : v;
+                      updateParam(p.key, next);
+                    }}
+                  />
+                  <KeyBtn
+                    param={inst.params[p.key] ?? (p.default as number)}
+                    at={relUs}
+                    onChange={(np) => updateParam(p.key, np)}
+                  />
+                </Row>
+                {/* Preset buttons for common threshold values */}
+                <Row label="">
+                  <div className="flex flex-wrap gap-1">
+                    {[64, 128, 192, 220].map((t) => (
+                      <button
+                        key={t}
+                        type="button"
+                        className="rounded border border-line bg-bg2 px-2 py-0.5 text-[10px] text-ink hover:bg-bg3"
+                        onClick={() => {
+                          const cur = inst.params[p.key] ?? (p.default as number);
+                          const next = isCurve(cur) ? withKeyAt(cur, relUs, t) : t;
+                          updateParam(p.key, next);
+                        }}
+                        title={`Threshold ${t}`}
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                </Row>
               </div>
             ) : (
               <Row key={p.key} label={p.label ?? p.key}>
@@ -1247,12 +1353,7 @@ function EffectRow({
                   type="color"
                   className="h-6 w-10 cursor-pointer rounded border border-line bg-transparent"
                   value={inst.color_params[p.key] ?? (p.default as string)}
-                  onChange={(e) =>
-                    onChange({
-                      ...inst,
-                      color_params: { ...inst.color_params, [p.key]: e.target.value },
-                    })
-                  }
+                  onChange={(e) => updateColorParam(p.key, e.target.value)}
                 />
                 <span className="font-[var(--font-mono)] text-[10px] text-ink-faint">
                   {inst.color_params[p.key] ?? p.default}

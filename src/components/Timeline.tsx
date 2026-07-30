@@ -180,7 +180,7 @@ function drawRuler(
   if (rin != null || rout != null) {
     const a = usToX(rin ?? view.viewStartUs);
     const b = usToX(rout ?? view.viewStartUs + (w / view.pxPerSec) * 1e6);
-    ctx.fillStyle = "rgba(255, 178, 36, 0.16)";
+    ctx.fillStyle = "rgba(255, 178, 36, 0.28)";
     ctx.fillRect(a, 0, Math.max(2, b - a), RULER_H - 1);
     ctx.fillStyle = COLORS.accent;
     if (rin != null) ctx.fillRect(a, 0, 2, RULER_H - 1);
@@ -488,7 +488,7 @@ function drawTimeline(
     if (rin != null || rout != null) {
       const a = usToX(rin ?? view.viewStartUs);
       const b = usToX(rout ?? view.viewStartUs + (w / view.pxPerSec) * 1e6);
-      ctx.fillStyle = "rgba(255, 178, 36, 0.08)";
+      ctx.fillStyle = "rgba(255, 178, 36, 0.14)";
       ctx.fillRect(a, RULER_H, Math.max(1, b - a), tracksH);
       // thin amber guide lines at in / out
       ctx.strokeStyle = COLORS.accent;

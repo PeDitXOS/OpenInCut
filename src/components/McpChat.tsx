@@ -181,14 +181,6 @@ export default function McpChat() {
     }
   }, [input, loading, messages, pendingFrame, playheadUs]);
 
-  if (!mcpPort) {
-    return (
-      <div className="flex h-full items-center justify-center text-[12px] text-ink-faint">
-        MCP server not running
-      </div>
-    );
-  }
-
   const ep = getActiveEndpoint();
   const hasAI = !!ep.url;
 
@@ -217,7 +209,7 @@ export default function McpChat() {
       <div className="flex-1 overflow-auto p-3 space-y-2">
         {messages.length === 0 && (
           <div className="text-center text-[11px] text-ink-faint mt-8">
-            {hasAI ? "Ask the AI to edit your project..." : "Type tool_name {json} to call MCP tools"}
+            {hasAI ? "Ask the AI to edit your project..." : mcpPort ? "Type tool_name {json} to call MCP tools" : "Configure an AI endpoint in Settings to get started"}
           </div>
         )}
         {messages.map((msg, i) => (

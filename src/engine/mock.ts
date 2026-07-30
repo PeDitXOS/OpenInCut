@@ -229,6 +229,10 @@ export class MockEngine implements EngineClient {
     });
   }
 
+  async readTextFile(_path: string): Promise<string> {
+    throw new Error("readTextFile only available in desktop app");
+  }
+
   async pickMediaFiles(): Promise<string[] | null> {
     return null; // only available in the desktop app
   }

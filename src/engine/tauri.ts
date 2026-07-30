@@ -60,6 +60,10 @@ export class TauriEngine implements EngineClient {
     return invoke("set_clip_transform", { clipId, transform });
   }
 
+  readTextFile(path: string): Promise<string> {
+    return invoke("read_text_file", { path });
+  }
+
   async pickMediaFiles(): Promise<string[] | null> {
     const picked = await open({
       multiple: true,

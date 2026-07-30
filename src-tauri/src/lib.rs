@@ -2870,6 +2870,13 @@ pub(crate) fn new_project_impl(state: &AppState, name: &str) {
     *state.path.lock().unwrap() = None;
 }
 
+/// Reads a file and returns its UTF-8 content. Used by the frontend for
+/// importing FCP XML and other text-based project files.
+#[tauri::command]
+fn read_text_file(path: String) -> Res<String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))
+}
+
 #[tauri::command]
 fn new_project(state: State<AppState>, name: String) -> Res<StateSnapshot> {
     new_project_impl(&state, &name);
@@ -3017,6 +3024,7 @@ pub fn run() {
             open_project,
             relink_asset,
             new_project,
+            read_text_file,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start OpenInCut");

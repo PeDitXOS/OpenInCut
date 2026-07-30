@@ -49,6 +49,8 @@ export interface EngineClient {
   setClipAudio(clipId: Id, audio: AudioProps): Promise<StateSnapshot>;
   setClipTransform(clipId: Id, transform: Transform2D): Promise<StateSnapshot>;
 
+  /** Read a text file from disk (FCP XML import). */
+  readTextFile(path: string): Promise<string>;
   /** Native file picker dialog (null if not available). */
   pickMediaFiles(): Promise<string[] | null>;
   importMedia(paths: string[]): Promise<StateSnapshot>;

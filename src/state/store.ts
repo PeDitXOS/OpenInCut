@@ -417,7 +417,85 @@ export const useStore = create<UiState>((set, get) => {
         set({ lastActionLabel: "⚠ Import requires the desktop app (npx tauri dev)" });
         return;
       }
-      await run(`Import ${paths.length} file(s)`, () => engine.importMedia(paths));
+      // Detect FCP XML files — parse and import referenced media + timeline
+      const fcpFiles = paths.filter((p) => /\.(fcpxml|fcpxmld)$/i.test(p));
+      const mediaFiles = paths.filter((p) => !/\.(fcpxml|fcpxmld)$/i.test(p));
+
+      if (mediaFiles.length > 0) {
+        await run(`Import ${mediaFiles.length} file(s)`, () => engine.importMedia(mediaFiles));
+      }
+
+      // Process FCP XML files
+      for (const fcpPath of fcpFiles) {
+        try {
+          const { parseFcpXml } = await import("../lib/fcp");
+          const xmlText = await engine.readTextFile(fcpPath);
+          const xmlDir = fcpPath.replace(/[\\/][^\\/]+$/, "");
+          const { timelines, mediaPaths } = parseFcpXml(xmlText, xmlDir);
+
+          if (mediaPaths.length > 0) {
+            // Import the referenced media files first
+            const snap = await engine.importMedia(mediaPaths);
+            useStore.setState({
+              project: snap.project,
+              version: snap.version,
+              dirty: snap.dirty,
+              canUndo: snap.can_undo,
+              canRedo: snap.can_redo,
+            });
+
+            // Add clips from the first timeline to the active sequence
+            if (timelines.length > 0) {
+              const tl = timelines[0];
+              const proj = useStore.getState().project;
+
+              // Map FCP source paths to imported asset IDs
+              const assetByPath = new Map<string, string>();
+              for (const asset of proj.assets) {
+                const fname = asset.path.replace(/^.*[\\/]/, "").toLowerCase();
+                for (const mp of mediaPaths) {
+                  const mpFname = mp.replace(/^.*[\\/]/, "").toLowerCase();
+                  if (fname === mpFname || asset.path.toLowerCase().includes(mpFname)) {
+                    assetByPath.set(mp, asset.id);
+                  }
+                }
+              }
+
+              let atUs = 0;
+              for (const clip of tl.clips) {
+                const assetId = assetByPath.get(clip.srcPath);
+                if (!assetId) continue;
+                try {
+                  const snap2 = await engine.addClip(assetId, atUs);
+                  useStore.setState({
+                    project: snap2.project,
+                    version: snap2.version,
+                    dirty: snap2.dirty,
+                    canUndo: snap2.can_undo,
+                    canRedo: snap2.can_redo,
+                  });
+                  const addedClip = snap2.project.sequences
+                    .find((s) => s.id === snap2.project.active_sequence)
+                    ?.tracks.flatMap((t) => t.clips)
+                    .filter((c) => c.payload.type === "media" && (c.payload as any).asset_id === assetId)
+                    .pop();
+                  if (addedClip) {
+                    atUs = addedClip.start + addedClip.duration;
+                  }
+                } catch {
+                  // skip clips that fail to add
+                }
+              }
+            }
+
+            set({ lastActionLabel: `FCP project imported: ${timelines.length} sequence(s), ${mediaPaths.length} media file(s)` });
+          } else {
+            set({ lastActionLabel: "⚠ FCP XML contained no media references" });
+          }
+        } catch (e) {
+          set({ lastActionLabel: `⚠ FCP import error: ${e instanceof Error ? e.message : String(e)}` });
+        }
+      }
     },
 
     addClipFromAsset: (assetId) =>
